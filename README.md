@@ -98,7 +98,7 @@ If everything is wired correctly, you should see:
 [Sandbox B] I am from Sandbox B!
 [OK] If you see A and B above, sandbox isolation is working!
 
-Tech stack
+# Tech stack
 
 Rust — kernel, JVM orchestration
 jni crate (0.22.4) — FFI bridge to the JVM
@@ -117,7 +117,7 @@ worlds, and connect them only at the render/data layer.
 It may fail. The Mixin conflict problem alone is hard. But if it works, it does
 not break when a loader updates, by design.
 
-Known challenges
+# Known challenges
 
 Forge 1.21+ relies on the Java Module System (--module-path,
 BootstrapLauncher, securejarhandler), which must be assembled to match the
@@ -127,8 +127,8 @@ rewrites manifests silently breaks version discovery.
 Mixin conflicts across two loaders in one JVM.
 ClassLoader hierarchy for real loaders (parent = null is not viable in
 practice).
-Roadmap
 
+# Roadmap
 Load a real Fabric Loader jar into Sandbox A.
 Load a real Forge Loader jar into Sandbox B (requires a hybrid parent loader).
 Resolve Mixin conflicts — either bytecode merging on the Rust side, or a
@@ -140,8 +140,7 @@ Contributing
 Currently a personal research project. Contribution guidelines will be added if
 it reaches a usable prototype stage.
 
-License
-
+# License
 BSD 3-Clause. See [LICENCE](LICENCE).
 
 

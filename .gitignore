@@ -2,3 +2,8 @@
 crash-reports/
 
 logs.env
+.DS_Store
+*.bak.*
+logs/
+sandbox/
+target/

@@ -42,16 +42,20 @@ Minecraft 的模组生态是割裂的：**Fabric** 与 **Forge/NeoForge** 拥有
 - [x] Rust 进程可以通过 JNI 启动一个内嵌 JVM
 - [x] Rust 可以调用 Java 静态方法并读回返回值
 - [x] Rust 可以通过 `URLClassLoader` 动态加载外部 `.jar`
-- [x] **两个隔离的 `URLClassLoader` 实例可以加载同名类（`SandboxTest`）并产生不同行为**
+- [x] 两个隔离的 `URLClassLoader` 实例可以加载同名类并产生不同行为
+- [x] **Rust JNI 成功启动 Minecraft 1.21.4 + Fabric Loader —— 主菜单成功渲染，音效引擎初始化，纹理加载完成，游戏以正常帧率运行**
+- [x] 从 `mc_libraries/` 动态组装类路径（253 个条目），通过 `fabric.gameJarPath` 和关闭类路径隔离让 Fabric 认出游戏
 
 **还未**实现的部分：
 
-- [ ] 把真实的 Fabric Loader jar 装进沙盒 A
 - [ ] 把真实的 Forge/NeoForge Loader jar 装进沙盒 B
 - [ ] 解决真实加载器的 `parent = null` 问题（它们需要 `java.lang.*` 等）
 - [ ] 处理两个沙盒之间的 Mixin 冲突
 - [ ] 零拷贝数据总线
+- [ ] 动态依赖解析（解析 version manifest，而不是全量复制 `libraries`）
 - [ ] 跨平台支持（Windows / Linux / macOS）
+
+![证明：Rust JNI 启动 Minecraft 1.21.4 + Fabric](image.png)
 
 ## 快速开始
 

@@ -41,17 +41,22 @@ What is actually working (verified on macOS + Temurin 25):
 
 - [x] Rust process can bootstrap an embedded JVM via JNI
 - [x] Rust can call static Java methods and read back return values
-- [x] Rust can dynamically load an external `.jar` through `URLClassLoader`
-- [x] **Two isolated `URLClassLoader` instances can load classes with the same name (`SandboxTest`) and produce different behaviors**
+- [x] Rust can dynamically load external `.jar` files through `URLClassLoader`
+- [x] Two isolated `URLClassLoader` instances can load classes with the same name and produce different behaviors
+- [x] **Rust JNI successfully boots Minecraft 1.21.4 with Fabric Loader — the main menu renders, sound engine initializes, textures load, and the game runs at full frame rate**
+- [x] Dynamic classpath assembly from `mc_libraries/` (253 entries) with `fabric.gameJarPath` and classpath isolation disabled
+
 
 What is **not** working yet:
 
-- [ ] Loading a real Fabric Loader jar into Sandbox A
 - [ ] Loading a real Forge/NeoForge Loader jar into Sandbox B
 - [ ] Resolving the `parent = null` problem for real loaders (they need `java.lang.*` etc.)
 - [ ] Handling Mixin conflicts between the two sandboxes
 - [ ] Zero-copy data bus
+- [ ] Dynamic dependency resolution (version manifests, not full `libraries` copy)
 - [ ] Cross-platform support (Windows / Linux / macOS)
+
+![Proof: Rust JNI booting Minecraft 1.21.4 with Fabric](image.png)
 
 ## Quick Start
 

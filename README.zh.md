@@ -54,6 +54,7 @@ Rust 微内核
 - [x] 从 `mc_libraries/` 动态组装类路径（253 个条目），通过
       `fabric.gameJarPath` 和关闭类路径隔离让 Fabric 认出游戏
 - [x] **双沙盒并行启动成功**：在同一台机器上通过 Rust 子进程同时拉起 Fabric 1.21.4 与 NeoForge 1.21.1，互不干扰，均成功渲染主菜单。
+- [x] **零拷贝数据总线（IPC 原型）**：在 Rust 微内核中实现了基于 TCP 的消息总线，成功接收来自 Fabric 与 NeoForge 两个隔离沙盒的跨进程通讯。
 
 进行中：
 

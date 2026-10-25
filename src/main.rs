@@ -4,6 +4,9 @@ use jni::jni_str;
 use jni::jni_sig;
 use serde_json::Value;
 use std::env;
+use std::net::TcpListener;
+use std::io::Read;
+use std::thread;
 use std::path::{Path, PathBuf};
 use std::fs;
 
@@ -104,7 +107,7 @@ fn build_classpath(is_forge: bool, sandbox_dir: &Path) -> (Vec<PathBuf>, Vec<Pat
     let mut bootstrap_cp: Vec<PathBuf> = Vec::new();
 
     if is_forge {
-        let forge_env = sandbox_dir.join("forge_env");
+        let _forge_env = sandbox_dir.join("forge_env");
         let v_json = mc_root.join("versions/1.21.4-forge-54.1.22/1.21.4-forge-54.1.22.json");
         let dirs = vec![
             sandbox_dir.to_path_buf(),
@@ -282,7 +285,7 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
         .unwrap_or_else(|e| eprintln!("[forge] 无法创建 mods 目录: {}", e));
     eprintln!("[forge] mods 目录: {}", mods_dir.display());
 
-    let forge_env = sandbox_dir.join("forge_env");
+    let _forge_env = sandbox_dir.join("forge_env");
     let mc_root = PathBuf::from(
         env::var("HOME").expect("HOME is not set")
     ).join("Library/Application Support/minecraft");
@@ -495,8 +498,8 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
         modlauncher_path.clone()
     };
 
-            let mut module_jars: Vec<String> = {
-        let mut paths = vec![
+            let _module_jars: Vec<String> = {
+        let paths = vec![
             if let Some(sanitized_ml) = sanitize_jar(&modlauncher_path, &cache_dir) {
                 sanitized_ml
             } else {
@@ -766,7 +769,7 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
 
 fn launch_neoforge_subprocess(sandbox_dir: &Path) {
     let mc_root = PathBuf::from(env::var("HOME").expect("HOME")).join("Library/Application Support/minecraft");
-    let version = "neoforge-21.1.191";
+    let _version = "neoforge-21.1.191";
     let neoforge_ver = "21.1.191";
     let unix_args = mc_root.join(format!("libraries/net/neoforged/neoforge/{}/unix_args.txt", neoforge_ver));
     if !unix_args.is_file() {
@@ -883,7 +886,7 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
     }
 
     // 补客户端 game 参数
-    let mut game_args: Vec<String> = vec![
+    let game_args: Vec<String> = vec![
         "--gameDir".into(), sandbox_dir.to_string_lossy().to_string(),
         "--assetsDir".into(), sandbox_dir.join("assets").to_string_lossy().to_string(),
         "--assetIndex".into(), "17".into(),
@@ -920,8 +923,71 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
     }
 }
 
+
+fn start_data_bus() {
+    thread::spawn(|| {
+        let listener = TcpListener::bind("127.0.0.1:25565").unwrap();
+        println!("[DataBus] 跨沙盒数据总线已启动，监听 127.0.0.1:25565");
+        
+        for stream in listener.incoming() {
+            match stream {
+                Ok(mut stream) => {
+                    thread::spawn(move || {
+                        let mut buffer = [0; 1024];
+                        loop {
+                            match stream.read(&mut buffer) {
+                                Ok(0) => break,
+                                Ok(n) => {
+                                    let msg = String::from_utf8_lossy(&buffer[..n]);
+                                    println!("[DataBus] 收到: {}", msg.trim());
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                    });
+                }
+                Err(e) => println!("[DataBus] 连接失败: {}", e),
+            }
+        }
+    });
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
+
+    let is_fusion = args.iter().any(|arg| arg == "fusion" || arg == "--mode=fusion" || arg == "--mode=fusion");
+    let is_bus_test = args.iter().any(|arg| arg == "bus-test" || arg == "--mode=bus-test");
+
+    if is_bus_test {
+        println!("=== 启动数据总线测试模式 ===");
+        start_data_bus();
+        loop { thread::sleep(std::time::Duration::from_secs(60)); }
+    }
+
+    if is_fusion {
+        println!("=== 启动双沙盒 Fusion 模式 ===");
+        start_data_bus(); // 在拉起子进程前开启总线
+        let current_dir = env::current_dir().unwrap();
+        let sandbox_dir = current_dir.join("sandbox");
+
+        // 启动 Fabric
+        let _sandbox_fab = sandbox_dir.clone();
+        let _fab_thread = thread::spawn(move || {
+            let mut cmd = std::process::Command::new("cargo");
+            cmd.args(&["run", "--", "--mode", "fabric"]);
+            cmd.status().unwrap();
+        });
+
+        // 启动 NeoForge
+        let _sandbox_nf = sandbox_dir.clone();
+        let _nf_thread = thread::spawn(move || {
+            let mut cmd = std::process::Command::new("cargo");
+            cmd.args(&["run", "--", "--mode", "neoforge"]);
+            cmd.status().unwrap();
+        });
+
+        loop { thread::sleep(std::time::Duration::from_secs(60)); }
+    }
     let is_forge = args.windows(2).any(|pair| {
         pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("forge")
     }) || args.iter().any(|arg| arg == "forge");

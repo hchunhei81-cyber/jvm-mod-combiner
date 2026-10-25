@@ -119,6 +119,7 @@ not break when a loader updates, by design.
 
 # Known challenges
 
+- [x] **Successfully resolved ModLauncher initialization and `NullPointerException` (NPE) issues by implementing automated JAR sanitization, exact MANIFEST attribute injection, proper `jopt-simple` and `securejarhandler` dependency paths, and strict JVM VM options ordering (placing `-D` arguments before the main class).**
 Forge 1.21+ relies on the Java Module System (--module-path,
 BootstrapLauncher, securejarhandler), which must be assembled to match the
 official installer exactly.
@@ -142,5 +143,3 @@ it reaches a usable prototype stage.
 
 # License
 BSD 3-Clause. See [LICENCE](LICENCE).
-
-

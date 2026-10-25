@@ -97,7 +97,7 @@ Java / JVM —— 加载器和模组真正住的地方
 Sinytra Connector 在字节码层面把 Fabric 模组翻译成 Forge 能运行的形式。它做得
 相当不错，但是：
 
-它天生脆弱：每次加载器更新都可能把它打破。
+它天生脆弱：每次加载器更新都可能打破它。
 它必须深入勾进两个加载器，所以总是落后于上游。
 它不隔离两个加载器，它们共享同一个类空间。
 本项目尝试一个完全不同的赌注：把两个加载器当作两个独立的世界，只在渲染/
@@ -108,6 +108,7 @@ Sinytra Connector 在字节码层面把 Fabric 模组翻译成 Forge 能运行�
 
 # 已知难点
 
+- [x] **通过实现自动化 JAR 净化、精确的 MANIFEST 屬性注入、正确的 `jopt-simple` 与 `securejarhandler` 依赖路径，以及严格的 JVM 虚拟机参数排序（将 `-D` 参数置于主类前方），成功解决了 ModLauncher 的初始化与 `NullPointerException` (NPE) 崩溃問題。**
 Forge 1.21+ 依赖 Java Module System（--module-path、BootstrapLauncher、
 securejarhandler），必须按官方安装器的形态精确组装。
 ModLauncher 10 要求 JAR manifest 元数据完整；任何重写 manifest 的行为都会

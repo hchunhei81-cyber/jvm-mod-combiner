@@ -385,7 +385,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "jvm-mod-fusion"
+name = "jvm-mod-combiner"
 version = "0.1.0"
 dependencies = [
  "jni",

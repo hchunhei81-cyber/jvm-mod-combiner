@@ -6,6 +6,7 @@ logs.env
 *.bak.*
 logs/
 target/
+sanbox/
 
 sandbox/minecraft-client.jar
 sandbox/forge_env/libraries/net/minecraft/client/

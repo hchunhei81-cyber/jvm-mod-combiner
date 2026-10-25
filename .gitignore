@@ -26,4 +26,10 @@ sandbox/mc_libraries/
 
 # --- 根目录下的临时安装器与日志 ---
 forge-installer.jar
-forge-installer.jar.log
+forge-installer.jar.log.DS_Store
+*.current
+natives-lwjgl-331/
+natives-lwjgl-331-x64/
+backups/
+forge_1165_launch.sh
+neoforge_launch.sh

@@ -1,10 +1,9 @@
 ---
-name: Bug report
+name:  Bug Report
 about: Create a report to help us fix crashes or routing errors
-title: ''
-labels: ''
+title: '[BUG] '
+labels: bug
 assignees: ''
-
 ---
 
 **Describe the bug**

@@ -1,4 +1,4 @@
-# JVM Mod Fusion
+# JVM Mod Combiner
 
 > A Rust-written microkernel that aims to let Fabric and Forge/NeoForge mods
 > **coexist inside one JVM**, without depending on Sinytra Connector.
@@ -18,6 +18,7 @@ This project takes a different route. **No translation. Isolate each loader in
 its own sandbox, and let them meet only at the data layer.**
 
 ## Architecture
+
 Rust Microkernel
 (JVM lifecycle, sandbox orchestration, data bus)
 |
@@ -29,7 +30,6 @@ Rust Microkernel
 | Loader | | Loader |
 | + mods | | + mods |
 +-----------+ +-----------+
-
 
 Three design pillars:
 
@@ -56,13 +56,17 @@ Verified on macOS + Temurin 21 (arm64):
 - [x] **Rust JNI boots Minecraft 1.21.4 + Fabric Loader — the main menu renders,
       the sound engine initializes, textures load, and the game runs at a normal
       frame rate**
+- [x] **Rust successfully boots Minecraft 1.21.1 + NeoForge 21.1.191 via
+      subprocess — the main menu renders, bypassing official launcher
+      restrictions and ModLauncher JPMS conflicts**
 - [x] Classpath is dynamically assembled from `mc_libraries/` (253 entries);
       Fabric recognizes the game via `fabric.gameJarPath` and classpath isolation
       being disabled
 
 In progress:
 
-- [ ] Load a real Forge 1.21.4 loader into Sandbox B
+- [ ] Load a real Forge 1.21.4 loader into Sandbox B (Forge 1.16.5 is currently
+      blocked by ancient installer zlib hash deadlocks)
 - [ ] Resolve the `parent = null` problem for real loaders (they need
       `java.lang.*` and friends)
 - [ ] Handle Mixin conflicts between the two sandboxes
@@ -72,6 +76,7 @@ In progress:
 - [ ] Cross-platform support (Windows / Linux / macOS)
 
 ![Proof: Rust JNI launches Minecraft 1.21.4 + Fabric](image.png)
+![Proof:Rust launches Neoforge](image2.png)
 
 ## Quick start
 
@@ -81,7 +86,6 @@ In progress:
 - A JDK. Tested with Temurin 21; JDK 8+ should also work.
 
 ### Build and run
-
 
 git clone https://github.com/hchunhei81-cyber/jvm-mod-fusion.git
 cd jvm-mod-fusion
@@ -98,12 +102,13 @@ If everything is wired correctly, you should see:
 [Sandbox B] I am from Sandbox B!
 [OK] If you see A and B above, sandbox isolation is working!
 
-# Tech stack
+## Tech stack
 
 Rust — kernel, JVM orchestration
 jni crate (0.22.4) — FFI bridge to the JVM
 Java / JVM — where loaders and mods actually live
-Why not Sinytra Connector
+
+## Why not Sinytra Connector
 
 Sinytra Connector translates Fabric mods into something Forge can run at the
 bytecode level. It does that surprisingly well, but:
@@ -117,7 +122,7 @@ worlds, and connect them only at the render/data layer.
 It may fail. The Mixin conflict problem alone is hard. But if it works, it does
 not break when a loader updates, by design.
 
-# Known challenges
+## Known challenges
 
 - [x] **Successfully resolved ModLauncher initialization and `NullPointerException` (NPE) issues by implementing automated JAR sanitization, exact MANIFEST attribute injection, proper `jopt-simple` and `securejarhandler` dependency paths, and strict JVM VM options ordering (placing `-D` arguments before the main class).**
 Forge 1.21+ relies on the Java Module System (--module-path,
@@ -129,17 +134,20 @@ Mixin conflicts across two loaders in one JVM.
 ClassLoader hierarchy for real loaders (parent = null is not viable in
 practice).
 
-# Roadmap
+## Roadmap
+
 Load a real Fabric Loader jar into Sandbox A.
 Load a real Forge Loader jar into Sandbox B (requires a hybrid parent loader).
 Resolve Mixin conflicts — either bytecode merging on the Rust side, or a
 priority-based allowlist.
 Zero-copy data bus for cross-sandbox communication.
 Cross-platform (Windows / Linux / macOS).
-Contributing
+
+## Contributing
 
 Currently a personal research project. Contribution guidelines will be added if
 it reaches a usable prototype stage.
 
-# License
+## License
+
 BSD 3-Clause. See [LICENCE](LICENCE).

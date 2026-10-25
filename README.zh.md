@@ -1,4 +1,4 @@
-# JVM Mod Fusion
+# JVM Mod Combiner
 
 > 一个用 Rust 写的微内核，试图让 Fabric 与 Forge/NeoForge 模组
 > **在同一个 JVM 里共存**，不依赖 Sinytra Connector。
@@ -16,6 +16,7 @@ Minecraft 的模组生态是割裂的：**Fabric** 与 **Forge/NeoForge** 拥有
 们在数据层交汇。**
 
 ## 架构
+
 Rust 微内核
 （JVM 生命周期、沙盒编排、数据总线）
 |
@@ -28,7 +29,6 @@ Rust 微内核
 | + Fabric | | + Forge |
 | 模组 | | 模组 |
 +-----------+ +-----------+
-
 
 三个设计支柱：
 
@@ -50,12 +50,13 @@ Rust 微内核
 - [x] 两个隔离的 `URLClassLoader` 实例可以加载同名类并产生不同行为
 - [x] **Rust JNI 成功启动 Minecraft 1.21.4 + Fabric Loader —— 主菜单成功渲染，
       音效引擎初始化，纹理加载完成，游戏以正常帧率运行**
+- [x] **Rust 成功通过子进程启动 Minecraft 1.21.1 + NeoForge 21.1.191 —— 主菜单成功渲染，绕过了官方启动器限制与 ModLauncher 的 JPMS 模块化冲突**
 - [x] 从 `mc_libraries/` 动态组装类路径（253 个条目），通过
       `fabric.gameJarPath` 和关闭类路径隔离让 Fabric 认出游戏
 
 进行中：
 
-- [ ] 把真实的 Forge 1.21.4 加载器装进沙盒 B
+- [ ] 把真实的 Forge 1.21.4 加载器装进沙盒 B（注：Forge 1.16.5 因远古 Installer 的 zlib 哈希死锁，目前暂时卡死）
 - [ ] 解决真实加载器的 `parent = null` 问题（它们需要 `java.lang.*` 等）
 - [ ] 处理两个沙盒之间的 Mixin 冲突
 - [ ] 零拷贝数据总线
@@ -63,6 +64,7 @@ Rust 微内核
 - [ ] 跨平台支持（Windows / Linux / macOS）
 
 ![证明：Rust JNI 启动 Minecraft 1.21.4 + Fabric](image.png)
+![证明：RUST 启动Neoforge](image2.png)
 
 ## 快速开始
 
@@ -80,6 +82,7 @@ cd jvm-mod-fusion
 export JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home
 
 cargo run
+
 如果一切正常，你会看到：
 
 === Rust JVM Fusion Kernel: Sandbox Isolation Test ===
@@ -94,6 +97,7 @@ jni crate（0.22.4） —— 与 JVM 的 FFI 桥
 Java / JVM —— 加载器和模组真正住的地方
 
 ## 为什么不用 Sinytra Connector
+
 Sinytra Connector 在字节码层面把 Fabric 模组翻译成 Forge 能运行的形式。它做得
 相当不错，但是：
 
@@ -106,9 +110,9 @@ Sinytra Connector 在字节码层面把 Fabric 模组翻译成 Forge 能运行�
 它可能会失败。单是 Mixin 冲突问题就已经够硬核。但如果它成功，从设计上就不会
 因为加载器更新而崩溃。
 
-# 已知难点
+## 已知难点
 
-- [x] **通过实现自动化 JAR 净化、精确的 MANIFEST 屬性注入、正确的 `jopt-simple` 与 `securejarhandler` 依赖路径，以及严格的 JVM 虚拟机参数排序（将 `-D` 参数置于主类前方），成功解决了 ModLauncher 的初始化与 `NullPointerException` (NPE) 崩溃問題。**
+- [x] **通过实现自动化 JAR 净化、精确的 MANIFEST 属性注入、正确的 `jopt-simple` 与 `securejarhandler` 依赖路径，以及严格的 JVM 虚拟机参数排序（将 `-D` 参数置于主类前方），成功解决了 ModLauncher 的初始化与 `NullPointerException` (NPE) 崩溃问题。**
 Forge 1.21+ 依赖 Java Module System（--module-path、BootstrapLauncher、
 securejarhandler），必须按官方安装器的形态精确组装。
 ModLauncher 10 要求 JAR manifest 元数据完整；任何重写 manifest 的行为都会
@@ -116,7 +120,8 @@ ModLauncher 10 要求 JAR manifest 元数据完整；任何重写 manifest 的�
 两个加载器在同一个 JVM 内的 Mixin 冲突。
 真实加载器的 ClassLoader 层级问题（parent = null 在实践中不可行）。
 
-# 路线图
+## 路线图
+
 把真实的 Fabric Loader jar 加载进沙盒 A。
 把真实的 Forge Loader jar 加载进沙盒 B（需要混合父加载器）。
 处理 Mixin 冲突 —— 可能是 Rust 侧字节码合并，或者基于优先级的白名单。
@@ -124,7 +129,9 @@ ModLauncher 10 要求 JAR manifest 元数据完整；任何重写 manifest 的�
 跨平台（Windows / Linux / macOS）。
 
 ## 贡献
+
 目前是个人研究项目。如果它能走过原型阶段，会补上贡献指南。
 
 ## 许可证
+
 BSD 3-Clause，详见 [LICENCE](LICENCE)。

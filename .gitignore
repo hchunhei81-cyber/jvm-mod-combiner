@@ -5,9 +5,8 @@ logs.env
 .DS_Store
 *.bak.*
 logs/
-sandbox/
 target/
-# Minecraft 游戏本体与映射文件（禁止提交）
+
 sandbox/minecraft-client.jar
 sandbox/forge_env/libraries/net/minecraft/client/
 sandbox/forge_env/libraries/de/oceanlabs/mcp/

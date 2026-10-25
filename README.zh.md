@@ -55,6 +55,7 @@ Rust 微内核
       `fabric.gameJarPath` 和关闭类路径隔离让 Fabric 认出游戏
 - [x] **双沙盒并行启动成功**：在同一台机器上通过 Rust 子进程同时拉起 Fabric 1.21.4 与 NeoForge 1.21.1，互不干扰，均成功渲染主菜单。
 - [x] **零拷贝数据总线（IPC 原型）**：在 Rust 微内核中实现了基于 TCP 的消息总线，成功接收来自 Fabric 与 NeoForge 两个隔离沙盒的跨进程通讯。
+- [x] **跨沙盒消息路由**：Rust 总线按沙盒名路由 JSON 消息，Fabric 与 NeoForge 完成 `hello → ack` 双向闭环，并返回 `routed` 回执。
 
 进行中：
 
@@ -65,15 +66,25 @@ Rust 微内核
 - [ ] 动态依赖解析（解析 version manifest，而不是全量复制 `libraries`）
 - [ ] 跨平台支持（Windows / Linux / macOS）
 
-# 证明
-![证明：Rust JNI 启动 Minecraft 1.21.4 + Fabric](image.png)
-![证明：RUST 启动Neoforge](image2.png)
-## 效果展示
+## 概念验证与实机演示
 
-**双沙盒并行启动实机截图：**
-Rust 微内核通过独立子进程同时拉起 Fabric 1.21.4 与 NeoForge 1.21.1，互不干扰。
+以下是微内核成功拉起双加载器并完成跨沙盒通信的视觉证明。
 
+### 1. Fabric Loader 启动 (MC 1.21.4)
+Rust 内嵌 JNI JVM 成功启动 Fabric，主菜单渲染完成，音效引擎与纹理加载正常。
+![Rust JNI 启动 Minecraft 1.21.4 + Fabric](image.png)
+
+### 2. NeoForge 启动 (MC 1.21.1)
+Rust 通过子进程成功启动 NeoForge，绕过了官方启动器限制与 ModLauncher 的 JPMS 模块化冲突。
+![Rust 启动 NeoForge](image2.png)
+
+### 3. 双沙盒并行启动
+Fabric 1.21.4 与 NeoForge 1.21.1 在同一台机器上通过独立子进程同时运行，互不干扰。
 ![双沙盒并行启动证明](image3.png)
+
+### 4. 零拷贝数据总线路由 (IPC)
+Rust 微内核成功接收来自两个沙盒的注册请求。日志显示 Fabric 与 NeoForge 之间完成了 `hello → ack` 的双向消息闭环路由，彻底摆脱了对共享 ClassLoader 的依赖。
+![跨沙盒 IPC 路由](image4.png)
 
 ## 快速开始
 

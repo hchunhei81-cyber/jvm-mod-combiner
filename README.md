@@ -64,6 +64,7 @@ Verified on macOS + Temurin 21 (arm64):
       being disabled
 - [x] **Dual-sandbox concurrent launch successful**: Successfully launched Fabric 1.21.4 and NeoForge 1.21.1 simultaneously via Rust subprocesses on the same machine. They run completely isolated from each other and both successfully rendered the main menu.
 - [x] **Zero-copy Data Bus (IPC Prototype)**: Implemented a TCP-based message bus in the Rust microkernel, successfully receiving inter-process messages from both Fabric and NeoForge sandboxes.
+- [x] **Cross-sandbox message routing (IPC Router)**: A named registration and JSON routing layer in the Rust bus; Fabric ↔ NeoForge `hello`/`ack` round-trip verified with `routed` receipts.
 
 In progress:
 
@@ -77,15 +78,25 @@ In progress:
       copying the whole `libraries/` tree)
 - [ ] Cross-platform support (Windows / Linux / macOS)
 
-# Prove 
-![Proof: Rust JNI launches Minecraft 1.21.4 + Fabric](image.png)
-![Proof:Rust launches Neoforge](image2.png)
-## Proof of Concept
+## Proof of Concept & Verification
 
-**Dual-sandbox concurrent launch:**
-The Rust microkernel successfully launching Fabric 1.21.4 and NeoForge 1.21.1 side-by-side in isolated subprocesses.
+Here is the visual proof of the microkernel booting both loaders and routing cross-sandbox messages.
 
+### 1. Fabric Loader Boot (MC 1.21.4)
+Rust's embedded JNI JVM successfully boots Fabric, rendering the main menu, with sound engine and textures fully initialized.
+![Rust JNI launches Minecraft 1.21.4 + Fabric](image.png)
+
+### 2. NeoForge Boot (MC 1.21.1)
+Rust successfully spawns NeoForge via subprocess, bypassing the official launcher restrictions and ModLauncher JPMS conflicts.
+![Rust launches NeoForge](image2.png)
+
+### 3. Dual-Sandbox Concurrent Launch
+Both Fabric 1.21.4 and NeoForge 1.21.1 running side-by-side in isolated subprocesses on the same machine. They do not interfere with each other.
 ![Dual Sandbox Launch Proof](image3.png)
+
+### 4. Zero-Copy Data Bus Routing (IPC)
+The Rust microkernel receives registration requests from both sandboxes. The logs show a bidirectional `hello → ack` message loop successfully routed between Fabric and NeoForge, bypassing the need for a shared ClassLoader.
+![Cross-Sandbox IPC Routing](image4.png)
 
 ## Quick start
 

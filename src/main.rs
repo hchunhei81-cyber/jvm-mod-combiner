@@ -179,6 +179,7 @@ fn build_classpath(is_forge: bool, sandbox_dir: &Path) -> (Vec<PathBuf>, Vec<Pat
 
 
 
+#[allow(dead_code)]
 fn set_manifest_attributes(section: &mut Vec<String>, updates: &[(&str, &str)]) {
     for (key, value) in updates {
         let prefix = format!("{}:", key);
@@ -209,6 +210,7 @@ fn set_manifest_attributes(section: &mut Vec<String>, updates: &[(&str, &str)]) 
     }
 }
 
+#[allow(dead_code)]
 fn patch_modlauncher_manifest(content: &str) -> Vec<u8> {
     // Normalize only for parsing; output is written with the CRLF separators required
     // by the JAR manifest format. Preserve unrelated headers and package sections.
@@ -383,15 +385,15 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     // The ordinary walk above also finds a cached/escaped duplicate named like
     // "cpw\.mods.modlauncher-...jar". The retain() removes all ModLauncher paths;
     // add back exactly the official dependency once, and let Bootstrap create its module.
-    let mut final_modlauncher = modlauncher_path.to_string_lossy().to_string();
+    let mut _final_modlauncher = modlauncher_path.to_string_lossy().to_string();
     if modlauncher_path.is_file() {
         if let Some(sanitized_ml) = sanitize_jar(&modlauncher_path, &cache_dir) {
             eprintln!("[forge] 使用已補丁的 ModLauncher: {}", sanitized_ml.display());
-            final_modlauncher = sanitized_ml.to_string_lossy().to_string();
+            _final_modlauncher = sanitized_ml.to_string_lossy().to_string();
         } else {
             eprintln!("[forge] 使用原始 ModLauncher");
         }
-        // legacy.push(final_modlauncher); // 已停用：防止雙重載入衝突
+        // legacy.push(_final_modlauncher); // 已停用：防止雙重載入衝突
     }
 
     // Bootstrap 2.1.8 builds its input list from `java.class.path` via
@@ -924,30 +926,127 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
 }
 
 
+
 fn start_data_bus() {
-    thread::spawn(|| {
+    use std::io::{BufRead, BufReader, Write};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    struct Conn {
+        name: String,
+        tx: std::sync::mpsc::Sender<String>,
+    }
+
+    // name -> writer channel; 每个连接一个线程写，避免多线程同时写一个 TcpStream
+    let registry: Arc<Mutex<HashMap<String, std::sync::mpsc::Sender<String>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+
+    thread::spawn(move || {
         let listener = TcpListener::bind("127.0.0.1:25565").unwrap();
-        println!("[DataBus] 跨沙盒数据总线已启动，监听 127.0.0.1:25565");
-        
+        println!("[DataBus] 路由总线已启动，监听 127.0.0.1:25565");
+
         for stream in listener.incoming() {
-            match stream {
-                Ok(mut stream) => {
-                    thread::spawn(move || {
-                        let mut buffer = [0; 1024];
-                        loop {
-                            match stream.read(&mut buffer) {
-                                Ok(0) => break,
-                                Ok(n) => {
-                                    let msg = String::from_utf8_lossy(&buffer[..n]);
-                                    println!("[DataBus] 收到: {}", msg.trim());
-                                }
-                                Err(_) => break,
+            let stream = match stream {
+                Ok(s) => s,
+                Err(e) => { println!("[DataBus] accept 失败: {}", e); continue; }
+            };
+
+            let registry = registry.clone();
+            thread::spawn(move || {
+                let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
+                let reader_stream = match stream.try_clone() {
+                    Ok(s) => s,
+                    Err(e) => { println!("[DataBus] clone 失败: {}", e); return; }
+                };
+                let mut writer = stream;
+                let reader = BufReader::new(reader_stream);
+
+                // 每个连接一个写线程 + mpsc，防止跨线程写交错
+                let (tx, rx) = std::sync::mpsc::channel::<String>();
+                let write_handle = thread::spawn(move || {
+                    for line in rx {
+                        if writer.write_all(line.as_bytes()).is_err() { break; }
+                        if writer.write_all(b"
+").is_err() { break; }
+                        let _ = writer.flush();
+                    }
+                });
+
+                let mut my_name: Option<String> = None;
+
+                for line in reader.lines() {
+                    let line = match line { Ok(l) => l, Err(_) => break };
+                    let line = line.trim();
+                    if line.is_empty() { continue; }
+
+                    // 第一条必须是 register
+                    if my_name.is_none() {
+                        let name = serde_json::from_str::<serde_json::Value>(line)
+                            .ok()
+                            .and_then(|v| v.get("register").and_then(|r| r.as_str()).map(|s| s.to_string()));
+                        match name {
+                            Some(n) => {
+                                println!("[DataBus] {} 注册为 '{}'", peer, n);
+                                registry.lock().unwrap().insert(n.clone(), tx.clone());
+                                my_name = Some(n);
+                            }
+                            None => {
+                                let _ = tx.send(r#"{"error":"must_register_first"}"#.to_string());
+                                break;
                             }
                         }
-                    });
+                        continue;
+                    }
+
+                    // 路由
+                    let v: serde_json::Value = match serde_json::from_str(line) {
+                        Ok(v) => v,
+                        Err(_) => {
+                            let _ = tx.send(format!(r#"{{"error":"bad_json","raw":{:?}}}"#, line));
+                            continue;
+                        }
+                    };
+                    let to = v.get("to").and_then(|t| t.as_str()).unwrap_or("");
+                    if to.is_empty() {
+                        let _ = tx.send(r#"{"error":"missing_to"}"#.to_string());
+                        continue;
+                    }
+                    let from = my_name.clone().unwrap_or_default();
+                    let mut forward = v.clone();
+                    forward["from"] = serde_json::Value::String(from.clone());
+
+                    let target_tx = registry.lock().unwrap().get(to).cloned();
+                    match target_tx {
+                        Some(peer_tx) => {
+                            let payload = serde_json::to_string(&forward).unwrap_or_default();
+                            if peer_tx.send(payload).is_ok() {
+                                println!("[DataBus] {} -> {} routed", from, to);
+                                // 给发送方一个回执（可选）
+                                let ack = format!(
+                                    r#"{{"routed":true,"from":"{}","to":"{}"}}"#,
+                                    from, to
+                                );
+                                let _ = tx.send(ack);
+                            } else {
+                                let _ = tx.send(format!(r#"{{"error":"peer_write_failed","to":"{}"}}"#, to));
+                            }
+                        }
+                        None => {
+                            println!("[DataBus] {} -> {} 目标不在线", from, to);
+                            let _ = tx.send(format!(r#"{{"error":"peer_offline","to":"{}"}}"#, to));
+                        }
+                    }
                 }
-                Err(e) => println!("[DataBus] 连接失败: {}", e),
-            }
+
+                if let Some(name) = my_name {
+                    registry.lock().unwrap().remove(&name);
+                    println!("[DataBus] '{}' 断开", name);
+                }
+                // tx 在此 drop，写线程退出
+                let _ = tx.send(String::new()); // 触发 rx 关闭前的一次空写也无害；或者直接 drop tx
+                let _ = write_handle.join();
+            });
         }
     });
 }
@@ -971,17 +1070,22 @@ fn main() {
         let sandbox_dir = current_dir.join("sandbox");
 
         // 启动 Fabric
+                // 启动 Fabric
         let _sandbox_fab = sandbox_dir.clone();
         let _fab_thread = thread::spawn(move || {
             let mut cmd = std::process::Command::new("cargo");
+            // 将 javaagent 作为环境变量传递，或者直接通过 JVM 参数注入
+            cmd.env("JAVA_TOOL_OPTIONS", "-javaagent:/Users/otis/jvm-mod-combiner/bus_test/bus-agent.jar=Fabric-Sandbox");
             cmd.args(&["run", "--", "--mode", "fabric"]);
             cmd.status().unwrap();
         });
 
         // 启动 NeoForge
+                // 启动 NeoForge
         let _sandbox_nf = sandbox_dir.clone();
         let _nf_thread = thread::spawn(move || {
             let mut cmd = std::process::Command::new("cargo");
+            cmd.env("JAVA_TOOL_OPTIONS", "-javaagent:/Users/otis/jvm-mod-combiner/bus_test/bus-agent.jar=NeoForge-Sandbox");
             cmd.args(&["run", "--", "--mode", "neoforge"]);
             cmd.status().unwrap();
         });

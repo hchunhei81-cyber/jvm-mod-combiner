@@ -53,6 +53,7 @@ Rust 微内核
 - [x] **Rust 成功通过子进程启动 Minecraft 1.21.1 + NeoForge 21.1.191 —— 主菜单成功渲染，绕过了官方启动器限制与 ModLauncher 的 JPMS 模块化冲突**
 - [x] 从 `mc_libraries/` 动态组装类路径（253 个条目），通过
       `fabric.gameJarPath` 和关闭类路径隔离让 Fabric 认出游戏
+- [x] **双沙盒并行启动成功**：在同一台机器上通过 Rust 子进程同时拉起 Fabric 1.21.4 与 NeoForge 1.21.1，互不干扰，均成功渲染主菜单。
 
 进行中：
 

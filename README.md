@@ -62,6 +62,7 @@ Verified on macOS + Temurin 21 (arm64):
 - [x] Classpath is dynamically assembled from `mc_libraries/` (253 entries);
       Fabric recognizes the game via `fabric.gameJarPath` and classpath isolation
       being disabled
+- [x] **Dual-sandbox concurrent launch successful**: Successfully launched Fabric 1.21.4 and NeoForge 1.21.1 simultaneously via Rust subprocesses on the same machine. They run completely isolated from each other and both successfully rendered the main menu.
 
 In progress:
 

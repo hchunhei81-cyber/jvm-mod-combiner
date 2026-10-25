@@ -76,8 +76,15 @@ In progress:
       copying the whole `libraries/` tree)
 - [ ] Cross-platform support (Windows / Linux / macOS)
 
+# Prove 
 ![Proof: Rust JNI launches Minecraft 1.21.4 + Fabric](image.png)
 ![Proof:Rust launches Neoforge](image2.png)
+## Proof of Concept
+
+**Dual-sandbox concurrent launch:**
+The Rust microkernel successfully launching Fabric 1.21.4 and NeoForge 1.21.1 side-by-side in isolated subprocesses.
+
+![Dual Sandbox Launch Proof](image3.png)
 
 ## Quick start
 

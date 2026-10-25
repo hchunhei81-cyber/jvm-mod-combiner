@@ -64,8 +64,15 @@ Rust 微内核
 - [ ] 动态依赖解析（解析 version manifest，而不是全量复制 `libraries`）
 - [ ] 跨平台支持（Windows / Linux / macOS）
 
+# 证明
 ![证明：Rust JNI 启动 Minecraft 1.21.4 + Fabric](image.png)
 ![证明：RUST 启动Neoforge](image2.png)
+## 效果展示
+
+**双沙盒并行启动实机截图：**
+Rust 微内核通过独立子进程同时拉起 Fabric 1.21.4 与 NeoForge 1.21.1，互不干扰。
+
+![双沙盒并行启动证明](image3.png)
 
 ## 快速开始
 

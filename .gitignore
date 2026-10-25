@@ -1,15 +1,29 @@
-/target
-crash-reports/
-
-logs.env
-.DS_Store
-*.bak.*
-logs/
+# --- Rust 编译产物 ---
 target/
+
+# --- 崩溃报告与日志 ---
+crash-reports/
+logs/
+*.log
+
+# --- 系统与编辑器文件 ---
+.DS_Store
+.env
+
+# --- 备份文件 ---
+*.bak.*
+*.bak
+
+# --- 沙盒目录 (Sandbox 整体隔离) ---
 sandbox/
 
+# --- 明确排除的特定沙盒大文件与生成产物 ---
 sandbox/minecraft-client.jar
 sandbox/forge_env/libraries/net/minecraft/client/
 sandbox/forge_env/libraries/de/oceanlabs/mcp/
 sandbox/forge_env/versions/1.21.4/
 sandbox/mc_libraries/
+
+# --- 根目录下的临时安装器与日志 ---
+forge-installer.jar
+forge-installer.jar.log

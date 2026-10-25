@@ -105,35 +105,35 @@ fn build_classpath(is_forge: bool, sandbox_dir: &Path) -> (Vec<PathBuf>, Vec<Pat
 
     if is_forge {
         let forge_env = sandbox_dir.join("forge_env");
-        let v_json = forge_env.join("versions/1.21.4-forge-54.1.22/1.21.4-forge-54.1.22.json");
+        let v_json = mc_root.join("versions/1.21.4-forge-54.1.22/1.21.4-forge-54.1.22.json");
         let dirs = vec![
             sandbox_dir.to_path_buf(),
-            forge_env.join("libraries"),
+            mc_root.join("libraries"),
             mc_root.join("libraries"),
         ];
 
         // Minimal bootstrap classpath: only what Bootstrap itself needs to start
         for p in [
-            forge_env.join("libraries/net/minecraftforge/bootstrap/2.1.8/bootstrap-2.1.8.jar"),
-            forge_env.join("libraries/net/minecraftforge/bootstrap-api/2.1.8/bootstrap-api-2.1.8.jar"),
-            forge_env.join("libraries/net/minecraftforge/forge/1.21.4-54.1.22/forge-1.21.4-54.1.22-shim.jar"),
-            forge_env.join("libraries/net/minecraftforge/forge/1.21.4-54.1.22/forge-1.21.4-54.1.22-client.jar"),
-            forge_env.join("libraries/net/minecraftforge/forge/1.21.4-54.1.22/forge-1.21.4-54.1.22-universal.jar"),
+            mc_root.join("libraries/net/minecraftforge/bootstrap/2.1.8/bootstrap-2.1.8.jar"),
+            mc_root.join("libraries/net/minecraftforge/bootstrap-api/2.1.8/bootstrap-api-2.1.8.jar"),
+            mc_root.join("libraries/net/minecraftforge/forge/1.21.4-54.1.22/forge-1.21.4-54.1.22-shim.jar"),
+            mc_root.join("libraries/net/minecraftforge/forge/1.21.4-54.1.22/forge-1.21.4-54.1.22-client.jar"),
+            mc_root.join("libraries/net/minecraftforge/forge/1.21.4-54.1.22/forge-1.21.4-54.1.22-universal.jar"),
             
-            forge_env.join("libraries/net/minecraftforge/securemodules/2.2.24/securemodules-2.2.24.jar"),
-            forge_env.join("libraries/net/minecraftforge/unsafe/0.9.2/unsafe-0.9.2.jar"),
-            forge_env.join("libraries/org/ow2/asm/asm/9.9.1/asm-9.9.1.jar"),
-            forge_env.join("libraries/org/ow2/asm/asm-tree/9.9.1/asm-tree-9.9.1.jar"),
-            forge_env.join("libraries/org/ow2/asm/asm-analysis/9.9.1/asm-analysis-9.9.1.jar"),
-            forge_env.join("libraries/org/ow2/asm/asm-commons/9.9.1/asm-commons-9.9.1.jar"),
-            forge_env.join("libraries/org/ow2/asm/asm-util/9.9.1/asm-util-9.9.1.jar"),
+            mc_root.join("libraries/net/minecraftforge/securemodules/2.2.24/securemodules-2.2.24.jar"),
+            mc_root.join("libraries/net/minecraftforge/unsafe/0.9.2/unsafe-0.9.2.jar"),
+            mc_root.join("libraries/org/ow2/asm/asm/9.9.1/asm-9.9.1.jar"),
+            mc_root.join("libraries/org/ow2/asm/asm-tree/9.9.1/asm-tree-9.9.1.jar"),
+            mc_root.join("libraries/org/ow2/asm/asm-analysis/9.9.1/asm-analysis-9.9.1.jar"),
+            mc_root.join("libraries/org/ow2/asm/asm-commons/9.9.1/asm-commons-9.9.1.jar"),
+            mc_root.join("libraries/org/ow2/asm/asm-util/9.9.1/asm-util-9.9.1.jar"),
         ] {
             if p.exists() { bootstrap_cp.push(p); }
         }
         bootstrap_cp.push(sandbox_dir.join("minecraft-client.jar"));
 
         // Legacy classpath: everything else, Bootstrap will build the module layer from here
-        for p in find_jars_in(&forge_env.join("libraries"), "") {
+        for p in find_jars_in(&mc_root.join("libraries"), "") {
             let name = p.file_name().unwrap_or_default().to_string_lossy();
             // 方案三：bootstrap_cp 已加载 securejarhandler/securemodules，
             // legacyClassPath 必须排除它们，避免模块层重复定义 UnionFileSystemProvider
@@ -269,144 +269,10 @@ fn patch_modlauncher_manifest(content: &str) -> Vec<u8> {
     output.into_bytes()
 }
 
-fn sanitize_jar(src: &Path, cache_dir: &Path) -> Option<PathBuf> {
-    use std::io::{Read, Write};
-    let file = std::fs::File::open(src).ok()?;
-    let mut zip = zip::ZipArchive::new(file).ok()?;
-
-    let is_modlauncher = src.file_name()
-        .and_then(|n| n.to_str())
-        .map(|n| n.contains("modlauncher-"))
-        .unwrap_or(false);
-
-    // Do not rewrite ModLauncher itself. The previous sanitizer removed module-info.class,
-    // rewrote its manifest, and injected a service descriptor; the launch still crashed while
-    // reading ModLauncher's package version. For this diagnostic fix, keep the official JAR
-    // byte-for-byte intact and let the caller use the source path (None means no cache copy).
-    // 允許對 modlauncher 進行 manifest 淨化與套件版本注入
-    let _ = is_modlauncher;
-
-    let is_fmlloader = src.file_name()
-        .and_then(|n| n.to_str())
-        .map(|n| n.starts_with("fmlloader-"))
-        .unwrap_or(false);
-
-    // 找出 META-INF/services/ 下非法文件名（不含 '.'）
-    let mut bad: Vec<String> = Vec::new();
-    for i in 0..zip.len() {
-        let name = match zip.by_index(i) {
-            Ok(e) => e.name().to_string(),
-            Err(_) => continue,
-        };
-        let mut is_bad = false;
-        if let Some(rest) = name.strip_prefix("META-INF/services/") {
-            if !rest.is_empty() && !rest.contains('.') {
-                is_bad = true;
-            }
-        }
-        // 直接 java/ 或多版本 META-INF/versions/N/java/
-        let stripped: &str = name
-            .strip_prefix("META-INF/versions/")
-            .and_then(|r| r.split_once('/').map(|x| x.1))
-            .unwrap_or(name.as_str());
-        if stripped.starts_with("java/") {
-            is_bad = true;
-        }
-        // modlauncher 作为 JPMS 模块时版本为 null，导致 Launcher.<init> NPE
-        // 剔除 module-info.class 退化为自动模块，版本从文件名推导，不再为 null
-
-
-        // modlauncher 作为 JPMS 模块时版本为 null，必须剔除 module-info.class 退化为自动模块
-        if is_modlauncher && name == "module-info.class" {
-            is_bad = true;
-        }
-
-        if is_bad {
-            bad.push(name);
-        }
-    }
-    if bad.is_empty() && !is_modlauncher { /* 允許 modlauncher 進行 manifest 補丁 */ }
-
-    std::fs::create_dir_all(cache_dir).ok()?;
-    let fname = src.file_name()?.to_string_lossy().to_string();
-    let out_path = cache_dir.join(&fname);
-
-    // 缓存：净化版比源新就直接用
-    if let (Ok(sm), Ok(om)) = (std::fs::metadata(src), std::fs::metadata(&out_path)) {
-        if let (Ok(st), Ok(ot)) = (sm.modified(), om.modified()) {
-            if ot >= st { return Some(out_path); }
-        }
-    }
-
-
-
-
-    let out_file = std::fs::File::create(&out_path).ok()?;
-    let mut writer = zip::ZipWriter::new(out_file);
-    for i in 0..zip.len() {
-        let mut entry = match zip.by_index(i) { Ok(e) => e, Err(_) => continue };
-        let name = entry.name().to_string();
-        if bad.contains(&name) { continue; }
-
-        if entry.is_dir() { continue; }
-        let opts = zip::write::SimpleFileOptions::default()
-            .compression_method(entry.compression())
-            .unix_permissions(entry.unix_mode().unwrap_or(0o644));
-        writer.start_file(&name, opts).ok()?;
-
-        if name == "cpw/mods/modlauncher/Environment.class" {
-            let mut buf = Vec::new();
-            entry.read_to_end(&mut buf).ok()?;
-            // 在 Environment.class 的字節碼中，如果遇到嘗試放入 null 的指令，我們將其防護或替換。
-            // 由於 putPropertyIfAbsent 拒絕 null，我們直接將 buf 寫入
-            writer.write_all(&buf).ok()?;
-        } else if name == "META-INF/MANIFEST.MF" {
-            // IMPORTANT: Read the ZIP entry exactly once. `ZipFile` is a forward-only
-            // stream; a second read returns an empty buffer and destroys manifest sections.
-            let mut buf = Vec::new();
-            entry.read_to_end(&mut buf).ok()?;
-            let manifest_str = String::from_utf8_lossy(&buf);
-
-            if is_modlauncher {
-                // Keep all original manifest sections. ModLauncher 10.2.4 reads package
-                // metadata for `cpw.mods.modlauncher.api.IEnvironment`; that metadata is
-                // stored under `Name: cpw/mods/modlauncher/api/`, not just in the main
-                // manifest section. Rebuild both sections deliberately and validly.
-                let updated = patch_modlauncher_manifest(&manifest_str);
-                writer.write_all(&updated).ok()?;
-            } else {
-                // Do not strip version attributes from other libraries. They are package
-                // metadata, not duplicate noise; keep the manifest bytes intact.
-                writer.write_all(manifest_str.as_bytes()).ok()?;
-            }
-        } else {
-            let mut buf = Vec::new();
-            entry.read_to_end(&mut buf).ok()?;
-            writer.write_all(&buf).ok()?;
-        }
-    }
-
-    if is_modlauncher {
-        let service_path = "META-INF/services/net.minecraftforge.bootstrap.api.BootstrapEntryPoint";
-        // 检查原 jar 是否已有
-        let mut has_service = false;
-        // 重新打开源 zip 检查
-        if let Ok(f) = std::fs::File::open(src) {
-            if let Ok(mut z) = zip::ZipArchive::new(f) {
-                has_service = z.by_name(service_path).is_ok();
-            }
-        }
-        if !has_service {
-            let opts = zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Stored);
-            writer.start_file(service_path, opts).ok()?;
-            writer.write_all(b"cpw.mods.modlauncher.BootstrapEntry\n").ok()?;
-            eprintln!("[forge] injected {} into {}", service_path, out_path.display());
-        }
-    }
-    writer.finish().ok()?;
-    eprintln!("[forge] sanitized {} (removed {:?})", src.display(), bad);
-    Some(out_path)
+fn sanitize_jar(_src: &Path, _cache_dir: &Path) -> Option<PathBuf> {
+    // Diagnostic safety: use official JARs unchanged.
+    // Return None so existing callers fall back to the source path.
+    None
 }
 
 fn launch_forge_subprocess(sandbox_dir: &Path) {
@@ -417,7 +283,10 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     eprintln!("[forge] mods 目录: {}", mods_dir.display());
 
     let forge_env = sandbox_dir.join("forge_env");
-    let libs = forge_env.join("libraries");
+    let mc_root = PathBuf::from(
+        env::var("HOME").expect("HOME is not set")
+    ).join("Library/Application Support/minecraft");
+    let libs = mc_root.join("libraries");
 
     // Build legacyClassPath: all jars except bootstrap-related modules
     let mut legacy: Vec<String> = Vec::new();
@@ -460,10 +329,13 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     // loading it from legacyClassPath into its managed module layer, where package version
     // metadata is available. Directly resolving it as a boot-layer module caused the NPE.
     let modlauncher_path = libs.join("net/minecraftforge/modlauncher/10.2.4/modlauncher-10.2.4.jar");
-    if modlauncher_path.is_file() {
-        eprintln!("[forge] ModLauncher will be loaded by Bootstrap from legacyClassPath: {}", modlauncher_path.display());
+    let patched_ml_path = sandbox_dir.join(".jar_cache/modlauncher-10.2.4.jar");
+    if patched_ml_path.is_file() {
+        eprintln!("[forge] ModLauncher 使用补丁版: {}", patched_ml_path.display());
+    } else if modlauncher_path.is_file() {
+        eprintln!("[forge] WARN: 补丁版缺失，回退原始: {}", modlauncher_path.display());
     } else {
-        eprintln!("[forge] ERROR: ModLauncher JAR not found: {}", modlauncher_path.display());
+        eprintln!("[forge] ERROR: ModLauncher JAR not found");
     }
 
     let cache_dir = sandbox_dir.join(".jar_cache");
@@ -523,13 +395,97 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     // findAllClassPathEntries(). The `legacyClassPath` property alone is not
     // sufficient for this version, so ensure Forge's client JAR is present and
     // pass the complete legacy list to the JVM's actual -cp argument below.
+    
+    // 強制將 bootstrap 與 bootstrap-api 加入 legacy_cp 作為 Classpath 根基
+    let bootstrap_jar = libs.join("net/minecraftforge/bootstrap/2.1.8/bootstrap-2.1.8.jar");
+    let bootstrap_api_jar = libs.join("net/minecraftforge/bootstrap-api/2.1.8/bootstrap-api-2.1.8.jar");
+    if bootstrap_jar.is_file() && !legacy.iter().any(|p| Path::new(p) == bootstrap_jar.as_path()) {
+        legacy.insert(0, bootstrap_jar.to_string_lossy().to_string());
+    }
+    if bootstrap_api_jar.is_file() && !legacy.iter().any(|p| Path::new(p) == bootstrap_api_jar.as_path()) {
+        legacy.insert(0, bootstrap_api_jar.to_string_lossy().to_string());
+    }
+
+    
+    // 強制將 bootstrap 與 bootstrap-api 加入 legacy_cp 作為 Classpath 根基
+    let bootstrap_jar = libs.join("net/minecraftforge/bootstrap/2.1.8/bootstrap-2.1.8.jar");
+    let bootstrap_api_jar = libs.join("net/minecraftforge/bootstrap-api/2.1.8/bootstrap-api-2.1.8.jar");
+    if bootstrap_jar.is_file() && !legacy.iter().any(|p| Path::new(p) == bootstrap_jar.as_path()) {
+        legacy.insert(0, bootstrap_jar.to_string_lossy().to_string());
+    }
+    if bootstrap_api_jar.is_file() && !legacy.iter().any(|p| Path::new(p) == bootstrap_api_jar.as_path()) {
+        legacy.insert(0, bootstrap_api_jar.to_string_lossy().to_string());
+    }
+
     let forge_client = libs.join("net/minecraftforge/forge/1.21.4-54.1.22/forge-1.21.4-54.1.22-client.jar");
+
+
     if forge_client.is_file()
         && !legacy.iter().any(|p| Path::new(p) == forge_client.as_path())
     {
         legacy.insert(0, forge_client.to_string_lossy().to_string());
     }
+    
+    // 確保 Bootstrap、Bootstrap-API 與 Forge Client 必定存在於 Classpath 頂端
+    let bootstrap_path = libs.join("net/minecraftforge/bootstrap/2.1.8/bootstrap-2.1.8.jar");
+    let bootstrap_api_path = libs.join("net/minecraftforge/bootstrap-api/2.1.8/bootstrap-api-2.1.8.jar");
+    
+    if bootstrap_path.exists() {
+        let p_str = bootstrap_path.to_string_lossy().to_string();
+        if !legacy.contains(&p_str) { legacy.insert(0, p_str); }
+    }
+    if bootstrap_api_path.exists() {
+        let p_str = bootstrap_api_path.to_string_lossy().to_string();
+        if !legacy.contains(&p_str) { legacy.insert(0, p_str); }
+    }
+    if forge_client.exists() {
+        let p_str = forge_client.to_string_lossy().to_string();
+        if !legacy.contains(&p_str) { legacy.insert(0, p_str); }
+    }
+
+    
+    // 確保 Bootstrap、Bootstrap-API 與 Forge Client 必定存在於 Classpath 頂端
+    let bootstrap_path = libs.join("net/minecraftforge/bootstrap/2.1.8/bootstrap-2.1.8.jar");
+    let bootstrap_api_path = libs.join("net/minecraftforge/bootstrap-api/2.1.8/bootstrap-api-2.1.8.jar");
+    
+    if bootstrap_path.exists() {
+        let p_str = bootstrap_path.to_string_lossy().to_string();
+        if !legacy.contains(&p_str) { legacy.insert(0, p_str); }
+    }
+    if bootstrap_api_path.exists() {
+        let p_str = bootstrap_api_path.to_string_lossy().to_string();
+        if !legacy.contains(&p_str) { legacy.insert(0, p_str); }
+    }
+    if forge_client.exists() {
+        let p_str = forge_client.to_string_lossy().to_string();
+        if !legacy.contains(&p_str) { legacy.insert(0, p_str); }
+    }
+
+    // Bootstrap API stays on the initial module path; do not expose it
+    // again to Bootstrap's managed-layer classpath scanner.
+    legacy.retain(|p| {
+        !p.contains("bootstrap-api")
+            && !p.contains("/bootstrap/2.1.8/")
+            // Keep the newer official failureaccess module only.
+            && !p.contains("/failureaccess/1.0.1/")
+            // Do not let sandbox copies enter Bootstrap's module layer.
+            && !(p.contains("/sandbox/mc_libraries/")
+                && p.to_ascii_lowercase().contains("failureaccess-"))
+    });
+    // 把补丁版 ModLauncher 放进 legacy，让 Bootstrap 从 java.class.path 扫描到它
+    let patched_ml = sandbox_dir.join(".jar_cache/modlauncher-10.2.4.jar");
+    if patched_ml.is_file() {
+        legacy.retain(|p| !p.contains("/modlauncher/"));
+        legacy.insert(0, patched_ml.to_string_lossy().to_string());
+        eprintln!("[forge] legacyClassPath 使用补丁 ModLauncher: {}", patched_ml.display());
+    } else {
+        eprintln!("[forge] ERROR: 补丁 ModLauncher 不存在: {}", patched_ml.display());
+    }
+
+    legacy.retain(|p| !p.contains("/bootstrap/2.1.7/"));
     let legacy_cp = legacy.join(":");
+
+
 
     // JVM module path contains the bootstrap/runtime modules. ModLauncher itself is deliberately
     // supplied through legacyClassPath so Bootstrap can place it in its managed module layer.
@@ -546,29 +502,29 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
             } else {
                 modlauncher_path.clone()
             },
-            sandbox_dir.join("forge_env/libraries/net/minecraftforge/securemodules/2.2.24/securemodules-2.2.24.jar"),
-            sandbox_dir.join("forge_env/libraries/net/minecraftforge/forgespi/7.1.5/forgespi-7.1.5.jar"),
-            sandbox_dir.join("forge_env/libraries/net/minecraftforge/mergetool-api/1.0/mergetool-api-1.0.jar"),
+            libs.join("net/minecraftforge/securemodules/2.2.24/securemodules-2.2.24.jar"),
+            libs.join("net/minecraftforge/forgespi/7.1.5/forgespi-7.1.5.jar"),
+            libs.join("net/minecraftforge/mergetool-api/1.0/mergetool-api-1.0.jar"),
                 // 自動補上 log4j-slf4j 實現，解決 SLF4J(W): No SLF4J providers were found.
-    // paths.push(sandbox_dir.join("forge_env/libraries/org/apache/logging/log4j/log4j-slf4j2-impl/2.24.3/log4j-slf4j2-impl-2.24.3.jar")); // 已暫時註解以排查巨集錯誤
-    sandbox_dir.join("forge_env/libraries/org/apache/logging/log4j/log4j-core/2.24.3/log4j-core-2.24.3.jar"),
-            sandbox_dir.join("forge_env/libraries/org/apache/logging/log4j/log4j-api/2.24.3/log4j-api-2.24.3.jar"),
-            sandbox_dir.join("forge_env/libraries/net/minecrell/terminalconsoleappender/1.2.0/terminalconsoleappender-1.2.0.jar"),
-            sandbox_dir.join("forge_env/libraries/org/jline/jline-terminal/3.25.1/jline-terminal-3.25.1.jar"),
-            sandbox_dir.join("forge_env/libraries/org/jline/jline-reader/3.25.1/jline-reader-3.25.1.jar"),
-            sandbox_dir.join("forge_env/libraries/net/minecraftforge/fmlloader/1.21.4-54.1.22/fmlloader-1.21.4-54.1.22.jar"),
-            sandbox_dir.join("forge_env/libraries/net/minecraftforge/bootstrap/2.1.8/bootstrap-2.1.8.jar"),
-            sandbox_dir.join("forge_env/libraries/net/minecraftforge/bootstrap-api/2.1.8/bootstrap-api-2.1.8.jar"),
+    // paths.push(libs.join("org/apache/logging/log4j/log4j-slf4j2-impl/2.25.2/log4j-slf4j2-impl-2.25.2.jar")); // 已暫時註解以排查巨集錯誤
+    libs.join("org/apache/logging/log4j/log4j-core/2.25.2/log4j-core-2.25.2.jar"),
+            libs.join("org/apache/logging/log4j/log4j-api/2.25.2/log4j-api-2.25.2.jar"),
+            libs.join("net/minecrell/terminalconsoleappender/1.2.0/terminalconsoleappender-1.2.0.jar"),
+            libs.join("org/jline/jline-terminal/3.25.1/jline-terminal-3.25.1.jar"),
+            libs.join("org/jline/jline-reader/3.25.1/jline-reader-3.25.1.jar"),
+            libs.join("net/minecraftforge/fmlloader/1.21.4-54.1.22/fmlloader-1.21.4-54.1.22.jar"),
+            libs.join("net/minecraftforge/bootstrap/2.1.8/bootstrap-2.1.8.jar"),
+            libs.join("net/minecraftforge/bootstrap-api/2.1.8/bootstrap-api-2.1.8.jar"),
             sandbox_dir.join("mc_libraries/logging-1.7.12.jar"),
             
     sandbox_dir.join("mc_libraries/slf4j-api-2.0.17.jar"),
-            sandbox_dir.join("forge_env/libraries/net/minecraftforge/unsafe/0.9.2/unsafe-0.9.2.jar"),
-            sandbox_dir.join("forge_env/libraries/org/ow2/asm/asm/9.9.1/asm-9.9.1.jar"),
-            sandbox_dir.join("forge_env/libraries/org/ow2/asm/asm-tree/9.9.1/asm-tree-9.9.1.jar"),
-            sandbox_dir.join("forge_env/libraries/org/ow2/asm/asm-analysis/9.9.1/asm-analysis-9.9.1.jar"),
-            sandbox_dir.join("forge_env/libraries/org/ow2/asm/asm-commons/9.9.1/asm-commons-9.9.1.jar"),
-            sandbox_dir.join("forge_env/libraries/org/ow2/asm/asm-util/9.9.1/asm-util-9.9.1.jar"),
-            sandbox_dir.join("forge_env/libraries/net/sf/jopt-simple/jopt-simple/5.0.4/jopt-simple-5.0.4.jar"),
+            libs.join("net/minecraftforge/unsafe/0.9.2/unsafe-0.9.2.jar"),
+            libs.join("org/ow2/asm/asm/9.9.1/asm-9.9.1.jar"),
+            libs.join("org/ow2/asm/asm-tree/9.9.1/asm-tree-9.9.1.jar"),
+            libs.join("org/ow2/asm/asm-analysis/9.9.1/asm-analysis-9.9.1.jar"),
+            libs.join("org/ow2/asm/asm-commons/9.9.1/asm-commons-9.9.1.jar"),
+            libs.join("org/ow2/asm/asm-util/9.9.1/asm-util-9.9.1.jar"),
+            libs.join("net/sf/jopt-simple/jopt-simple/5.0.4/jopt-simple-5.0.4.jar"),
         ];
         
         // 過濾不存在的路徑並轉為 String
@@ -599,9 +555,54 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
         }
         strings
     };
-    let module_path = module_jars.join(":");
+        let module_path = {
+        let mut jars = Vec::new();
+        let core_rel_paths = [
+            "net/sf/jopt-simple/jopt-simple/5.0.4/jopt-simple-5.0.4.jar",
+            // "net/minecraftforge/modlauncher/10.2.4/modlauncher-10.2.4.jar", // 用 .jar_cache 补丁版
+            "net/minecraftforge/securemodules/2.2.24/securemodules-2.2.24.jar",
+            "net/minecraftforge/forgespi/7.1.5/forgespi-7.1.5.jar",
+            "net/minecraftforge/mergetool-api/1.0/mergetool-api-1.0.jar",
+            "net/minecraftforge/bootstrap-api/2.1.8/bootstrap-api-2.1.8.jar",
+            "net/minecraftforge/unsafe/0.9.2/unsafe-0.9.2.jar",
+            "org/ow2/asm/asm/9.9.1/asm-9.9.1.jar",
+            "org/ow2/asm/asm-tree/9.9.1/asm-tree-9.9.1.jar",
+            "org/ow2/asm/asm-analysis/9.9.1/asm-analysis-9.9.1.jar",
+            "org/ow2/asm/asm-commons/9.9.1/asm-commons-9.9.1.jar",
+            "org/ow2/asm/asm-util/9.9.1/asm-util-9.9.1.jar",
+            "org/apache/logging/log4j/log4j-core/2.25.2/log4j-core-2.25.2.jar",
+            "org/apache/logging/log4j/log4j-api/2.25.2/log4j-api-2.25.2.jar",
+            "net/minecrell/terminalconsoleappender/1.2.0/terminalconsoleappender-1.2.0.jar",
+            "org/jline/jline-terminal/3.25.1/jline-terminal-3.25.1.jar",
+            "org/jline/jline-reader/3.25.1/jline-reader-3.25.1.jar",
+            "net/minecraftforge/fmlloader/1.21.4-54.1.22/fmlloader-1.21.4-54.1.22.jar",
+        ];
+                for rel in core_rel_paths {
+            let path = libs.join(rel);
+            if !path.is_file() {
+                continue;
+            }
+            // ModLauncher 用终端 python3 生成的补丁 JAR，避免 getPackage() 版本为 null 的 NPE
+            let effective = if rel.contains("modlauncher/") {
+                let patched = sandbox_dir.join(".jar_cache/modlauncher-10.2.4.jar");
+                if patched.is_file() {
+                    eprintln!("[forge] module-path ModLauncher 使用补丁版: {}", patched.display());
+                    patched
+                } else {
+                    eprintln!("[forge] WARN: 补丁 JAR 不存在，回退官方版: {}", path.display());
+                    path
+                }
+            } else {
+                path
+            };
+            let value = effective.to_string_lossy().to_string();
+            if !jars.contains(&value) {
+                jars.push(value);
+            }
+        }
+        jars.join(":")
+    };
 
-    // 自動尋找 Java 21（Minecraft 1.21.4 官方指定版本）
     let java = if let Ok(output) = std::process::Command::new("/usr/libexec/java_home")
         .arg("-v").arg("21")
         .output() {
@@ -620,7 +621,78 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     // Critical: Bootstrap 2.1.8 scans `java.class.path` to build its runtime
     // module layer. Pass the full legacy JAR list as the actual JVM classpath;
     // setting only -DlegacyClassPath does not make those JARs visible to that scan.
-    cmd.arg("-cp").arg(&legacy_cp);
+    
+    // 【強制修正】直接建構包含 bootstrap 與所有 forge libraries 的絕對 Classpath
+    // Build the actual JVM classpath from installed libraries and sandbox game files.
+    let bootstrap_jar = libs.join("net/minecraftforge/bootstrap/2.1.8/bootstrap-2.1.8.jar");
+    let bootstrap_api_jar = libs.join("net/minecraftforge/bootstrap-api/2.1.8/bootstrap-api-2.1.8.jar");
+    let mut real_cp: Vec<String> = Vec::new();
+
+    for path in [
+        bootstrap_jar,
+        bootstrap_api_jar,
+        forge_client.clone(),
+        sandbox_dir.join("minecraft-client.jar"),
+    ] {
+        if path.is_file() {
+            let value = path.to_string_lossy().to_string();
+            if !real_cp.contains(&value) {
+                real_cp.push(value);
+            }
+        } else {
+            eprintln!("[forge] classpath file missing: {}", path.display());
+        }
+    }
+
+    for path in &legacy {
+        if Path::new(path).is_file() && !real_cp.contains(path) {
+            real_cp.push(path.clone());
+        }
+    }
+
+    for path in find_jars_in(&sandbox_dir.join("mc_libraries"), "") {
+        let value = path.to_string_lossy().to_string();
+        let filename = path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+
+        // Keep Mojang Logging from the installed Minecraft libraries.
+        // Sandbox copies use conflicting automatic module names.
+        if filename.starts_with("logging-")
+            || filename.contains("com.mojang.logging")
+        {
+            eprintln!("[forge] 排除沙盒重复 Logging JAR: {}", value);
+            continue;
+        }
+
+        if Path::new(&value).is_file() && !real_cp.contains(&value) {
+            real_cp.push(value);
+        }
+    }
+
+    // Avoid discovering Bootstrap API a second time from java.class.path.
+    real_cp.retain(|p| {
+        !p.contains("bootstrap-api")
+            && !p.contains("jopt-simple/6.0-alpha-3/")
+            // Avoid loading the old automatic module named "failureaccess".
+            && !p.contains("/failureaccess/1.0.1/")
+            // Sandbox copies can introduce additional automatic modules.
+            && !(p.contains("/sandbox/mc_libraries/")
+                && p.to_ascii_lowercase().contains("failureaccess-"))
+    });
+    if patched_ml.is_file() {
+        real_cp.retain(|p| !p.contains("/modlauncher/"));
+        let patched_str = patched_ml.to_string_lossy().to_string();
+        if !real_cp.contains(&patched_str) {
+            real_cp.insert(0, patched_str);
+        }
+    }
+    for p in real_cp.iter().filter(|p| p.contains("modlauncher")) {
+        eprintln!("[forge][debug] real_cp modlauncher: {}", p);
+    }
+    let forced_cp_str = real_cp.join(":");
+    cmd.arg("-cp").arg(&forced_cp_str);
+
     if forge_client.is_file() {
         eprintln!("[forge] forge-client included in Bootstrap classpath: {}", forge_client.display());
     } else {
@@ -628,14 +700,13 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     }
     eprintln!("[forge] Bootstrap JVM classpath entries: {}", legacy.len());
     cmd.arg("--module-path").arg(&module_path)
-        .arg("--add-modules").arg("ALL-MODULE-PATH,java.instrument,net.minecraftforge.fmlloader,net.minecraftforge.forgespi,net.minecraftforge.mergetool.api,com.mojang.logging,org.slf4j,org.apache.logging.log4j,org.apache.logging.log4j.core")
+        .arg("--add-modules").arg("ALL-MODULE-PATH,java.instrument")
         .arg(format!("-DlegacyClassPath={}", legacy_cp))
         .arg(format!("-DlibraryDirectory={}", libs.display()))
-        .arg("-DignoreList=asm,securejarhandler,bootstrap,bootstrap-api,securemodules,unsafe,JarJar,client-1.21.4-official")
+        .arg("-DignoreList=asm,securejarhandler,bootstrap,bootstrap-api,securemodules,unsafe,JarJar,client-1.21.4-official,modlauncher")
                                 .arg("-Dforge.logging.console.level=debug")
-        .arg("-Dmodlauncher.naming=obfuscated")
+        .arg("-Dbsl.debug=true")
         .arg("-Dmodlauncher.containsInjectables=true")
-                .arg("-Dmodlauncher.containsInjectables=true")
         .arg("-Dmodlauncher.naming=srg")
         .arg("-Dnet.minecraftforge.forgeVersion=54.1.22")
         .arg("-Dnet.minecraftforge.mcVersion=1.21.4")
@@ -661,7 +732,7 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
         .arg("-Dfml.ignoreInvalidMinecraftCertificates=true")
         .arg("-Dfml.ignorePatchDiscrepancies=true")
         .arg("net.minecraftforge.bootstrap.ForgeBootstrap")
-        .arg("--launchTarget").arg("forge_userdev_client")
+        .arg("--launchTarget").arg("forge_client")
         .arg("--fml.forgeVersion").arg("54.1.22")
         .arg("--fml.mcVersion").arg("1.21.4")
         .arg("--fml.mcpVersion").arg("20241203.143248")
@@ -692,9 +763,168 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     }
 }
 
+
+fn launch_neoforge_subprocess(sandbox_dir: &Path) {
+    let mc_root = PathBuf::from(env::var("HOME").expect("HOME")).join("Library/Application Support/minecraft");
+    let version = "neoforge-21.1.191";
+    let neoforge_ver = "21.1.191";
+    let unix_args = mc_root.join(format!("libraries/net/neoforged/neoforge/{}/unix_args.txt", neoforge_ver));
+    if !unix_args.is_file() {
+        eprintln!("[neoforge] ERROR: unix_args.txt 不存在: {}", unix_args.display());
+        eprintln!("[neoforge] 先用 --installServer 跑一次 installer 生成它");
+        return;
+    }
+
+    // 读 unix_args.txt，拆成参数。文件里每行可能含多个以空格分隔的参数，
+    // 但路径里也可能有空格（macOS 的 Application Support），所以按行读、
+    // 只对每行的第一个 token 识别，其余保留原样。
+    let content = fs::read_to_string(&unix_args).expect("read unix_args.txt");
+    let mut jvm_args: Vec<String> = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        // unix_args.txt 里每个逻辑参数一行，但 -p 那一行是 "-p <path>" 两个 token
+        // 以及 "-Dkey=value" 是单 token。按空白切分，但路径里的空格需要保留：
+        // 官方文件里路径不含空格（相对路径 libraries/...），所以直接切分即可。
+        for tok in line.split_whitespace() {
+            jvm_args.push(tok.to_string());
+        }
+    }
+
+    // 把 forgeserver 换成 forgeclient
+    for a in jvm_args.iter_mut() {
+        if a == "forgeserver" { *a = "forgeclient".to_string(); }
+    }
+
+    // 扫描 LWJGL jar 并追加到 legacyClassPath（服务端 unix_args 不含客户端 LWJGL 依赖）
+    let lwjgl_root = mc_root.join("libraries/org/lwjgl");
+    let mut lwjgl_jars: Vec<String> = Vec::new();
+    fn walk_lwjgl(dir: &Path, out: &mut Vec<String>) {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk_lwjgl(&p, out);
+                } else if let Some(n) = p.file_name().and_then(|n| n.to_str()) {
+                    let ps = p.to_string_lossy();
+                    // 只要路径里含 /3.3.3/ 的 jar（普通 + natives 都要），排除 3.4.x
+                    if n.ends_with(".jar") && ps.contains("/3.3.3/") {
+                        out.push(ps.to_string());
+                    }
+                }
+            }
+        }
+    }
+    walk_lwjgl(&lwjgl_root, &mut lwjgl_jars);
+    eprintln!("[neoforge] 扫描到 {} 个 LWJGL jar", lwjgl_jars.len());
+
+    // 扫描 ICU4J（客户端字体渲染需要）
+    let icu_root = mc_root.join("libraries/com/ibm/icu");
+    let mut icu_jars: Vec<String> = Vec::new();
+    fn walk_icu(dir: &Path, out: &mut Vec<String>) {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() { walk_icu(&p, out); }
+                else if let Some(n) = p.file_name().and_then(|n| n.to_str()) {
+                    if n.ends_with(".jar") {
+                        out.push(p.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+    walk_icu(&icu_root, &mut icu_jars);
+    eprintln!("[neoforge] 扫描到 {} 个 ICU4J jar", icu_jars.len());
+
+    // 扫描 text2speech（客户端 Narrator 需要）
+    let tts_root = mc_root.join("libraries/com/mojang/text2speech");
+    let mut tts_jars: Vec<String> = Vec::new();
+    fn walk_tts(dir: &Path, out: &mut Vec<String>) {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() { walk_tts(&p, out); }
+                else if let Some(n) = p.file_name().and_then(|n| n.to_str()) {
+                    if n.ends_with(".jar") {
+                        out.push(p.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+    walk_tts(&tts_root, &mut tts_jars);
+    eprintln!("[neoforge] 扫描到 {} 个 text2speech jar", tts_jars.len());
+    // 找到 jvm_args 里的 -DlegacyClassPath=...，追加 LWJGL
+    for a in jvm_args.iter_mut() {
+        if a.starts_with("-DlegacyClassPath=") {
+            let mut val = a.trim_start_matches("-DlegacyClassPath=").to_string();
+            for j in &lwjgl_jars {
+                if !val.contains(j) {
+                    val.push(':');
+                    val.push_str(j);
+                }
+            }
+            for j in &icu_jars {
+                if !val.contains(j) {
+                    val.push(':');
+                    val.push_str(j);
+                }
+            }
+            for j in &tts_jars {
+                if !val.contains(j) {
+                    val.push(':');
+                    val.push_str(j);
+                }
+            }
+            *a = format!("-DlegacyClassPath={}", val);
+            break;
+        }
+    }
+
+    // 补客户端 game 参数
+    let mut game_args: Vec<String> = vec![
+        "--gameDir".into(), sandbox_dir.to_string_lossy().to_string(),
+        "--assetsDir".into(), sandbox_dir.join("assets").to_string_lossy().to_string(),
+        "--assetIndex".into(), "17".into(),
+        "--version".into(), "1.21.1".into(),
+        "--username".into(), "Dev".into(),
+        "--uuid".into(), "00000000000000000000000000000000".into(),
+        "--accessToken".into(), "0".into(),
+        "--userType".into(), "legacy".into(),
+        "--versionType".into(), "release".into(),
+    ];
+
+    let java = if let Ok(out) = std::process::Command::new("/usr/libexec/java_home")
+        .arg("-v").arg("21").output() {
+        let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !p.is_empty() { format!("{}/bin/java", p) } else { "java".to_string() }
+    } else { "java".to_string() };
+
+    let mut cmd = std::process::Command::new(&java);
+    // 工作目录设成 mc_root，因为 unix_args.txt 里是相对路径 libraries/...
+    cmd.current_dir(&mc_root);
+    // macOS: GLFW 窗口必须在 main thread 创建
+    if cfg!(target_os = "macos") {
+        cmd.arg("-XstartOnFirstThread");
+    }
+    for a in &jvm_args { cmd.arg(a); }
+    for a in &game_args { cmd.arg(a); }
+
+    println!("[neoforge] Launching: {:?}", cmd);
+    cmd.stdout(std::process::Stdio::inherit());
+    cmd.stderr(std::process::Stdio::inherit());
+    match cmd.spawn() {
+        Ok(mut child) => { let _ = child.wait(); }
+        Err(e) => eprintln!("[neoforge] spawn failed: {}", e),
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let is_forge = args.contains(&"--mode".to_string()) || args.contains(&"forge".to_string());
+    let is_forge = args.windows(2).any(|pair| {
+        pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("forge")
+    }) || args.iter().any(|arg| arg == "forge");
     println!("=== Rust JVM Combiner Kernel: {} Mode ===", if is_forge { "Forge" } else { "Fabric" });
 
     let current_dir = env::current_dir().unwrap();
@@ -703,6 +933,14 @@ fn main() {
     // Forge: launch as a subprocess with proper -p / --add-modules
     if is_forge {
         launch_forge_subprocess(&sandbox_dir);
+        return;
+    }
+
+    let is_neoforge = args.windows(2).any(|pair| {
+        pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("neoforge")
+    }) || args.iter().any(|arg| arg == "neoforge");
+    if is_neoforge {
+        launch_neoforge_subprocess(&sandbox_dir);
         return;
     }
     let (bootstrap_cp, legacy_cp) = build_classpath(is_forge, &sandbox_dir);

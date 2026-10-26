@@ -1100,14 +1100,16 @@ fn main() {
         let sandbox_dir = current_dir.join("sandbox");
 
         // 启动 Fabric
-                // 启动 Fabric
         let _sandbox_fab = sandbox_dir.clone();
+
         let _fab_thread = thread::spawn(move || {
-            let mut cmd = std::process::Command::new("cargo");
-            // 将 javaagent 作为环境变量传递，或者直接通过 JVM 参数注入
-            cmd.env("JAVA_TOOL_OPTIONS", "-javaagent:/Users/otis/jvm-mod-combiner/bus_test/bus-agent.jar=Fabric-Sandbox");
-            cmd.args(&["run", "--", "--mode", "fabric"]);
-            cmd.status().unwrap();
+        let mut cmd = std::process::Command::new("cargo");
+
+        // Agent 由 Fabric JVM 的 jvm_args 显式注入。
+        // 不要再通过 JAVA_TOOL_OPTIONS 注入第二次。
+        cmd.args(&["run", "--", "--mode", "fabric"]);
+
+        cmd.status().unwrap();
         });
 
         // 启动 NeoForge

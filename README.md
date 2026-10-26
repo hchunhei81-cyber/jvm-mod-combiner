@@ -68,6 +68,7 @@ Verified on macOS + Temurin 21 (arm64):
 - [x] **Runtime Bytecode Instrumentation**: Rust injects a Java Agent via JNI `InitArgsBuilder`. The `ClassFileTransformer` successfully intercepts classes loaded by Fabric's `KnotClassLoader` (e.g., `net.minecraft.client.main.Main`), proving the capability for future automated patching without Mixin dependencies.
 - [x] **Cross-Sandbox Runtime State Sync (Proof of Concept)**: The Fabric sandbox extracts the real-time player coordinates (bypassing obfuscation via reflection) and broadcasts them via the Rust TCP bus. The NeoForge sandbox receives and prints the synchronized state. This proves the viability of real-time data-layer convergence across isolated JVMs.
 The Fabric sandbox bypassed obfuscation to extract the player's real-time coordinates using pure reflection and broadcast them via the Rust TCP bus. The NeoForge sandbox successfully locked the `Minecraft` instance and parsed the synchronization data, with logs printing the coordinates from Fabric in real time (e.g., `3.0, 4.5, 8.5`). This demonstrates the feasibility of real-time data layer convergence across physically isolated JVMs.
+- [x] **Cross-Sandbox Real-time State Sync (Data Layer Integration)**: Bypassed runtime obfuscation inside the Fabric sandbox (resolving the `dA/dC/dG` methods) to extract real-time `LocalPlayer` coordinates. Broadcasted via the Rust TCP data bus, the NeoForge sandbox successfully received and parsed the data, proving real-time game-state integration across physically isolated JVMs.
 
 In progress:
 
@@ -111,6 +112,10 @@ Rust injects a Java Agent via JNI `InitArgsBuilder`. The `ClassFileTransformer` 
 ### 6.Cross-Sandbox Runtime State Sync (Proof of Concept)
 The Fabric sandbox extracts the real-time player coordinates.
 ![The Fabric sandbox extracts the real-time player coordinates](image5.png)
+
+### 7.Cross-Sandbox Real-time State Sync (Data Layer Integration)
+Broadcasted via the Rust TCP data bus, the NeoForge sandbox successfully received and parsed the data, proving real-time game-state integration across physically isolated JVMs.
+![NeoForge sandbox successfully received and parsed the data](image6.png)
 
 ## Quick start
 

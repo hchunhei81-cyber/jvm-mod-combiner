@@ -59,6 +59,7 @@ Rust 微内核
 - [x] **运行时字节码拦截（Instrumentation）**：Rust 通过 JNI `InitArgsBuilder` 动态注入 Java Agent。`ClassFileTransformer` 成功拦截了由 Fabric `KnotClassLoader` 加载的类（如 `net.minecraft.client.main.Main`），证明了系统具备无需依赖 Mixin 即可进行自动化打补丁的底层能力。
 - [x] **跨沙盒运行时状态同步（Proof of Concept）**：Fabric 沙盒通过反射绕过混淆提取玩家实时坐标，通过 Rust TCP 总线广播。NeoForge 沙盒成功接收并打印同步状态。这证明了跨物理隔离 JVM 进行实时数据层交汇的可行性。
     Fabric 沙盒通过纯反射绕过混淆提取玩家实时坐标，通过 Rust TCP 总线广播。NeoForge 沙盒成功锁定 `Minecraft` 实例并解析同步数据，日志实时打印来自 Fabric 的坐标（如 `3.0, 4.5, 8.5`）。这证明了跨物理隔离 JVM 进行实时数据层交汇的可行性。
+- [x] **跨沙盒实时状态同步 (Data Layer Integration)**：Fabric 沙盒内通过底层反射绕过 1.21.4 运行时混淆（解析 `dA/dC/dG` 方法），提取真实 `LocalPlayer` 坐标。通过 Rust TCP 数据总线实时广播，NeoForge 沙盒成功接收并解析，实现了跨物理隔离 JVM 的实时游戏状态交汇。
 
 进行中：
 
@@ -100,7 +101,9 @@ Rust 微内核成功接收来自两个沙盒的注册请求。日志显示 Fabri
 Fabric 沙盒通过反射绕过混淆提取玩家实时坐标
 ![Fabric 沙盒通过反射绕过混淆提取玩家实时坐标](image5.png)
 
-
+### 7.跨沙盒实时状态同步
+NeoForge 沙盒成功接收并解析，实现了跨物理隔离 JVM 的实时游戏状态交汇
+![NeoForge 沙盒成功接收并解析，实现了跨物理隔离 JVM 的实时游戏状态交汇](image6.png)
 ## 快速开始
 
 ### 依赖

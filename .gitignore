@@ -18,9 +18,12 @@ bus_test/bus-agent.jar
 # --- 备份文件 ---
 *.bak.*
 *.bak
+*.bakup
+*.bakup.*
 
 # --- 沙盒目录 (Sandbox 整体隔离) ---
 sandbox/
+saves/
 
 # --- 明确排除的特定沙盒大文件与生成产物 ---
 sandbox/minecraft-client.jar
@@ -38,3 +41,4 @@ natives-lwjgl-331-x64/
 backups/
 forge_1165_launch.sh
 neoforge_launch.sh
+

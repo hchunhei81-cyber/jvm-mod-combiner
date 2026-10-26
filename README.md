@@ -67,6 +67,7 @@ Verified on macOS + Temurin 21 (arm64):
 - [x] **Cross-sandbox message routing (IPC Router)**: A named registration and JSON routing layer in the Rust bus; Fabric ↔ NeoForge `hello`/`ack` round-trip verified with `routed` receipts.
 - [x] **Runtime Bytecode Instrumentation**: Rust injects a Java Agent via JNI `InitArgsBuilder`. The `ClassFileTransformer` successfully intercepts classes loaded by Fabric's `KnotClassLoader` (e.g., `net.minecraft.client.main.Main`), proving the capability for future automated patching without Mixin dependencies.
 - [x] **Cross-Sandbox Runtime State Sync (Proof of Concept)**: The Fabric sandbox extracts the real-time player coordinates (bypassing obfuscation via reflection) and broadcasts them via the Rust TCP bus. The NeoForge sandbox receives and prints the synchronized state. This proves the viability of real-time data-layer convergence across isolated JVMs.
+The Fabric sandbox bypassed obfuscation to extract the player's real-time coordinates using pure reflection and broadcast them via the Rust TCP bus. The NeoForge sandbox successfully locked the `Minecraft` instance and parsed the synchronization data, with logs printing the coordinates from Fabric in real time (e.g., `3.0, 4.5, 8.5`). This demonstrates the feasibility of real-time data layer convergence across physically isolated JVMs.
 
 In progress:
 
@@ -74,7 +75,6 @@ In progress:
       blocked by ancient installer zlib hash deadlocks)
 - [ ] Resolve the `parent = null` problem for real loaders (they need
       `java.lang.*` and friends)
-- [ ] Handle Mixin conflicts between the two sandboxes
 - [ ] Zero-copy data bus
 - [ ] Dynamic dependency resolution (parse the version manifest instead of
       copying the whole `libraries/` tree)

@@ -58,12 +58,12 @@ Rust 微内核
 - [x] **跨沙盒消息路由**：Rust 总线按沙盒名路由 JSON 消息，Fabric 与 NeoForge 完成 `hello → ack` 双向闭环，并返回 `routed` 回执。
 - [x] **运行时字节码拦截（Instrumentation）**：Rust 通过 JNI `InitArgsBuilder` 动态注入 Java Agent。`ClassFileTransformer` 成功拦截了由 Fabric `KnotClassLoader` 加载的类（如 `net.minecraft.client.main.Main`），证明了系统具备无需依赖 Mixin 即可进行自动化打补丁的底层能力。
 - [x] **跨沙盒运行时状态同步（Proof of Concept）**：Fabric 沙盒通过反射绕过混淆提取玩家实时坐标，通过 Rust TCP 总线广播。NeoForge 沙盒成功接收并打印同步状态。这证明了跨物理隔离 JVM 进行实时数据层交汇的可行性。
+    Fabric 沙盒通过纯反射绕过混淆提取玩家实时坐标，通过 Rust TCP 总线广播。NeoForge 沙盒成功锁定 `Minecraft` 实例并解析同步数据，日志实时打印来自 Fabric 的坐标（如 `3.0, 4.5, 8.5`）。这证明了跨物理隔离 JVM 进行实时数据层交汇的可行性。
 
 进行中：
 
 - [ ] 把真实的 Forge 1.21.4 加载器装进沙盒 B（注：Forge 1.16.5 因远古 Installer 的 zlib 哈希死锁，目前暂时卡死）
 - [ ] 解决真实加载器的 `parent = null` 问题（它们需要 `java.lang.*` 等）
-- [ ] 处理两个沙盒之间的 Mixin 冲突
 - [ ] 零拷贝数据总线
 - [ ] 动态依赖解析（解析 version manifest，而不是全量复制 `libraries`）
 - [ ] 跨平台支持（Windows / Linux / macOS）

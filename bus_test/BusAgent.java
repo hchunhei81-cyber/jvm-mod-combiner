@@ -7,22 +7,47 @@ public class BusAgent {
     static PrintWriter out;
     static String myName;
     static Instrumentation inst;
-    
-    static Object mcInstance = null;
-    static Field playerField = null;
-    static Method getX, getY, getZ;
+
+    static Object fabricMcInstance = null;
+    static Field fabricPlayerField = null;
+    static Method fGetX, fGetY, fGetZ;
+
+    static volatile Object nfMcInstance = null;
+    static volatile Class<?> nfMcClass = null;
 
     public static void premain(String agentArgs, Instrumentation instrumentation) {
         inst = instrumentation;
         myName = agentArgs != null ? agentArgs.toLowerCase().replace("-sandbox", "") : "unknown";
         System.out.println("[BusAgent:" + myName + "] premain");
 
+        if (myName.equals("neoforge")) {
+            inst.addTransformer(new ClassFileTransformer() {
+                @Override
+                public byte[] transform(ClassLoader loader, String className, Class<?> classBeingRedefined, java.security.ProtectionDomain protectionDomain, byte[] classfileBuffer) {
+                    if (className != null && className.equals("net/minecraft/client/Minecraft")) {
+                        final ClassLoader targetLoader = loader;
+                        new Thread(() -> {
+                            try {
+                                Thread.sleep(3000);
+                                nfMcClass = Class.forName("net.minecraft.client.Minecraft", false, targetLoader);
+                                nfMcInstance = nfMcClass.getMethod("getInstance").invoke(null);
+                                System.out.println("[BusAgent:neoforge] ✅ 成功锁定 Minecraft 实例！");
+                            } catch (Throwable e) {
+                                System.out.println("[BusAgent:neoforge] ❌ 获取实例失败: " + e);
+                            }
+                        }).start();
+                    }
+                    return null;
+                }
+            });
+        }
+
         Thread t = new Thread(BusAgent::runBus);
         t.setDaemon(true);
         t.start();
 
         if (myName.equals("fabric")) {
-            Thread monitor = new Thread(BusAgent::monitorPlayerActions);
+            Thread monitor = new Thread(BusAgent::monitorFabricPlayer);
             monitor.setDaemon(true);
             monitor.start();
         }
@@ -38,77 +63,137 @@ public class BusAgent {
             String line;
             while ((line = in.readLine()) != null) {
                 if (line.contains("\"type\":\"player_move\"") && line.contains("\"source\":\"" + peer + "\"")) {
-                    System.out.println("[BusAgent:" + myName + "] 收到对方坐标: " + line);
+                    if (myName.equals("neoforge")) {
+                        handleNeoForgeSync(line);
+                    }
                 }
             }
         } catch (Exception e) {}
     }
 
-    static void monitorPlayerActions() {
-        System.out.println("[BusAgent:fabric] 启动坐标监控线程...");
+    static void monitorFabricPlayer() {
         while (true) {
             try {
-                if (mcInstance == null) {
-                    try {
-                        Class<?> loaderClass = Class.forName("net.fabricmc.loader.api.FabricLoader");
-                        Object loader = loaderClass.getMethod("getInstance").invoke(null);
-                        mcInstance = loaderClass.getMethod("getGameInstance").invoke(loader);
-                        if (mcInstance != null) {
-                            System.out.println("[BusAgent:fabric] ✅ 锁定游戏主类: " + mcInstance.getClass().getName());
-                        }
-                    } catch (Throwable ignored) {}
+                if (fabricMcInstance == null) {
+                    Class<?> loaderClass = Class.forName("net.fabricmc.loader.api.FabricLoader");
+                    Object loader = loaderClass.getMethod("getInstance").invoke(null);
+                    fabricMcInstance = loaderClass.getMethod("getGameInstance").invoke(loader);
                 }
 
-                if (mcInstance != null && playerField == null) {
-                    // 遍历主类的所有字段
-                    for (Field f : mcInstance.getClass().getDeclaredFields()) {
+                if (fabricMcInstance != null && fabricPlayerField == null) {
+                    for (Field f : fabricMcInstance.getClass().getDeclaredFields()) {
                         f.setAccessible(true);
-                        try {
-                            Object val = f.get(mcInstance);
-                            if (val == null) continue;
-
-                            // 检查这个对象是不是玩家（特征是：有至少3个返回 double 的无参方法）
-                            int doubleCount = 0;
-                            Method[] methods = val.getClass().getMethods();
-                            for (Method m : methods) {
-                                if (m.getReturnType() == double.class && m.getParameterCount() == 0) {
-                                    if (getX == null) getX = m;
-                                    else if (getY == null) getY = m;
-                                    else if (getZ == null) getZ = m;
-                                    doubleCount++;
-                                    if (doubleCount == 3) break; // 找到了三个坐标方法
-                                }
-                            }
-
-                            if (doubleCount >= 3) {
-                                playerField = f;
-                                System.out.println("[BusAgent:fabric] ✅ 锁定实体/玩家字段: " + f.getName() + " 类型: " + val.getClass().getName());
-                                break;
-                            } else {
-                                // 重置，因为可能只是普通的 double 方法
-                                getX = null; getY = null; getZ = null;
-                            }
-                        } catch (Throwable ignored) {}
+                        Object val = f.get(fabricMcInstance);
+                        if (val != null && countDoubleMethods(val.getClass()) >= 3) {
+                            fabricPlayerField = f;
+                            break;
+                        }
                     }
                 }
 
-                if (playerField != null && getX != null && getY != null && getZ != null) {
-                    Object player = playerField.get(mcInstance);
+                if (fabricPlayerField != null) {
+                    Object player = fabricPlayerField.get(fabricMcInstance);
                     if (player != null) {
-                        double x = (double) getX.invoke(player);
-                        double y = (double) getY.invoke(player);
-                        double z = (double) getZ.invoke(player);
-                        
+                        if (fGetX == null) bindXYZ(player.getClass());
+                        double x = (double) fGetX.invoke(player);
+                        double y = (double) fGetY.invoke(player);
+                        double z = (double) fGetZ.invoke(player);
                         String msg = String.format("{\"broadcast\":true,\"type\":\"player_move\",\"source\":\"fabric\",\"payload\":{\"x\":%.1f,\"y\":%.1f,\"z\":%.1f}}", x, y, z);
                         if (out != null) out.println(msg);
                     }
                 }
-            } catch (Throwable e) {
-                mcInstance = null;
-                playerField = null;
-                getX = null; getY = null; getZ = null;
-            }
+            } catch (Throwable ignored) {}
             try { Thread.sleep(1000); } catch (InterruptedException e) { break; }
+        }
+    }
+
+    static void handleNeoForgeSync(String json) {
+        try {
+            if (nfMcInstance == null) {
+                if (nfMcClass != null) nfMcInstance = nfMcClass.getMethod("getInstance").invoke(null);
+                else return;
+            }
+
+            double x = 0, y = 0, z = 0;
+            int xIdx = json.indexOf("\"x\":");
+            int yIdx = json.indexOf("\"y\":");
+            int zIdx = json.indexOf("\"z\":");
+            if (xIdx != -1 && yIdx != -1 && zIdx != -1) {
+                x = Double.parseDouble(json.substring(xIdx + 4, json.indexOf(",", xIdx)));
+                y = Double.parseDouble(json.substring(yIdx + 4, json.indexOf(",", yIdx)));
+                z = Double.parseDouble(json.substring(zIdx + 4, json.indexOf("}", zIdx)));
+            }
+
+            // 尝试在 NeoForge 的 GUI 里直接刷一条聊天消息
+            String msg = String.format("[Fusion] Fabric 玩家坐标: %.1f, %.1f, %.1f", x, y, z);
+            if (addChatMessage(nfMcInstance, msg)) {
+                System.out.println("[BusAgent:neoforge] 🎯 收到 Fabric 坐标，并在游戏界面打印: " + msg);
+            } else {
+                System.out.println("[BusAgent:neoforge] ⚠️ 收到坐标，但无法在界面打印: " + msg);
+            }
+
+        } catch (Throwable e) {
+            System.out.println("[BusAgent:neoforge] 同步失败: " + e);
+        }
+    }
+
+    // 在 Minecraft 的聊天界面里输出消息
+    static boolean addChatMessage(Object mcInstance, String msg) {
+        if (mcInstance == null) return false;
+        
+        Object inGameHud = null;
+        for (Field f : mcInstance.getClass().getDeclaredFields()) {
+            f.setAccessible(true);
+            try {
+                Object val = f.get(mcInstance);
+                if (val != null && val.getClass().getName().contains("InGameHud")) {
+                    inGameHud = val;
+                    break;
+                }
+            } catch (Throwable ignored) {}
+        }
+        if (inGameHud == null) return false;
+
+        Object chatHud = null;
+        for (Field f : inGameHud.getClass().getDeclaredFields()) {
+            f.setAccessible(true);
+            try {
+                Object val = f.get(inGameHud);
+                if (val != null && val.getClass().getName().contains("ChatHud")) {
+                    chatHud = val;
+                    break;
+                }
+            } catch (Throwable ignored) {}
+        }
+        if (chatHud == null) return false;
+
+        try {
+            Method addMessage = chatHud.getClass().getMethod("addMessage", String.class);
+            addMessage.invoke(chatHud, msg);
+            return true;
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    static int countDoubleMethods(Class<?> clazz) {
+        int count = 0;
+        for (Method m : clazz.getMethods()) {
+            if (m.getReturnType() == double.class && m.getParameterCount() == 0) {
+                count++;
+                if (count >= 3) return count;
+            }
+        }
+        return count;
+    }
+
+    static void bindXYZ(Class<?> clazz) {
+        for (Method m : clazz.getMethods()) {
+            if (m.getReturnType() == double.class && m.getParameterCount() == 0) {
+                if (fGetX == null) fGetX = m;
+                else if (fGetY == null) fGetY = m;
+                else if (fGetZ == null) fGetZ = m;
+            }
         }
     }
 }

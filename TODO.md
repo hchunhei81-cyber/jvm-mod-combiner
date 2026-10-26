@@ -1,4 +1,4 @@
-# JVM Mod Fusion: 开发路线图 (TODO.md)
+# JVM Mod Combiner: 开发路线图 (TODO.md)
 
 ## 🟢 已完成 (Done)
 - [x] **PCL Mac MVP 发布**：Avalonia UI 跨平台重构，打包 `.app` 并发布 v1.0.1 Release。

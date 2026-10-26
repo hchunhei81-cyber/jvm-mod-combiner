@@ -1,54 +1,71 @@
-import java.lang.instrument.Instrumentation;
 import java.io.*;
 import java.net.*;
+import java.lang.instrument.*;
+import java.security.ProtectionDomain;
 
 public class BusAgent {
-    public static void main(String[] args) throws Exception {
-        // 允许手动跑: java BusAgent fabric
-        run(args.length > 0 ? args[0] : "manual");
-        Thread.sleep(3000);
-    }
-
     public static void premain(String agentArgs, Instrumentation inst) {
-        String sandboxName = agentArgs != null ? agentArgs : "Unknown-Sandbox";
-        Thread t = new Thread(() -> run(sandboxName));
-        t.setDaemon(true);
-        t.start();
-    }
+        String name = agentArgs != null ? agentArgs : "unknown";
+        final String tag = name.toLowerCase().contains("neoforge") ? "neoforge"
+                         : name.toLowerCase().contains("fabric") ? "fabric"
+                         : name;
 
-    static void run(String sandboxName) {
-        // 名字归一化: Fabric-Sandbox -> fabric, NeoForge-Sandbox -> neoforge
-        String name = sandboxName.toLowerCase().contains("neoforge") ? "neoforge"
-                    : sandboxName.toLowerCase().contains("fabric") ? "fabric"
-                    : sandboxName.toLowerCase();
-        String peer = name.equals("fabric") ? "neoforge" : "fabric";
+        System.out.println("[BusAgent:" + tag + "] premain");
 
-        try (Socket socket = new Socket("127.0.0.1", 25565);
-             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-             PrintWriter out = new PrintWriter(socket.getOutputStream(), true)) {
-
-            // 1. 注册
-            out.println("{\"register\":\"" + name + "\"}");
-            System.out.println("[BusAgent:" + name + "] 已注册并连入总线");
-
-            // 2. 发一条给对面
-            out.println("{\"to\":\"" + peer + "\",\"type\":\"hello\",\"payload\":\"hi from " + name + "\"}");
-            System.out.println("[BusAgent:" + name + "] 已发送 hello -> " + peer);
-
-            // 3. 持续读
-            String line;
-            while ((line = in.readLine()) != null) {
-                System.out.println("[BusAgent:" + name + "] 收到: " + line);
-                if (line.contains("\"routed\":true")) {
-                    System.out.println("[BusAgent:" + name + "] 路由回执确认");
+        // 1. Instrumentation Transformer：精确拦截主类
+        inst.addTransformer(new ClassFileTransformer() {
+            @Override
+            public byte[] transform(ClassLoader loader, String className,
+                                    Class<?> classBeingRedefined,
+                                    ProtectionDomain protectionDomain,
+                                    byte[] classfileBuffer) {
+                if (className == null) return null;
+                if (className.startsWith("net/minecraft/client/") || className.contains("class_310")) {
+                    System.out.println("[BusAgent:" + tag + "] MC-CLIENT: " + className
+                        + " loader=" + (loader == null ? "bootstrap" : loader.getClass().getSimpleName()));
                 }
-                if (line.contains("\"type\":\"hello\"") && line.contains("\"from\":\"" + peer + "\"")) {
-                    System.out.println("[BusAgent:" + name + "] ✅ 收到 " + peer + " 的跨沙盒消息，回 ack");
-                    out.println("{\"to\":\"" + peer + "\",\"type\":\"ack\",\"payload\":\"ack from " + name + "\"}");
-                }
+                return null;
             }
-        } catch (Exception e) {
-            System.out.println("[BusAgent:" + name + "] 连接失败: " + e.getMessage());
-        }
+        });
+
+        // 2. 定时反射探测：确保在启动后期能抓到
+        Thread probe = new Thread(() -> {
+            String[] candidates = {
+                "net.minecraft.client.MinecraftClient",
+                "net.minecraft.client.Minecraft",
+                "net.minecraft.class_310"
+            };
+            for (int i = 0; i < 120; i++) {
+                for (String c : candidates) {
+                    try {
+                        Class<?> mc = Class.forName(c);
+                        System.out.println("[BusAgent:" + tag + "] OK 探测到 " + c
+                            + " loader=" + mc.getClassLoader().getClass().getSimpleName());
+                        return;
+                    } catch (ClassNotFoundException ignored) {}
+                }
+                try { Thread.sleep(1000); } catch (InterruptedException e) { return; }
+            }
+            System.out.println("[BusAgent:" + tag + "] FAIL 120秒内没探测到主类");
+        });
+        probe.setDaemon(true);
+        probe.start();
+
+        // 3. 总线
+        Thread bus = new Thread(() -> {
+            try (Socket s = new Socket("127.0.0.1", 25565);
+                 PrintWriter out = new PrintWriter(s.getOutputStream(), true);
+                 BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream()))) {
+                out.println("{\"register\":\"" + tag + "\"}");
+                String line;
+                while ((line = in.readLine()) != null) {
+                    System.out.println("[BusAgent:" + tag + "] 收到: " + line);
+                }
+            } catch (Exception e) {
+                System.out.println("[BusAgent:" + tag + "] 总线连接失败(可忽略): " + e.getMessage());
+            }
+        });
+        bus.setDaemon(true);
+        bus.start();
     }
 }

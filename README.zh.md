@@ -56,6 +56,7 @@ Rust 微内核
 - [x] **双沙盒并行启动成功**：在同一台机器上通过 Rust 子进程同时拉起 Fabric 1.21.4 与 NeoForge 1.21.1，互不干扰，均成功渲染主菜单。
 - [x] **零拷贝数据总线（IPC 原型）**：在 Rust 微内核中实现了基于 TCP 的消息总线，成功接收来自 Fabric 与 NeoForge 两个隔离沙盒的跨进程通讯。
 - [x] **跨沙盒消息路由**：Rust 总线按沙盒名路由 JSON 消息，Fabric 与 NeoForge 完成 `hello → ack` 双向闭环，并返回 `routed` 回执。
+- [x] **运行时字节码拦截（Instrumentation）**：Rust 通过 JNI `InitArgsBuilder` 动态注入 Java Agent。`ClassFileTransformer` 成功拦截了由 Fabric `KnotClassLoader` 加载的类（如 `net.minecraft.client.main.Main`），证明了系统具备无需依赖 Mixin 即可进行自动化打补丁的底层能力。
 
 进行中：
 
@@ -85,6 +86,14 @@ Fabric 1.21.4 与 NeoForge 1.21.1 在同一台机器上通过独立子进程同�
 ### 4. 零拷贝数据总线路由 (IPC)
 Rust 微内核成功接收来自两个沙盒的注册请求。日志显示 Fabric 与 NeoForge 之间完成了 `hello → ack` 的双向消息闭环路由，彻底摆脱了对共享 ClassLoader 的依赖。
 ![跨沙盒 IPC 路由](image4.png)
+
+### 5. 运行时字节码拦截（Instrumentation）
+通过 JNI 动态注入 Java Agent，利用 Instrumentation 成功拦截特定 ClassLoader 加载的字节码。这不需要依赖 Minecraft 的 Mixin，也不需要编译期依赖混淆的 Jar。
+```text
+[BusAgent:fabric] premain
+[BusAgent:fabric] MC-CLIENT: net/minecraft/client/main/Main loader=KnotClassLoader
+[BusAgent:fabric] MC-CLIENT: net/minecraft/client/ClientBrandRetriever loader=KnotClassLoader
+```
 
 ## 快速开始
 
@@ -155,3 +164,6 @@ ModLauncher 10 要求 JAR manifest 元数据完整；任何重写 manifest 的�
 ## 许可证
 
 BSD 3-Clause，详见 [LICENCE](LICENCE)。
+> **给使用者的一个小请求**：
+> 如果你正在使用、测试或借鉴本项目，**强烈建议**你在 GitHub 的 [Discussions](https://github.com/hchunhei81-cyber/jvm-mod-fusion/discussions) 中的 **“Showcase / 运行反馈”** 分类下发一条帖子，并附上你的运行截图、操作系统和模组环境。
+> 这不仅能给项目带来极大的鼓励，也能帮助我收集不同环境下的报错信息（尤其是 Windows 和 Linux 下的奇难杂症），以便更好、更快地进行修复与迭代。

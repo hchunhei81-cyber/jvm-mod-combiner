@@ -623,6 +623,14 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     };
 
     let mut cmd = std::process::Command::new(&java);
+    
+    // 给 NeoForge 子进程注入 Agent
+    let agent_path = std::env::current_dir().unwrap().join("bus_test/bus-agent.jar");
+    let agent_arg = format!("-javaagent:{}={}", agent_path.display(), "NeoForge-Sandbox");
+    if agent_path.exists() {
+        cmd.env("JAVA_TOOL_OPTIONS", agent_arg.clone());
+        eprintln!("[neoforge] 强制注入 Agent: {}", agent_arg);
+    }
     // Critical: Bootstrap 2.1.8 scans `java.class.path` to build its runtime
     // module layer. Pass the full legacy JAR list as the actual JVM classpath;
     // setting only -DlegacyClassPath does not make those JARs visible to that scan.
@@ -785,6 +793,9 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
     // 只对每行的第一个 token 识别，其余保留原样。
     let content = fs::read_to_string(&unix_args).expect("read unix_args.txt");
     let mut jvm_args: Vec<String> = Vec::new();
+
+
+    
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() { continue; }
@@ -1085,7 +1096,7 @@ fn main() {
         let _sandbox_nf = sandbox_dir.clone();
         let _nf_thread = thread::spawn(move || {
             let mut cmd = std::process::Command::new("cargo");
-            cmd.env("JAVA_TOOL_OPTIONS", "-javaagent:/Users/otis/jvm-mod-combiner/bus_test/bus-agent.jar=NeoForge-Sandbox");
+            
             cmd.args(&["run", "--", "--mode", "neoforge"]);
             cmd.status().unwrap();
         });
@@ -1114,7 +1125,7 @@ fn main() {
         return;
     }
     let (bootstrap_cp, legacy_cp) = build_classpath(is_forge, &sandbox_dir);
-
+    
     let join = |v: &Vec<PathBuf>| -> String {
         v.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>().join(":")
     };
@@ -1147,6 +1158,12 @@ fn main() {
         ] {
             jvm_args.push(o.to_string());
         }
+    }
+
+    let agent_jar = std::env::current_dir().unwrap().join("bus_test/bus-agent.jar");
+    if agent_jar.exists() {
+        jvm_args.push(format!("-javaagent:{}={}", agent_jar.display(), "Fabric-Sandbox"));
+        println!("[Rust] 强行注入 -javaagent: {}", agent_jar.display());
     }
 
     let mut builder = InitArgsBuilder::new().version(JNIVersion::V1_8);

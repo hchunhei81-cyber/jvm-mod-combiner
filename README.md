@@ -65,6 +65,7 @@ Verified on macOS + Temurin 21 (arm64):
 - [x] **Dual-sandbox concurrent launch successful**: Successfully launched Fabric 1.21.4 and NeoForge 1.21.1 simultaneously via Rust subprocesses on the same machine. They run completely isolated from each other and both successfully rendered the main menu.
 - [x] **Zero-copy Data Bus (IPC Prototype)**: Implemented a TCP-based message bus in the Rust microkernel, successfully receiving inter-process messages from both Fabric and NeoForge sandboxes.
 - [x] **Cross-sandbox message routing (IPC Router)**: A named registration and JSON routing layer in the Rust bus; Fabric ↔ NeoForge `hello`/`ack` round-trip verified with `routed` receipts.
+- [x] **Runtime Bytecode Instrumentation**: Rust injects a Java Agent via JNI `InitArgsBuilder`. The `ClassFileTransformer` successfully intercepts classes loaded by Fabric's `KnotClassLoader` (e.g., `net.minecraft.client.main.Main`), proving the capability for future automated patching without Mixin dependencies.
 
 In progress:
 
@@ -97,6 +98,14 @@ Both Fabric 1.21.4 and NeoForge 1.21.1 running side-by-side in isolated subproce
 ### 4. Zero-Copy Data Bus Routing (IPC)
 The Rust microkernel receives registration requests from both sandboxes. The logs show a bidirectional `hello → ack` message loop successfully routed between Fabric and NeoForge, bypassing the need for a shared ClassLoader.
 ![Cross-Sandbox IPC Routing](image4.png)
+
+### 5.Runtime Bytecode Instrumentation
+Rust injects a Java Agent via JNI `InitArgsBuilder`. The `ClassFileTransformer` successfully intercepts classes loaded by Fabric's `KnotClassLoader` (e.g., `net.minecraft.client.main.Main`), proving the capability for future automated patching without Mixin dependencies.
+```text
+[BusAgent:fabric] premain
+[BusAgent:fabric] MC-CLIENT: net/minecraft/client/main/Main loader=KnotClassLoader
+[BusAgent:fabric] MC-CLIENT: net/minecraft/client/ClientBrandRetriever loader=KnotClassLoader
+```
 
 ## Quick start
 
@@ -171,3 +180,6 @@ it reaches a usable prototype stage.
 ## License
 
 BSD 3-Clause. See [LICENCE](LICENCE).
+>  **A small request for users**:
+> If you are using, testing, or learning from this project, **we highly encourage** you to drop a post in the **[Discussions](https://github.com/hchunhei81-cyber/jvm-mod-fusion/discussions)** tab under the **"Showcase / Test Results"** category, and attach your runtime screenshots, OS info, and mod environment.
+> This gives the project a huge boost of motivation, and helps me collect bug reports from various environments (especially weird issues on Windows and Linux) so I can fix and iterate faster.

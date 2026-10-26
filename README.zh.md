@@ -57,6 +57,7 @@ Rust 微内核
 - [x] **零拷贝数据总线（IPC 原型）**：在 Rust 微内核中实现了基于 TCP 的消息总线，成功接收来自 Fabric 与 NeoForge 两个隔离沙盒的跨进程通讯。
 - [x] **跨沙盒消息路由**：Rust 总线按沙盒名路由 JSON 消息，Fabric 与 NeoForge 完成 `hello → ack` 双向闭环，并返回 `routed` 回执。
 - [x] **运行时字节码拦截（Instrumentation）**：Rust 通过 JNI `InitArgsBuilder` 动态注入 Java Agent。`ClassFileTransformer` 成功拦截了由 Fabric `KnotClassLoader` 加载的类（如 `net.minecraft.client.main.Main`），证明了系统具备无需依赖 Mixin 即可进行自动化打补丁的底层能力。
+- [x] **跨沙盒运行时状态同步（Proof of Concept）**：Fabric 沙盒通过反射绕过混淆提取玩家实时坐标，通过 Rust TCP 总线广播。NeoForge 沙盒成功接收并打印同步状态。这证明了跨物理隔离 JVM 进行实时数据层交汇的可行性。
 
 进行中：
 
@@ -94,6 +95,11 @@ Rust 微内核成功接收来自两个沙盒的注册请求。日志显示 Fabri
 [BusAgent:fabric] MC-CLIENT: net/minecraft/client/main/Main loader=KnotClassLoader
 [BusAgent:fabric] MC-CLIENT: net/minecraft/client/ClientBrandRetriever loader=KnotClassLoader
 ```
+
+### 6.跨沙盒运行时状态同步
+Fabric 沙盒通过反射绕过混淆提取玩家实时坐标
+![Fabric 沙盒通过反射绕过混淆提取玩家实时坐标](image5.png)
+
 
 ## 快速开始
 

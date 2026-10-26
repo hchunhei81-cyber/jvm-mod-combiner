@@ -66,6 +66,7 @@ Verified on macOS + Temurin 21 (arm64):
 - [x] **Zero-copy Data Bus (IPC Prototype)**: Implemented a TCP-based message bus in the Rust microkernel, successfully receiving inter-process messages from both Fabric and NeoForge sandboxes.
 - [x] **Cross-sandbox message routing (IPC Router)**: A named registration and JSON routing layer in the Rust bus; Fabric ↔ NeoForge `hello`/`ack` round-trip verified with `routed` receipts.
 - [x] **Runtime Bytecode Instrumentation**: Rust injects a Java Agent via JNI `InitArgsBuilder`. The `ClassFileTransformer` successfully intercepts classes loaded by Fabric's `KnotClassLoader` (e.g., `net.minecraft.client.main.Main`), proving the capability for future automated patching without Mixin dependencies.
+- [x] **Cross-Sandbox Runtime State Sync (Proof of Concept)**: The Fabric sandbox extracts the real-time player coordinates (bypassing obfuscation via reflection) and broadcasts them via the Rust TCP bus. The NeoForge sandbox receives and prints the synchronized state. This proves the viability of real-time data-layer convergence across isolated JVMs.
 
 In progress:
 
@@ -106,6 +107,10 @@ Rust injects a Java Agent via JNI `InitArgsBuilder`. The `ClassFileTransformer` 
 [BusAgent:fabric] MC-CLIENT: net/minecraft/client/main/Main loader=KnotClassLoader
 [BusAgent:fabric] MC-CLIENT: net/minecraft/client/ClientBrandRetriever loader=KnotClassLoader
 ```
+
+### 6.Cross-Sandbox Runtime State Sync (Proof of Concept)
+The Fabric sandbox extracts the real-time player coordinates.
+![The Fabric sandbox extracts the real-time player coordinates](image5.png)
 
 ## Quick start
 

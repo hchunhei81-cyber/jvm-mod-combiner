@@ -1,71 +1,114 @@
 import java.io.*;
 import java.net.*;
 import java.lang.instrument.*;
-import java.security.ProtectionDomain;
+import java.lang.reflect.*;
 
 public class BusAgent {
-    public static void premain(String agentArgs, Instrumentation inst) {
-        String name = agentArgs != null ? agentArgs : "unknown";
-        final String tag = name.toLowerCase().contains("neoforge") ? "neoforge"
-                         : name.toLowerCase().contains("fabric") ? "fabric"
-                         : name;
+    static PrintWriter out;
+    static String myName;
+    static Instrumentation inst;
+    
+    static Object mcInstance = null;
+    static Field playerField = null;
+    static Method getX, getY, getZ;
 
-        System.out.println("[BusAgent:" + tag + "] premain");
+    public static void premain(String agentArgs, Instrumentation instrumentation) {
+        inst = instrumentation;
+        myName = agentArgs != null ? agentArgs.toLowerCase().replace("-sandbox", "") : "unknown";
+        System.out.println("[BusAgent:" + myName + "] premain");
 
-        // 1. Instrumentation Transformer：精确拦截主类
-        inst.addTransformer(new ClassFileTransformer() {
-            @Override
-            public byte[] transform(ClassLoader loader, String className,
-                                    Class<?> classBeingRedefined,
-                                    ProtectionDomain protectionDomain,
-                                    byte[] classfileBuffer) {
-                if (className == null) return null;
-                if (className.startsWith("net/minecraft/client/") || className.contains("class_310")) {
-                    System.out.println("[BusAgent:" + tag + "] MC-CLIENT: " + className
-                        + " loader=" + (loader == null ? "bootstrap" : loader.getClass().getSimpleName()));
+        Thread t = new Thread(BusAgent::runBus);
+        t.setDaemon(true);
+        t.start();
+
+        if (myName.equals("fabric")) {
+            Thread monitor = new Thread(BusAgent::monitorPlayerActions);
+            monitor.setDaemon(true);
+            monitor.start();
+        }
+    }
+
+    static void runBus() {
+        String peer = myName.equals("fabric") ? "neoforge" : "fabric";
+        try (Socket socket = new Socket("127.0.0.1", 25565);
+             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
+            out = new PrintWriter(socket.getOutputStream(), true);
+            out.println("{\"register\":\"" + myName + "\"}");
+
+            String line;
+            while ((line = in.readLine()) != null) {
+                if (line.contains("\"type\":\"player_move\"") && line.contains("\"source\":\"" + peer + "\"")) {
+                    System.out.println("[BusAgent:" + myName + "] 收到对方坐标: " + line);
                 }
-                return null;
             }
-        });
+        } catch (Exception e) {}
+    }
 
-        // 2. 定时反射探测：确保在启动后期能抓到
-        Thread probe = new Thread(() -> {
-            String[] candidates = {
-                "net.minecraft.client.MinecraftClient",
-                "net.minecraft.client.Minecraft",
-                "net.minecraft.class_310"
-            };
-            for (int i = 0; i < 120; i++) {
-                for (String c : candidates) {
+    static void monitorPlayerActions() {
+        System.out.println("[BusAgent:fabric] 启动坐标监控线程...");
+        while (true) {
+            try {
+                if (mcInstance == null) {
                     try {
-                        Class<?> mc = Class.forName(c);
-                        System.out.println("[BusAgent:" + tag + "] OK 探测到 " + c
-                            + " loader=" + mc.getClassLoader().getClass().getSimpleName());
-                        return;
-                    } catch (ClassNotFoundException ignored) {}
+                        Class<?> loaderClass = Class.forName("net.fabricmc.loader.api.FabricLoader");
+                        Object loader = loaderClass.getMethod("getInstance").invoke(null);
+                        mcInstance = loaderClass.getMethod("getGameInstance").invoke(loader);
+                        if (mcInstance != null) {
+                            System.out.println("[BusAgent:fabric] ✅ 锁定游戏主类: " + mcInstance.getClass().getName());
+                        }
+                    } catch (Throwable ignored) {}
                 }
-                try { Thread.sleep(1000); } catch (InterruptedException e) { return; }
-            }
-            System.out.println("[BusAgent:" + tag + "] FAIL 120秒内没探测到主类");
-        });
-        probe.setDaemon(true);
-        probe.start();
 
-        // 3. 总线
-        Thread bus = new Thread(() -> {
-            try (Socket s = new Socket("127.0.0.1", 25565);
-                 PrintWriter out = new PrintWriter(s.getOutputStream(), true);
-                 BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream()))) {
-                out.println("{\"register\":\"" + tag + "\"}");
-                String line;
-                while ((line = in.readLine()) != null) {
-                    System.out.println("[BusAgent:" + tag + "] 收到: " + line);
+                if (mcInstance != null && playerField == null) {
+                    // 遍历主类的所有字段
+                    for (Field f : mcInstance.getClass().getDeclaredFields()) {
+                        f.setAccessible(true);
+                        try {
+                            Object val = f.get(mcInstance);
+                            if (val == null) continue;
+
+                            // 检查这个对象是不是玩家（特征是：有至少3个返回 double 的无参方法）
+                            int doubleCount = 0;
+                            Method[] methods = val.getClass().getMethods();
+                            for (Method m : methods) {
+                                if (m.getReturnType() == double.class && m.getParameterCount() == 0) {
+                                    if (getX == null) getX = m;
+                                    else if (getY == null) getY = m;
+                                    else if (getZ == null) getZ = m;
+                                    doubleCount++;
+                                    if (doubleCount == 3) break; // 找到了三个坐标方法
+                                }
+                            }
+
+                            if (doubleCount >= 3) {
+                                playerField = f;
+                                System.out.println("[BusAgent:fabric] ✅ 锁定实体/玩家字段: " + f.getName() + " 类型: " + val.getClass().getName());
+                                break;
+                            } else {
+                                // 重置，因为可能只是普通的 double 方法
+                                getX = null; getY = null; getZ = null;
+                            }
+                        } catch (Throwable ignored) {}
+                    }
                 }
-            } catch (Exception e) {
-                System.out.println("[BusAgent:" + tag + "] 总线连接失败(可忽略): " + e.getMessage());
+
+                if (playerField != null && getX != null && getY != null && getZ != null) {
+                    Object player = playerField.get(mcInstance);
+                    if (player != null) {
+                        double x = (double) getX.invoke(player);
+                        double y = (double) getY.invoke(player);
+                        double z = (double) getZ.invoke(player);
+                        
+                        String msg = String.format("{\"broadcast\":true,\"type\":\"player_move\",\"source\":\"fabric\",\"payload\":{\"x\":%.1f,\"y\":%.1f,\"z\":%.1f}}", x, y, z);
+                        if (out != null) out.println(msg);
+                    }
+                }
+            } catch (Throwable e) {
+                mcInstance = null;
+                playerField = null;
+                getX = null; getY = null; getZ = null;
             }
-        });
-        bus.setDaemon(true);
-        bus.start();
+            try { Thread.sleep(1000); } catch (InterruptedException e) { break; }
+        }
     }
 }

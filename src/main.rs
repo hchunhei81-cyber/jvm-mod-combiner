@@ -624,13 +624,6 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
 
     let mut cmd = std::process::Command::new(&java);
     
-    // 给 NeoForge 子进程注入 Agent
-    let agent_path = std::env::current_dir().unwrap().join("bus_test/bus-agent.jar");
-    let agent_arg = format!("-javaagent:{}={}", agent_path.display(), "NeoForge-Sandbox");
-    if agent_path.exists() {
-        cmd.env("JAVA_TOOL_OPTIONS", agent_arg.clone());
-        eprintln!("[neoforge] 强制注入 Agent: {}", agent_arg);
-    }
     // Critical: Bootstrap 2.1.8 scans `java.class.path` to build its runtime
     // module layer. Pass the full legacy JAR list as the actual JVM classpath;
     // setting only -DlegacyClassPath does not make those JARs visible to that scan.
@@ -925,6 +918,16 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
         cmd.arg("-XstartOnFirstThread");
     }
     for a in &jvm_args { cmd.arg(a); }
+    // 强行注入 Agent 到 NeoForge 子进程
+    let agent_jar = std::env::current_dir().unwrap().join("bus_test/bus-agent.jar");
+    if agent_jar.exists() {
+        let arg = format!("-javaagent:{}={}", agent_jar.display(), "NeoForge-Sandbox");
+        cmd.env("JAVA_TOOL_OPTIONS", arg.clone());
+        eprintln!("[neoforge] 已强制注入 JAVA_TOOL_OPTIONS: {}", arg);
+    } else {
+        eprintln!("[neoforge] 警告: 找不到 bus-agent.jar");
+    }
+
     for a in &game_args { cmd.arg(a); }
 
     println!("[neoforge] Launching: {:?}", cmd);
@@ -1019,33 +1022,49 @@ fn start_data_bus() {
                         }
                     };
                     let to = v.get("to").and_then(|t| t.as_str()).unwrap_or("");
-                    if to.is_empty() {
+                    let is_broadcast = v.get("broadcast").and_then(|b| b.as_bool()).unwrap_or(false);
+                    let from = my_name.clone().unwrap_or_default();
+
+                    if to.is_empty() && !is_broadcast {
                         let _ = tx.send(r#"{"error":"missing_to"}"#.to_string());
                         continue;
                     }
-                    let from = my_name.clone().unwrap_or_default();
+
                     let mut forward = v.clone();
                     forward["from"] = serde_json::Value::String(from.clone());
 
-                    let target_tx = registry.lock().unwrap().get(to).cloned();
-                    match target_tx {
-                        Some(peer_tx) => {
-                            let payload = serde_json::to_string(&forward).unwrap_or_default();
-                            if peer_tx.send(payload).is_ok() {
-                                println!("[DataBus] {} -> {} routed", from, to);
-                                // 给发送方一个回执（可选）
-                                let ack = format!(
-                                    r#"{{"routed":true,"from":"{}","to":"{}"}}"#,
-                                    from, to
-                                );
-                                let _ = tx.send(ack);
-                            } else {
-                                let _ = tx.send(format!(r#"{{"error":"peer_write_failed","to":"{}"}}"#, to));
+                    if is_broadcast {
+                        // 广播模式：发给所有已注册的客户端
+                        let payload = serde_json::to_string(&forward).unwrap_or_default();
+                        let reg = registry.lock().unwrap();
+                        for (name, peer_tx) in reg.iter() {
+                            if name != &from {
+                                if peer_tx.send(payload.clone()).is_ok() {
+                                    println!("[DataBus] {} 广播 -> {}", from, name);
+                                }
                             }
                         }
-                        None => {
-                            println!("[DataBus] {} -> {} 目标不在线", from, to);
-                            let _ = tx.send(format!(r#"{{"error":"peer_offline","to":"{}"}}"#, to));
+                    } else {
+                        // 点对点路由模式
+                        let target_tx = registry.lock().unwrap().get(to).cloned();
+                        match target_tx {
+                            Some(peer_tx) => {
+                                let payload = serde_json::to_string(&forward).unwrap_or_default();
+                                if peer_tx.send(payload).is_ok() {
+                                    println!("[DataBus] {} -> {} routed", from, to);
+                                    let ack = format!(
+                                        r#"{{"routed":true,"from":"{}","to":"{}"}}"#,
+                                        from, to
+                                    );
+                                    let _ = tx.send(ack);
+                                } else {
+                                    let _ = tx.send(format!(r#"{{"error":"peer_write_failed","to":"{}"}}"#, to));
+                                }
+                            }
+                            None => {
+                                println!("[DataBus] {} -> {} 目标不在线", from, to);
+                                let _ = tx.send(format!(r#"{{"error":"peer_offline","to":"{}"}}"#, to));
+                            }
                         }
                     }
                 }

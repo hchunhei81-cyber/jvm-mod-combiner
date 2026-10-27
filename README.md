@@ -1,5 +1,5 @@
 # JVM Mod Combiner
-## Due to the incoming exam,this project will be on hold for a few weeks.
+> Due to the incoming exam,this project will be on hold for a few weeks.
 
 > A Rust-written microkernel that aims to let Fabric and Forge/NeoForge mods
 > **coexist inside one JVM**, without depending on Sinytra Connector.

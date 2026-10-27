@@ -1,7 +1,6 @@
 # JVM Mod Combiner: 开发路线图 (TODO.md)
 
 ## 🟢 已完成 (Done)
-- [x] **PCL Mac MVP 发布**：Avalonia UI 跨平台重构，打包 `.app` 并发布 v1.0.1 Release。
 - [x] **Fabric 1.21.4 跑通**：Rust 微内核成功拉起 Fabric Loader，主菜单渲染、音效及纹理加载正常。
 - [x] **NeoForge 1.21.1 跑通**：成功绕过官方 Bootstrap 限制，主菜单渲染，支持显示 Mod 数量。
 - [x] **JNI 基础与沙盒隔离**：验证 `URLClassLoader` 物理隔离，同名类互不冲突。

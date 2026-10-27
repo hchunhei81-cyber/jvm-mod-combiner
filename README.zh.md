@@ -1,4 +1,5 @@
 # JVM Mod Combiner
+> 由於考試臨近，這個項目將會暫停／擱置幾星期。
 
 > 一个用 Rust 写的微内核，试图让 Fabric 与 Forge/NeoForge 模组
 > **在同一个 JVM 里共存**，不依赖 Sinytra Connector。

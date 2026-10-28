@@ -86,3 +86,25 @@
 *   **现象**：报 `UnsupportedClassVersionError`（class file version 60.0 / 61.0 / 69.0）。
 *   **原因**：本地 `libraries` 目录里有多个版本的加载器（如 ModLauncher 10、11，NeoForge 的 FML 等），Rust 或脚本在扫描时误把 Java 16+ 编译的类加载进了 Java 8 的进程。
 *   **解决**：写了强力的 Python 脚本，读取 JAR 包内的 class 文件魔数，过滤掉 major version > 52 的所有文件。
+
+---
+
+## 五、跨版本玩家镜像与坐标同步问题（Fabric 1.21.4 / NeoForge 1.21.1）
+
+### 1. NeoForge 未能及时获取 Minecraft 实例
+
+- **现象**：DataBus 已收到 Fabric 发送的 `player_move` 消息，但处理坐标时，`nfMcInstance` 或 `nfMcClass` 仍为 `null`。
+- **原因**：Minecraft 实例初始化与坐标消息处理之间存在时序问题；原有代码只延迟 3 秒获取实例，且没有验证 `getInstance()` 的返回值是否为 `null`。
+- **解决措施**：增加实例状态诊断日志；将实例获取改为最多重试 180 次、每次间隔 1 秒，并仅在获取到非空实例后报告成功。
+
+### 2. Fabric 与 NeoForge 的镜像玩家位置及世界环境不一致
+
+- **现象**：Fabric 端正常显示玩家及森林环境，NeoForge 端也成功显示 `FabricMirror` 镜像玩家，但镜像玩家出现在地下封闭空间。
+- **原因分析**：两个客户端使用不同的 Minecraft 版本（1.21.4 与 1.21.1），可能存在世界状态、区块加载或维度差异；具体原因尚未确认。
+- **解决措施**：确认 DataBus 能持续转发 Fabric 的真实坐标，并在 NeoForge 中显示镜像实体。后续需要对比两端玩家的实际坐标、所在维度及区块加载状态，再修复位置与世界环境不一致的问题。
+
+### 3. Minecraft 窗口失去焦点后自动进入 ESC 菜单
+
+- **现象**：切换到浏览器或其他应用时，Fabric 与 NeoForge 客户端都会自动进入 ESC 暂停菜单，影响双客户端同时运行。
+- **排查与处理**：检查 Minecraft 的窗口失焦自动暂停行为，尝试通过 `F3 + P` 切换失焦自动暂停设置，并检查客户端各自的 `options.txt` 配置。
+- **后续验证**：确认两个客户端在切换应用后仍能保持运行，并检查 DataBus 坐标同步是否持续进行。

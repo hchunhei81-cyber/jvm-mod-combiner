@@ -61,6 +61,8 @@ Rust 微内核
 - [x] **跨沙盒运行时状态同步（Proof of Concept）**：Fabric 沙盒通过反射绕过混淆提取玩家实时坐标，通过 Rust TCP 总线广播。NeoForge 沙盒成功接收并打印同步状态。这证明了跨物理隔离 JVM 进行实时数据层交汇的可行性。
     Fabric 沙盒通过纯反射绕过混淆提取玩家实时坐标，通过 Rust TCP 总线广播。NeoForge 沙盒成功锁定 `Minecraft` 实例并解析同步数据，日志实时打印来自 Fabric 的坐标（如 `3.0, 4.5, 8.5`）。这证明了跨物理隔离 JVM 进行实时数据层交汇的可行性。
 - [x] **跨沙盒实时状态同步 (Data Layer Integration)**：Fabric 沙盒内通过底层反射绕过 1.21.4 运行时混淆（解析 `dA/dC/dG` 方法），提取真实 `LocalPlayer` 坐标。通过 Rust TCP 数据总线实时广播，NeoForge 沙盒成功接收并解析，实现了跨物理隔离 JVM 的实时游戏状态交汇。
+- [x] **跨沙盒实体级镜像同步（RemotePlayer Mirror）**：利用反射绕过 1.21.1/1.21.4 的运行时类隔离，在 NeoForge 的 `ClientLevel` 中动态注入一个镜像 `RemotePlayer`。Fabric 沙盒的玩家坐标与移动数据，经 Rust 总线毫秒级同步后，NeoForge 中的实体实时同步移动。
+
 
 进行中：
 
@@ -105,7 +107,13 @@ Fabric 沙盒通过反射绕过混淆提取玩家实时坐标
 ### 7.跨沙盒实时状态同步
 NeoForge 沙盒成功接收并解析，实现了跨物理隔离 JVM 的实时游戏状态交汇
 ![NeoForge 沙盒成功接收并解析，实现了跨物理隔离 JVM 的实时游戏状态交汇](image6.png)
+
+### 跨沙盒实体级镜像同步（RemotePlayer Mirror）
+利用反射绕过 1.21.1/1.21.4 的运行时类隔离，在 NeoForge 的 `ClientLevel` 中动态注入一个镜像 `RemotePlayer`。Fabric 沙盒的玩家坐标与移动数据，经 Rust 总线毫秒级同步后，NeoForge 中的实体实时同步移动。
+![跨沙盒实体级镜像同步](image7.png)
+
 ## 快速开始
+
 
 ### 依赖
 

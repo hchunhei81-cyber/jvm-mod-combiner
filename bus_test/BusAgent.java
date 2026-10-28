@@ -1,145 +1,169 @@
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
-import java.lang.instrument.Instrumentation;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.net.InetSocketAddress;
-import java.net.Socket;
-import java.nio.charset.StandardCharsets;
-import java.util.Locale;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.io.*;
+import java.net.*;
+import java.lang.instrument.*;
+import java.lang.reflect.*;
+import java.util.*;
 
-public final class BusAgent {
-    private static final String HOST = "127.0.0.1";
-    private static final int PORT = 25565;
+public class BusAgent {
+    static PrintWriter out;
+    static String myName;
+    static Instrumentation inst;
 
-    private static boolean hasMethodInHierarchy(
-            Class<?> type, String methodName) {
+    static Object fabricMcInstance = null;
+    static Field fabricPlayerField = null;
+    static Method getXMethod, getYMethod, getZMethod;
+    // FABRIC_DIAGNOSTICS_PATCH
+    static volatile boolean fabricErrorLogged = false;
+    static volatile boolean fabricFieldScanLogged = false;
 
-        Class<?> current = type;
 
-        while (current != null) {
-            try {
-                current.getDeclaredMethod(methodName);
-                return true;
-            } catch (NoSuchMethodException ignored) {
-                current = current.getSuperclass();
-            } catch (Throwable ignored) {
-                return false;
-            }
+    static volatile Object nfMcInstance = null;
+    static volatile Class<?> nfMcClass = null;
+    static volatile Object remotePlayer = null;
+    static volatile Object remotePlayerLevel = null;
+    static volatile boolean nfDiagInstanceLogged = false;
+    static volatile boolean nfDiagLevelLogged = false;
+    static volatile boolean nfDiagWorldReadyLogged = false;
+    static volatile boolean nfDiagScheduleLogged = false;
+
+    static final java.util.UUID remotePlayerUuid =
+        java.util.UUID.nameUUIDFromBytes(
+            "jvm-mod-combiner:fabric-mirror".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+        );
+
+    public static void premain(String agentArgs, Instrumentation instrumentation) {
+        inst = instrumentation;
+        myName = agentArgs != null ? agentArgs.toLowerCase().replace("-sandbox", "") : "unknown";
+        System.out.println("[BusAgent:" + myName + "] premain");
+
+        if (myName.equals("neoforge")) {
+            inst.addTransformer(new ClassFileTransformer() {
+                @Override
+                public byte[] transform(ClassLoader loader, String className, Class<?> classBeingRedefined, java.security.ProtectionDomain protectionDomain, byte[] classfileBuffer) {
+                    if (className != null && className.equals("net/minecraft/client/Minecraft")) {
+                        final ClassLoader targetLoader = loader;
+                        new Thread(() -> {
+                            try {
+                                for (int attempt = 1; attempt <= 180; attempt++) {
+                                    try {
+                                        nfMcClass = Class.forName(
+                                            "net.minecraft.client.Minecraft",
+                                            false,
+                                            targetLoader
+                                        );
+
+                                        Object candidate =
+                                            nfMcClass.getMethod("getInstance").invoke(null);
+
+                                        if (candidate != null) {
+                                            nfMcInstance = candidate;
+                                            System.out.println(
+                                                "[BusAgent:neoforge] 成功锁定非空 Minecraft 实例；"
+                                                + "attempt=" + attempt
+                                                + "，class=" + candidate.getClass().getName()
+                                                + "，classLoader=" + candidate.getClass().getClassLoader()
+                                            );
+                                            return;
+                                        }
+
+                                        if (attempt == 1 || attempt % 10 == 0) {
+                                            System.out.println(
+                                                "[BusAgent:neoforge] Minecraft 实例尚未就绪，继续重试；"
+                                                + "attempt=" + attempt
+                                            );
+                                        }
+                                    } catch (Throwable retryError) {
+                                        if (attempt == 1 || attempt % 10 == 0) {
+                                            System.err.println(
+                                                "[BusAgent:neoforge] 获取实例重试失败；attempt="
+                                                + attempt + "，错误=" + retryError
+                                            );
+                                        }
+                                    }
+
+                                    Thread.sleep(1000);
+                                }
+
+                                System.err.println(
+                                    "[BusAgent:neoforge] 等待 180 秒后仍未获取到非空 Minecraft 实例。"
+                                );
+                            } catch (Throwable e) {
+                                System.err.println(
+                                    "[BusAgent:neoforge] 获取 Minecraft 实例失败：");
+                                e.printStackTrace(System.err);
+                            }
+                        }).start();
+                    }
+                    return null;
+                }
+            });
         }
 
-        return false;
-    }
+        Thread t = new Thread(BusAgent::runBus);
+        t.setDaemon(true);
+        t.start();
 
-    private static volatile String myName = "unknown";
-    private static volatile PrintWriter out;
-
-    private static volatile Object minecraft;
-    private static volatile Field playerField;
-
-    private static final AtomicBoolean monitorStarted = new AtomicBoolean(false);
-
-    private static final Pattern X_PATTERN = Pattern.compile("\"x\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)");
-    private static final Pattern Y_PATTERN = Pattern.compile("\"y\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)");
-    private static final Pattern Z_PATTERN = Pattern.compile("\"z\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)");
-
-    private static Object findFabricMinecraftInstance() {
-        try {
-            Class<?> loaderClass = Class.forName(
-                    "net.fabricmc.loader.api.FabricLoader");
-
-            Object loader = loaderClass
-                    .getMethod("getInstance")
-                    .invoke(null);
-
-            Object instance = loaderClass
-                    .getMethod("getGameInstance")
-                    .invoke(loader);
-
-            return instance;
-        } catch (Throwable e) {
-            log("Fabric game instance lookup failed: "
-                    + e.getClass().getSimpleName()
-                    + ": " + e.getMessage());
-
-            return null;
+        if (myName.equals("fabric")) {
+            Thread monitor = new Thread(BusAgent::monitorFabricPlayer);
+            monitor.setDaemon(true);
+            monitor.start();
         }
     }
 
-    public static void premain(String args, Instrumentation instrumentation) {
-        myName = args == null
-                ? "unknown"
-                : args.toLowerCase(Locale.ROOT).replace("-sandbox", "").trim();
+    static void runBus() {
+        String peer = myName.equals("fabric") ? "neoforge" : "fabric";
+        int attempt = 0;
+        long received = 0;
 
-        log("premain; agent name = " + myName);
-
-        Thread busThread = new Thread(BusAgent::connectLoop, "BusAgent-TCP");
-        busThread.setDaemon(true);
-        busThread.start();
-
-        if ("fabric".equals(myName)) {
-            startMonitor(instrumentation);
-        } else if ("neoforge".equals(myName)) {
-            startMonitor(instrumentation);
-        } else {
-            log("WARNING: unexpected agent argument: " + myName);
-        }
-    }
-
-    private static void log(String message) {
-        System.out.println("[BusAgent:" + myName + "] " + message);
-    }
-
-    private static void startMonitor(Instrumentation instrumentation) {
-        if (!monitorStarted.compareAndSet(false, true)) {
-            log("Monitor already started in this JVM.");
-            return;
-        }
-
-        Thread thread = new Thread(
-                () -> monitorGame(instrumentation),
-                "BusAgent-GameMonitor");
-        thread.setDaemon(true);
-        thread.start();
-    }
-
-    private static void connectLoop() {
         while (!Thread.currentThread().isInterrupted()) {
+            attempt++;
             try (Socket socket = new Socket()) {
-                socket.connect(new InetSocketAddress(HOST, PORT), 3000);
+                socket.connect(new InetSocketAddress("127.0.0.1", 25565), 3000);
                 socket.setKeepAlive(true);
-                socket.setTcpNoDelay(true);
 
-                try (
-                        BufferedReader in = new BufferedReader(
-                                new InputStreamReader(
-                                        socket.getInputStream(),
-                                        StandardCharsets.UTF_8));
-                        PrintWriter writer = new PrintWriter(
-                                socket.getOutputStream(),
-                                true,
-                                StandardCharsets.UTF_8)) {
+                try (BufferedReader in = new BufferedReader(
+                        new InputStreamReader(socket.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
+                     PrintWriter writer = new PrintWriter(
+                        new OutputStreamWriter(socket.getOutputStream(), java.nio.charset.StandardCharsets.UTF_8), true)) {
+
                     out = writer;
                     writer.println("{\"register\":\"" + myName + "\"}");
-                    log("Connected to data bus at " + HOST + ":" + PORT);
+
+                    if (writer.checkError()) {
+                        throw new IOException("发送注册消息失败");
+                    }
+
+                    System.out.println("[BusAgent:" + myName
+                        + "] DataBus 已连接并发送注册消息，peer=" + peer
+                        + "，attempt=" + attempt);
 
                     String line;
                     while ((line = in.readLine()) != null) {
-                        handleMessage(line);
+                        if (line.contains("\"type\":\"player_move\"")
+                                && line.contains("\"source\":\"" + peer + "\"")) {
+                            received++;
+                            if (received == 1 || received % 20 == 0) {
+                                System.out.println("[BusAgent:" + myName
+                                    + "] 已收到对端 player_move，累计=" + received
+                                    + "，最近消息=" + line);
+                            }
+
+                            if (myName.equals("neoforge")) {
+                                handleNeoForgeSync(line);
+                            }
+                        }
                     }
 
-                    log("Data bus connection closed.");
+                    System.err.println("[BusAgent:" + myName
+                        + "] DataBus 连接关闭，将尝试重新连接。");
                 }
             } catch (Exception e) {
+                System.err.println("[BusAgent:" + myName
+                    + "] DataBus 连接/接收失败（attempt=" + attempt
+                    + "）：" + e);
+            } finally {
                 out = null;
-                log("Data bus connection failed: " + e.getMessage());
             }
-
-            out = null;
 
             try {
                 Thread.sleep(2000);
@@ -150,454 +174,314 @@ public final class BusAgent {
         }
     }
 
-    private static void send(String json) {
-        PrintWriter writer = out;
-
-        if (writer == null) {
-            return;
-        }
-
-        synchronized (writer) {
-            writer.println(json);
-
-            if (writer.checkError()) {
-                log("WARNING: failed to write to data bus.");
-                out = null;
-            }
-        }
-    }
-
-    private static void handleMessage(String json) {
-        if (!json.contains("\"type\":\"player_move\"")
-                && !json.contains("\"type\": \"player_move\"")) {
-            return;
-        }
-
-        if ("neoforge".equals(myName)) {
-            Double x = extract(X_PATTERN, json);
-            Double y = extract(Y_PATTERN, json);
-            Double z = extract(Z_PATTERN, json);
-
-            if (x != null && y != null && z != null) {
-                log(String.format(
-                        Locale.US,
-                        "[FUSION-SYNC] Fabric Player Pos: %.2f, %.2f, %.2f",
-                        x, y, z));
-            } else {
-                log("Received player_move but could not parse coordinates: " + json);
-            }
-        }
-    }
-
-    private static Double extract(Pattern pattern, String json) {
-        Matcher matcher = pattern.matcher(json);
-        if (!matcher.find()) {
-            return null;
-        }
-
-        try {
-            return Double.parseDouble(matcher.group(1));
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
-    private static void monitorGame(Instrumentation instrumentation) {
-        boolean reportedMissingMinecraft = false;
-        boolean reportedMissingPlayer = false;
-        boolean reportedMissingGetters = false;
-
-        while (!Thread.currentThread().isInterrupted()) {
+    static void monitorFabricPlayer() {
+        while (true) {
             try {
-                if (minecraft == null) {
-                    if ("fabric".equals(myName)) {
-                        // Fabric: obtain the game instance through Fabric Loader.
-                        minecraft = findFabricMinecraftInstance();
+                if (fabricMcInstance == null) {
+                    Class<?> loaderClass = Class.forName("net.fabricmc.loader.api.FabricLoader");
+                    Object loader = loaderClass.getMethod("getInstance").invoke(null);
+                    fabricMcInstance = loaderClass.getMethod("getGameInstance").invoke(loader);
+                    if (fabricMcInstance != null) {
+                        System.out.println("[BusAgent:fabric] Minecraft 实例类型: "
+                            + fabricMcInstance.getClass().getName());
                     } else {
-                        // NeoForge: obtain the loaded Minecraft class through Instrumentation.
-                        Class<?> mcClass = findMinecraftClass(instrumentation);
-
-                        if (mcClass != null) {
-                            try {
-                                Method getInstance = mcClass.getDeclaredMethod("getInstance");
-
-                                getInstance.setAccessible(true);
-                                minecraft = getInstance.invoke(null);
-                            } catch (Throwable e) {
-                                log("Minecraft getInstance() failed: " + e);
-                            }
-                        }
-                    }
-
-                    if (minecraft != null) {
-                        log("Minecraft instance acquired: "
-                                + minecraft.getClass().getName());
-                        reportedMissingMinecraft = false;
-                    } else if (!reportedMissingMinecraft) {
-                        log("Waiting for Minecraft game instance...");
-                        reportedMissingMinecraft = true;
+                        System.err.println("[BusAgent:fabric] getGameInstance() 返回 null");
                     }
                 }
-                if (minecraft != null && "fabric".equals(myName)) {
-                    Object player = getPlayer(minecraft);
 
-                    if (player == null) {
-                        if (!reportedMissingPlayer) {
-                            log("Waiting for the player to enter a world.");
-                            reportedMissingPlayer = true;
+                if (fabricMcInstance != null && fabricPlayerField == null) {
+                    try {
+                        // 1.21.4 当前运行时：flk.t -> gkx（本地玩家）
+                        Class<?> owner = fabricMcInstance.getClass();
+                        Field candidate = null;
+
+                        while (owner != null) {
+                            try {
+                                candidate = owner.getDeclaredField("t");
+                                break;
+                            } catch (NoSuchFieldException missing) {
+                                owner = owner.getSuperclass();
+                            }
                         }
-                    } else {
-                        reportedMissingPlayer = false;
 
-                        Double x = invokeCoordinate(player, "getX");
-                        Double y = invokeCoordinate(player, "getY");
-                        Double z = invokeCoordinate(player, "getZ");
+                        if (candidate == null) {
+                            throw new NoSuchFieldException(
+                                "Minecraft 实例及父类中未找到字段 t"
+                            );
+                        }
 
-                        if (x != null && y != null && z != null) {
-                            reportedMissingGetters = false;
+                        if (!"gkx".equals(candidate.getType().getName())) {
+                            throw new IllegalStateException(
+                                "字段 t 类型与当前 1.21.4 运行时预期不符："
+                                + candidate.getType().getName()
+                            );
+                        }
 
-                            String message = String.format(
-                                    Locale.US,
-                                    "{\"broadcast\":true,\"type\":\"player_move\","
-                                            + "\"source\":\"fabric\","
-                                            + "\"payload\":{\"x\":%.4f,\"y\":%.4f,\"z\":%.4f}}",
-                                    x, y, z);
+                        candidate.setAccessible(true);
+                        fabricPlayerField = candidate;
 
-                            send(message);
-
-                            log(String.format(
-                                    Locale.US,
-                                    "Player coordinates: %.2f, %.2f, %.2f",
-                                    x, y, z));
-                        } else if (!reportedMissingGetters) {
-                            log("Could not call getX/getY/getZ on player class "
-                                    + player.getClass().getName());
-                            logCoordinateDiagnostics(player);
-                            reportedMissingGetters = true;
+                        System.out.println(
+                            "[BusAgent:fabric] 已绑定玩家字段："
+                            + owner.getName() + "." + candidate.getName()
+                            + "，类型=" + candidate.getType().getName()
+                        );
+                    } catch (Throwable mappingError) {
+                        // 只限制重复日志，不限制后续重试
+                        if (!fabricFieldScanLogged) {
+                            fabricFieldScanLogged = true;
+                            System.err.println(
+                                "[BusAgent:fabric] 玩家字段暂未绑定，将继续重试："
+                                + mappingError
+                            );
+                        }
+                    }
+                }
+                if (fabricPlayerField != null) {
+                    Object player = fabricPlayerField.get(fabricMcInstance);
+                    if (player != null) {
+                        if (getXMethod == null || getYMethod == null || getZMethod == null) bindXYZ(player.getClass());
+                        if (getXMethod != null && getYMethod != null && getZMethod != null) {
+                            double x = (double) getXMethod.invoke(player);
+                            double y = (double) getYMethod.invoke(player);
+                            double z = (double) getZMethod.invoke(player);
+                            String msg = String.format("{\"broadcast\":true,\"type\":\"player_move\",\"source\":\"fabric\",\"payload\":{\"x\":%.2f,\"y\":%.2f,\"z\":%.2f}}", x, y, z);
+                            if (out != null) out.println(msg);
+                            System.out.println("[BusAgent:fabric] 🚀 发送真实坐标: " + x + ", " + y + ", " + z);
                         }
                     }
                 }
             } catch (Throwable e) {
-                log("Monitor error: " + e.getClass().getSimpleName()
-                        + ": " + e.getMessage());
-            }
-
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-        }
-    }
-
-    private static Class<?> findMinecraftClass(Instrumentation instrumentation) {
-        for (Class<?> clazz : instrumentation.getAllLoadedClasses()) {
-            if ("net.minecraft.client.Minecraft".equals(clazz.getName())) {
-                return clazz;
-            }
-        }
-
-        return null;
-    }
-
-    private static Object getPlayer(Object mc) {
-        // Minecraft 1.21.4: flk.t is the gkx player field.
-        // Prefer this known field before scanning other client fields.
-        try {
-            Field field = mc.getClass().getDeclaredField("t");
-            field.setAccessible(true);
-
-            Object value = field.get(mc);
-
-            if (value != null
-                    && hasMethodInHierarchy(value.getClass(), "dA")
-                    && hasMethodInHierarchy(value.getClass(), "dC")
-                    && hasMethodInHierarchy(value.getClass(), "dG")) {
-
-                playerField = field;
-                return value;
-            }
-        } catch (Throwable ignored) {
-            // Fall back to the existing lookup if this field is unavailable.
-        }
-        try {
-            Field cached = playerField;
-
-            if (cached != null) {
-                Object value = cached.get(mc);
-
-                if (value != null) {
-                    return value;
+                if (!fabricErrorLogged) {
+                    fabricErrorLogged = true;
+                    System.err.println("[BusAgent:fabric] 玩家监控首次异常：");
+                    e.printStackTrace(System.err);
                 }
             }
-
-            Class<?> type = mc.getClass();
-
-            while (type != null) {
-                for (Field field : type.getDeclaredFields()) {
-                    try {
-                        field.setAccessible(true);
-
-                        Object value = field.get(mc);
-
-                        if (value == null) {
-                            continue;
-                        }
-
-                        Class<?> valueClass = value.getClass();
-
-                        if (hasCoordinateGetters(valueClass)
-                                || isRecognizablePlayerType(valueClass)) {
-                            playerField = field;
-
-                            log("Player field identified: "
-                                    + field.getName()
-                                    + "; class = "
-                                    + valueClass.getName());
-
-                            return value;
-                        }
-                    } catch (Throwable ignored) {
-                        // Skip inaccessible or unrelated fields.
-                    }
-                }
-
-                type = type.getSuperclass();
-            }
-
-            logPlayerFieldDiagnostics(mc);
-        } catch (Throwable e) {
-            log("Player lookup failed: "
-                    + e.getClass().getSimpleName()
-                    + ": " + e.getMessage());
+            try { Thread.sleep(1000); } catch (InterruptedException e) { break; }
         }
-
-        return null;
     }
 
-    private static volatile long lastPlayerDiagnosticsAt = 0L;
-
-    private static void logPlayerFieldDiagnostics(Object mc) {
-        long now = System.currentTimeMillis();
-
-        if (now - lastPlayerDiagnosticsAt < 10000L) {
+    static void handleNeoForgeSync(String json) {
+        if (json == null) {
+            return;
+        }
+        if (nfMcInstance == null || nfMcClass == null) {
+            if (!nfDiagInstanceLogged) {
+                nfDiagInstanceLogged = true;
+                System.err.println("[BusAgent:neoforge] 收到坐标，但 Minecraft 实例或类尚未就绪。");
+            }
             return;
         }
 
-        lastPlayerDiagnosticsAt = now;
-
-        log("===== Minecraft field diagnostics =====");
-        log("Minecraft class: " + mc.getClass().getName());
-
-        Class<?> type = mc.getClass();
-
-        while (type != null) {
-            log("Inspecting class: " + type.getName());
-
-            for (Field field : type.getDeclaredFields()) {
-                try {
-                    field.setAccessible(true);
-
-                    Object value = field.get(mc);
-
-                    log("Field: " + field.getName()
-                            + "; declaredType=" + field.getType().getName()
-                            + "; valueType="
-                            + (value == null
-                                    ? "null"
-                                    : value.getClass().getName()));
-
-                } catch (Throwable e) {
-                    log("Field: " + field.getName()
-                            + "; access failed: "
-                            + e.getClass().getSimpleName());
-                }
-            }
-
-            type = type.getSuperclass();
-        }
+        final double x;
+        final double y;
+        final double z;
 
         try {
-            Field candidateField = mc.getClass().getDeclaredField("bo");
-            candidateField.setAccessible(true);
-            Object candidate = candidateField.get(mc);
-
-            log("===== Minecraft field bo diagnostics =====");
-            log("Field bo value: " +
-                    (candidate == null ? "null"
-                            : candidate.getClass().getName()));
-
-            if (candidate != null) {
-                logCoordinateDiagnostics(candidate);
-            }
-
-            log("===== End Minecraft field bo diagnostics =====");
+            x = readJsonNumber(json, "x");
+            y = readJsonNumber(json, "y");
+            z = readJsonNumber(json, "z");
         } catch (Throwable e) {
-            log("Field bo diagnostic failed: "
-                    + e.getClass().getSimpleName()
-                    + ": " + e.getMessage());
+            System.err.println("[BusAgent:neoforge] Invalid player_move message: " + e);
+            return;
         }
 
-        log("===== End Minecraft field diagnostics =====");
-    }
+        final Object mc = nfMcInstance;
 
-    private static boolean hasCoordinateGetters(Class<?> type) {
-        return hasNoArgMethod(type, "getX")
-                && hasNoArgMethod(type, "getY")
-                && hasNoArgMethod(type, "getZ");
-    }
-
-    private static boolean hasNoArgMethod(Class<?> type, String name) {
         try {
-            Method method = type.getMethod(name);
-            return method.getParameterCount() == 0
-                    && (method.getReturnType() == double.class
-                            || method.getReturnType() == Double.class);
-        } catch (NoSuchMethodException e) {
-            return false;
-        }
-    }
+            if (!nfDiagScheduleLogged) {
+                nfDiagScheduleLogged = true;
+                System.out.println("[BusAgent:neoforge] 已收到坐标，正在向 Minecraft 主线程提交同步任务。");
+            }
+            nfMcClass.getMethod("execute", Runnable.class).invoke(
+                mc, (Runnable) () -> {
+                    try {
+                        ClassLoader loader = nfMcClass.getClassLoader();
+                        Object level = nfMcClass.getField("level").get(mc);
 
-    private static boolean isRecognizablePlayerType(Class<?> type) {
-        String name = type.getName();
-        String simpleName = type.getSimpleName();
+                        if (level == null) {
 
-        return name.contains("LocalPlayer")
-                || name.contains("ClientPlayerEntity")
-                || simpleName.equals("LocalPlayer")
-                || simpleName.equals("ClientPlayerEntity");
-    }
 
-    private static void logCoordinateDiagnostics(Object player) {
-        log("===== FULL PLAYER CLASS DIAGNOSTICS =====");
-        Class<?> runtimeClass = player.getClass();
-        log("Runtime class: " + runtimeClass.getName());
+                            if (!nfDiagLevelLogged) {
 
-        Class<?> type = runtimeClass;
-        while (type != null) {
-            log("--- CLASS " + type.getName() + " ---");
 
-            for (Field field : type.getDeclaredFields()) {
-                try {
-                    field.setAccessible(true);
-                    Object value = field.get(player);
-                    String shown;
+                                nfDiagLevelLogged = true;
 
-                    if (value == null) {
-                        shown = "null";
-                    } else if (field.getType().isPrimitive()
-                            || value instanceof String
-                            || value instanceof Number
-                            || value instanceof Boolean
-                            || value instanceof Character) {
-                        shown = String.valueOf(value);
-                    } else {
-                        shown = "<" + value.getClass().getName() + ">";
+
+                                System.err.println("[BusAgent:neoforge] 同步任务已执行，但 level=null；请确认已进入世界。");
+
+
+                            }
+
+
+                            return;
+
+
+                        }
+
+
+                        if (!nfDiagWorldReadyLogged) {
+
+
+                            nfDiagWorldReadyLogged = true;
+
+
+                            System.out.println("[BusAgent:neoforge] 世界已就绪，level=" + level.getClass().getName());
+
+
+                        }
+
+                        Class<?> levelClass = Class.forName(
+                            "net.minecraft.client.multiplayer.ClientLevel", true, loader);
+                        Class<?> playerClass = Class.forName(
+                            "net.minecraft.client.player.RemotePlayer", true, loader);
+                        Class<?> profileClass = Class.forName(
+                            "com.mojang.authlib.GameProfile", true, loader);
+                        Class<?> entityClass = Class.forName(
+                            "net.minecraft.world.entity.Entity", true, loader);
+
+                        // Remove the mirror from the previous world, if necessary.
+                        if (remotePlayer != null && remotePlayerLevel != level) {
+                            removeRemotePlayer(remotePlayerLevel, remotePlayer, loader);
+                            remotePlayer = null;
+                            remotePlayerLevel = null;
+                        }
+
+                        if (remotePlayer == null) {
+                            Object profile = profileClass
+                                .getConstructor(java.util.UUID.class, String.class)
+                                .newInstance(remotePlayerUuid, "FabricMirror");
+
+                            Object player = playerClass
+                                .getConstructor(levelClass, profileClass)
+                                .newInstance(level, profile);
+
+                            Method getEntity = levelClass.getMethod("getEntity", int.class);
+                            Method setId = entityClass.getMethod("setId", int.class);
+                            Method setUUID = entityClass.getMethod(
+                                "setUUID", java.util.UUID.class);
+
+                            int candidate = 1_900_000_000;
+                            boolean found = false;
+
+                            for (int i = 0; i < 10000; i++, candidate--) {
+                                if (getEntity.invoke(level, candidate) == null) {
+                                    found = true;
+                                    break;
+                                }
+                            }
+
+                            if (!found) {
+                                throw new IllegalStateException(
+                                    "Could not find an unused entity ID");
+                            }
+
+                            setId.invoke(player, candidate);
+                            setUUID.invoke(player, remotePlayerUuid);
+
+                            entityClass.getMethod(
+                                "setPos", double.class, double.class, double.class)
+                                .invoke(player, x, y, z);
+                            entityClass.getMethod("setOldPosAndRot").invoke(player);
+
+                            levelClass.getMethod("addEntity", entityClass)
+                                .invoke(level, player);
+
+                            remotePlayer = player;
+                            remotePlayerLevel = level;
+
+                            System.out.println(String.format(
+                                "[BusAgent:neoforge] RemotePlayer created: "
+                                + "id=%d pos=(%.2f, %.2f, %.2f)",
+                                candidate, x, y, z));
+                        } else {
+                            entityClass.getMethod(
+                                "setPos", double.class, double.class, double.class)
+                                .invoke(remotePlayer, x, y, z);
+                            entityClass.getMethod("setOldPosAndRot")
+                                .invoke(remotePlayer);
+                        }
+                    } catch (Throwable e) {
+                        Throwable cause =
+                            e instanceof java.lang.reflect.InvocationTargetException
+                            && ((java.lang.reflect.InvocationTargetException)e).getCause() != null
+                            ? ((java.lang.reflect.InvocationTargetException)e).getCause()
+                            : e;
+                        System.err.println(
+                            "[BusAgent:neoforge] RemotePlayer update failed:");
+                        cause.printStackTrace(System.err);
                     }
-
-                    log("FIELD " + field.getName()
-                            + " type=" + field.getType().getName()
-                            + " value=" + shown);
-                } catch (Throwable e) {
-                    log("FIELD " + field.getName()
-                            + " access=" + e.getClass().getSimpleName());
                 }
-            }
-
-            for (Method method : type.getDeclaredMethods()) {
-                StringBuilder signature = new StringBuilder();
-                signature.append("METHOD ")
-                        .append(method.getName()).append("(");
-
-                Class<?>[] params = method.getParameterTypes();
-                for (int i = 0; i < params.length; i++) {
-                    if (i > 0)
-                        signature.append(",");
-                    signature.append(params[i].getName());
-                }
-
-                signature.append(") -> ")
-                        .append(method.getReturnType().getName());
-
-                log(signature.toString());
-            }
-
-            type = type.getSuperclass();
+            );
+        } catch (Throwable e) {
+            System.err.println(
+                "[BusAgent:neoforge] Could not schedule RemotePlayer update:");
+            e.printStackTrace(System.err);
         }
-
-        log("===== END FULL PLAYER CLASS DIAGNOSTICS =====");
     }
 
-    private static Double invokeCoordinate(Object player, String methodName) {
-        if (player == null || methodName == null) {
-            return null;
+    static double readJsonNumber(String json, String key) {
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
+            "\"" + java.util.regex.Pattern.quote(key)
+            + "\"\\s*:\\s*(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)"
+        );
+
+        java.util.regex.Matcher matcher = pattern.matcher(json);
+        if (!matcher.find()) {
+            throw new IllegalArgumentException("Missing numeric JSON field: " + key);
         }
+        return Double.parseDouble(matcher.group(1));
+    }
 
-        // First try normal, unobfuscated method names.
-        try {
-            java.lang.reflect.Method method = player.getClass().getMethod(methodName);
-
-            if (method.getParameterCount() == 0) {
-                Object value = method.invoke(player);
-                if (value instanceof Number) {
-                    return ((Number) value).doubleValue();
-                }
-            }
-        } catch (Throwable ignored) {
-            // Fall through to the Minecraft 1.21.4 obfuscated accessors.
-        }
-
-        // Minecraft 1.21.4 runtime mappings established from javap bytecode:
-        // X -> dA(), Y -> dC(), Z -> dG()
-        String obfuscatedName;
-
-        switch (methodName) {
-            case "getX":
-                obfuscatedName = "dA";
-                break;
-            case "getY":
-                obfuscatedName = "dC";
-                break;
-            case "getZ":
-                obfuscatedName = "dG";
-                break;
-            default:
-                return null;
+    static void removeRemotePlayer(Object level, Object player, ClassLoader loader) {
+        if (level == null || player == null) {
+            return;
         }
 
         try {
-            java.lang.reflect.Method method = player.getClass().getMethod(obfuscatedName);
+            Class<?> entityClass = Class.forName(
+                "net.minecraft.world.entity.Entity", true, loader);
+            Class<?> reasonClass = Class.forName(
+                "net.minecraft.world.entity.Entity$RemovalReason", true, loader);
 
-            Object value = method.invoke(player);
-            if (value instanceof Number) {
-                return ((Number) value).doubleValue();
-            }
-        } catch (Throwable ignored) {
-            // Continue with superclass lookup below.
+            @SuppressWarnings({"rawtypes", "unchecked"})
+            Object discarded = Enum.valueOf(
+                (Class<? extends Enum>) reasonClass, "DISCARDED");
+
+            int id = ((Number) entityClass.getMethod("getId").invoke(player)).intValue();
+            level.getClass().getMethod("removeEntity", int.class, reasonClass)
+                .invoke(level, id, discarded);
+        } catch (Throwable e) {
+            System.err.println("[BusAgent:neoforge] Could not remove old mirror:");
+            e.printStackTrace(System.err);
         }
+    }
 
-        // The method may be declared in a superclass rather than the
-        // runtime player's concrete class.
-        Class<?> type = player.getClass().getSuperclass();
-
-        while (type != null) {
-            try {
-                java.lang.reflect.Method method = type.getDeclaredMethod(obfuscatedName);
-
-                method.setAccessible(true);
-
-                Object value = method.invoke(player);
-                if (value instanceof Number) {
-                    return ((Number) value).doubleValue();
+    static void bindXYZ(Class<?> clazz) {
+        // 找 getX, getY, getZ 方法（包括继承来的）
+        Class<?> c = clazz;
+        while (c != null && (getXMethod == null || getYMethod == null || getZMethod == null)) {
+            for (Method m : c.getDeclaredMethods()) {
+                if (m.getParameterCount() == 0 && m.getReturnType() == double.class) {
+                    if (m.getName().equals("getX") || m.getName().equals("dA")) getXMethod = m;
+                    if (m.getName().equals("getY") || m.getName().equals("dC")) getYMethod = m;
+                    if (m.getName().equals("getZ") || m.getName().equals("dG")) getZMethod = m;
                 }
-            } catch (Throwable ignored) {
-                // Try the next superclass.
             }
-
-            type = type.getSuperclass();
+            c = c.getSuperclass();
         }
+        if (getXMethod != null) getXMethod.setAccessible(true);
+        if (getYMethod != null) getYMethod.setAccessible(true);
+        if (getZMethod != null) getZMethod.setAccessible(true);
 
-        return null;
+        System.out.println("[BusAgent:" + myName + "] 坐标方法绑定：X="
+            + (getXMethod == null ? "未找到" : getXMethod.getDeclaringClass().getName()
+                + "#" + getXMethod.getName())
+            + ", Y="
+            + (getYMethod == null ? "未找到" : getYMethod.getDeclaringClass().getName()
+                + "#" + getYMethod.getName())
+            + ", Z="
+            + (getZMethod == null ? "未找到" : getZMethod.getDeclaringClass().getName()
+                + "#" + getZMethod.getName()));
     }
 }

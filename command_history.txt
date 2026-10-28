@@ -1,3 +1,0 @@
-/clear
-/time set day
-/tp @s 100000 100000 100000

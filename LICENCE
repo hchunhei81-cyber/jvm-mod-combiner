@@ -1,6 +1,47 @@
+JVM Mod Combiner
+Copyright (c) 2026, hchunhei81-cyber
+
+================================================================================
+PROJECT NOTICE / 项目声明
+================================================================================
+
+This project (JVM Mod Combiner) is a Rust microkernel that hosts two
+physically isolated Minecraft modding environments (Fabric and
+Forge/NeoForge) inside separate JVMs, and synchronizes their state through
+a Rust-owned data bus.
+
+This software is experimental, research-oriented, and provided for
+educational and development purposes only. It is NOT affiliated with,
+endorsed by, or sponsored by Mojang Studios, Microsoft, FabricMC, or
+NeoForged. "Minecraft" is a trademark of Mojang Synergies AB.
+
+By using this software you acknowledge that:
+
+  a) The software may launch, patch, or inject bytecode into third-party
+     JVMs and game clients. You are solely responsible for complying with
+     the terms of service and licenses of any third-party software
+     (Minecraft, Fabric Loader, Forge, NeoForge, and any mods) that you
+     run alongside it.
+
+  b) Running two JVMs concurrently may cause high CPU/memory/GPU usage,
+     system instability, or data loss. Use on production or important
+     worlds at your own risk.
+
+  c) The maintainers do not condone piracy or unauthorized distribution
+     of game assets. This project does not bundle Minecraft assets.
+
+  d) You must not use this software to circumvent copy protection,
+     licensing, or access-control mechanisms of any third-party software.
+
+This notice is informational only. The license terms below govern the
+use, reproduction, and distribution of this source code.
+
+================================================================================
+
 BSD 3-Clause License
 
 Copyright (c) 2026, hchunhei81-cyber
+All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
@@ -26,3 +67,22 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+================================================================================
+THIRD-PARTY COMPONENTS
+================================================================================
+
+This project does not bundle third-party JAR files. During runtime it
+loads, references, or spawns third-party software including, but not
+limited to:
+
+  - Minecraft client and libraries (Mojang Studios)
+  - Fabric Loader (FabricMC) - Apache License 2.0
+  - NeoForge / Forge (NeoForged / MinecraftForge) - LGPL 2.1
+  - Mixin / SpongePowered Mixin - MIT License
+  - ASM (OW2) - BSD 3-Clause
+
+Each of these components remains under its own license. This project's
+BSD 3-Clause license applies only to the original Rust kernel, the Java
+BusAgent sources, and their build scripts contained in this repository.
+================================================================================

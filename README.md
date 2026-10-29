@@ -121,7 +121,9 @@ Broadcasted via the Rust TCP data bus, the NeoForge sandbox successfully receive
 
 ### 8.Cross-Sandbox Entity Mirroring (RemotePlayer Injection)
 ypassed runtime class isolation via reflection and dynamically injected a mirror `RemotePlayer` into NeoForge's `ClientLevel`. Real-time coordinate and movement data from the Fabric sandbox are synced through the Rust bus, allowing the mirrored entity in NeoForge to follow the player in real-time.
+Due to different seed and different version,the map generation is different but the coordinates is same(refer to the f3 console)
 ![Cross-Sandbox Entity Mirroring](image7.png)
+
 ## Quick start
 
 ### Requirements

@@ -126,11 +126,11 @@ passed runtime class isolation via reflection and dynamically injected a mirror 
 ![Cross-Sandbox Entity Mirroring](image7.png)
 
 ## Quick start
-
 ### Requirements
-
+```bash
 - Rust (stable, 1.75+)
 - A JDK. Tested with Temurin 21; JDK 8+ should also work.
+```
 
 ### Build and run
 
@@ -138,16 +138,44 @@ git clone https://github.com/hchunhei81-cyber/jvm-mod-fusion.git
 cd jvm-mod-fusion
 
 # Point JAVA_HOME at your JDK
+```bash
 export JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home
 
 cargo run
 
 If everything is wired correctly, you should see:
+```
 
+```text
 === Rust JVM Fusion Kernel: Sandbox Isolation Test ===
 [Sandbox A] I am from Sandbox A!
 [Sandbox B] I am from Sandbox B!
 [OK] If you see A and B above, sandbox isolation is working!
+```
+
+
+## Modes
+To try different modes,you can try these commands:
+> Modes are currently in testing,crashes may occur
+
+### Frabic
+```bash
+cargo run -- --mode frabic
+```
+### Forge
+```bash
+cargo run -- --mode forge
+```
+### Fusion
+> Please aware that fusion mode may be unstable and crashes may always happen
+> We are currently fix that
+
+```bash
+cargo run -- --mode fusion
+```
+
+### Report problems
+If you have experienced issue,we are welcome you to go to issue and submit a bug report,we will do our best to fix it.
 
 ## Tech stack
 

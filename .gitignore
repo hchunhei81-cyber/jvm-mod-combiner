@@ -43,4 +43,7 @@ forge_1165_launch.sh
 neoforge_launch.sh
 
 
+.fabric/
 usercache.json
+command_history.txt
+downloads/

@@ -121,21 +121,45 @@ NeoForge 沙盒成功接收并解析，实现了跨物理隔离 JVM 的实时游
 - 一个 JDK。实测 Temurin 21；JDK 8+ 应该也行。
 
 ### 编译与运行
-
+```bash
 git clone https://github.com/hchunhei81-cyber/jvm-mod-fusion.git
 cd jvm-mod-fusion
+```
 
 # 指向你的 JDK
+```bash
 export JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home
 
 cargo run
+```
 
 如果一切正常，你会看到：
-
+```text
 === Rust JVM Fusion Kernel: Sandbox Isolation Test ===
 [Sandbox A] I am from Sandbox A!
 [Sandbox B] I am from Sandbox B!
 [OK] If you see A and B above, sandbox isolation is working!
+```
+## 模式
+你可以尝试使用以下命令体验不同模式
+> 目前在试验阶段，崩溃可能常有发生
+
+### frabic
+```bash
+cargo run -- --mode farbic
+```
+### forge
+```bash
+cargo run -- --mode forge
+```
+### fusion
+>请注意此模式最常发生崩溃
+>我们正在全力修复
+```bash
+carhgo run -- --mode fusion
+```
+### 汇报问题
+如果遇到问题，欢迎来到issue 下的bug report 提交report，我们会尽力修复你遇到的错误。
 
 ## 技术栈
 

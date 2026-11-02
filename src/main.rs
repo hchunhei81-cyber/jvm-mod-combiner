@@ -5,7 +5,6 @@ use jni::{InitArgsBuilder, JNIVersion, JavaVM};
 use serde_json::Value;
 use std::env;
 use std::fs;
-use std::io::Read;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -849,7 +848,6 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
         }
 
         let value = path.to_string_lossy().to_string();
-        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         if accept_forge_jar(&path) && !real_cp.contains(&value) {
             real_cp.push(value);
@@ -1305,12 +1303,6 @@ fn start_data_bus() {
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Write};
     use std::sync::{Arc, Mutex};
-
-    #[derive(Clone)]
-    struct Conn {
-        name: String,
-        tx: std::sync::mpsc::Sender<String>,
-    }
 
     // name -> writer channel; 每个连接一个线程写，避免多线程同时写一个 TcpStream
     let registry: Arc<Mutex<HashMap<String, std::sync::mpsc::Sender<String>>>> =

@@ -62,11 +62,12 @@ Rust 微内核
     Fabric 沙盒通过纯反射绕过混淆提取玩家实时坐标，通过 Rust TCP 总线广播。NeoForge 沙盒成功锁定 `Minecraft` 实例并解析同步数据，日志实时打印来自 Fabric 的坐标（如 `3.0, 4.5, 8.5`）。这证明了跨物理隔离 JVM 进行实时数据层交汇的可行性。
 - [x] **跨沙盒实时状态同步 (Data Layer Integration)**：Fabric 沙盒内通过底层反射绕过 1.21.4 运行时混淆（解析 `dA/dC/dG` 方法），提取真实 `LocalPlayer` 坐标。通过 Rust TCP 数据总线实时广播，NeoForge 沙盒成功接收并解析，实现了跨物理隔离 JVM 的实时游戏状态交汇。
 - [x] **跨沙盒实体级镜像同步（RemotePlayer Mirror）**：利用反射绕过 1.21.1/1.21.4 的运行时类隔离，在 NeoForge 的 `ClientLevel` 中动态注入一个镜像 `RemotePlayer`。Fabric 沙盒的玩家坐标与移动数据，经 Rust 总线毫秒级同步后，NeoForge 中的实体实时同步移动。
+- [x] **Rust 成功启动 Forge 1.21.4 (54.1.22)**：彻底攻破 ModLauncher JPMS 模块限制与 `securejarhandler` 依赖冲突，成功渲染 Forge 早期加载界面。
+![Rust 启动 Forge 1.21.4](image_forge.png)
 
 
 进行中：
 
-- [ ] 把真实的 Forge 1.21.4 加载器装进沙盒 B（注：Forge 1.16.5 因远古 Installer 的 zlib 哈希死锁，目前暂时卡死）
 - [ ] 解决真实加载器的 `parent = null` 问题（它们需要 `java.lang.*` 等）
 - [ ] 零拷贝数据总线
 - [ ] 动态依赖解析（解析 version manifest，而不是全量复制 `libraries`）
@@ -112,6 +113,10 @@ NeoForge 沙盒成功接收并解析，实现了跨物理隔离 JVM 的实时游
 利用反射绕过 1.21.1/1.21.4 的运行时类隔离，在 NeoForge 的 `ClientLevel` 中动态注入一个镜像 `RemotePlayer`。Fabric 沙盒的玩家坐标与移动数据，经 Rust 总线毫秒级同步后，NeoForge 中的实体实时同步移动。
 ![跨沙盒实体级镜像同步](image7.png)
 
+### Rust 成功启动 Forge 1.21.4 (54.1.22)
+彻底攻破 ModLauncher JPMS 模块限制与 `securejarhandler` 依赖冲突，成功渲染 Forge 早期加载界面。
+![Rust 启动 Forge 1.21.4](image8.png)
+
 ## 快速开始
 
 
@@ -147,6 +152,10 @@ cargo run
 ### frabic
 ```bash
 cargo run -- --mode farbic
+```
+### Neoforge
+```bash
+cargo run -- --mode neoforge
 ```
 ### forge
 ```bash

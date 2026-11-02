@@ -71,11 +71,11 @@ Verified on macOS + Temurin 21 (arm64):
 The Fabric sandbox bypassed obfuscation to extract the player's real-time coordinates using pure reflection and broadcast them via the Rust TCP bus. The NeoForge sandbox successfully locked the `Minecraft` instance and parsed the synchronization data, with logs printing the coordinates from Fabric in real time (e.g., `3.0, 4.5, 8.5`). This demonstrates the feasibility of real-time data layer convergence across physically isolated JVMs.
 - [x] **Cross-Sandbox Real-time State Sync (Data Layer Integration)**: Bypassed runtime obfuscation inside the Fabric sandbox (resolving the `dA/dC/dG` methods) to extract real-time `LocalPlayer` coordinates. Broadcasted via the Rust TCP data bus, the NeoForge sandbox successfully received and parsed the data, proving real-time game-state integration across physically isolated JVMs.
 - [x] **Cross-Sandbox Entity Mirroring (RemotePlayer Injection)**: Bypassed runtime class isolation via reflection and dynamically injected a mirror `RemotePlayer` into NeoForge's `ClientLevel`. Real-time coordinate and movement data from the Fabric sandbox are synced through the Rust bus, allowing the mirrored entity in NeoForge to follow the player in real-time.
+- [x] **Rust successfully booted Forge 1.21.4 (54.1.22)**: Completely bypassed ModLauncher JPMS restrictions and `securejarhandler` dependency conflicts, successfully rendering the Forge early loading screen.
+
 
 In progress:
 
-- [ ] Load a real Forge 1.21.4 loader into Sandbox B (Forge 1.16.5 is currently
-      blocked by ancient installer zlib hash deadlocks)
 - [ ] Resolve the `parent = null` problem for real loaders (they need
       `java.lang.*` and friends)
 - [ ] Zero-copy data bus
@@ -124,6 +124,10 @@ passed runtime class isolation via reflection and dynamically injected a mirror 
 
 > Due to different seed and different version,the map generation is different but the coordinates is same(refer to the f3 console)
 ![Cross-Sandbox Entity Mirroring](image7.png)
+
+### Rust successfully booted Forge 1.21.4 (54.1.22)
+ Completely bypassed ModLauncher JPMS restrictions and `securejarhandler` dependency conflicts, successfully rendering the Forge early loading screen.
+![Rust boots Forge 1.21.4](image8.png)
 
 ## Quick start
 ### Requirements

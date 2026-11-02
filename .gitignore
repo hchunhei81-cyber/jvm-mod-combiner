@@ -42,7 +42,7 @@ backups/
 forge_1165_launch.sh
 neoforge_launch.sh
 
-
+# --- 其他 ---
 .fabric/
 usercache.json
 command_history.txt

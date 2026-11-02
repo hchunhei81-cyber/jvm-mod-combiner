@@ -118,25 +118,22 @@
 * 现象：启动时出现 ERROR: ModLauncher JAR not found。
 * 原因：启动器预期路径与实际文件定位存在不一致的可能，目录中还出现了不同命名的 ModLauncher JAR。
 * 尝试解决：检查 JAR 路径、文件名，并调整 Rust 启动器的路径构造逻辑。
-* 最终状态：尚未确认根因是否彻底解决。
 
 ### 2. 多个依赖的 Module Path 缺失
 
 * 现象：module path missing，涉及 securemodules、forgespi、fmlloader、Bootstrap API、ASM 等组件。
 * 原因：JAR 文件存在不代表 JVM 能正确解析模块；Classpath 与 Module Path 的配置可能不一致。
 * 尝试解决：检查模块描述符、调整依赖路径、尝试过滤重复的 ModLauncher 条目。
-* 最终失败原因：尚未确定单一根因，仍需核对官方启动参数与模块依赖关系。
 
 ### 3. Bootstrap 服务发现失败
 
 * 现象：预期的 META-INF/services/net.minecraftforge.bootstrap.api.BootstrapEntryPoint 服务描述符最初不存在。
 * 原因：服务接口、实现类和注册方式之间可能存在不匹配；但描述符缺失本身不足以证明它是唯一故障原因。
 * 尝试解决：检查模块描述符，并尝试向处理后的 ModLauncher JAR 注入服务描述符。
-* 最终状态：未确认修复有效；修改模块描述符或服务注册信息可能改变原有启动行为。
 
 ### 4. 强制注入 Bootstrap JAR 后仍然启动失败
 
 * 现象：提示 成功在 Classpath 最前方强制注入 Bootstrap JAR，但随后仍出现 ModLauncher JAR not found、forge-client JAR missing 等错误。
 * 原因：Classpath 注入成功不代表文件定位、模块解析和启动入口均正确。
 * 尝试解决：调整 Classpath 顺序、清理重复依赖，并修改 Rust 启动参数构造逻辑。
-* 最终失败原因：启动器的路径检查与依赖加载配置仍需统一，尚未证明 Forge 完整启动成功。
+>以目前而言，forge已在试验上成功

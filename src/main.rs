@@ -521,102 +521,25 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     // sufficient for this version, so ensure Forge's client JAR is present and
     // pass the complete legacy list to the JVM's actual -cp argument below.
 
-    // 強制將 bootstrap 與 bootstrap-api 加入 legacy_cp 作為 Classpath 根基
+    // ===== 只做一次：把 Bootstrap 核心 JAR 插入 legacy 顶部 =====
     let bootstrap_jar = libs.join("net/minecraftforge/bootstrap/2.1.8/bootstrap-2.1.8.jar");
     let bootstrap_api_jar =
         libs.join("net/minecraftforge/bootstrap-api/2.1.8/bootstrap-api-2.1.8.jar");
-    if bootstrap_jar.is_file()
-        && !legacy
-            .iter()
-            .any(|p| Path::new(p) == bootstrap_jar.as_path())
-    {
-        legacy.insert(0, bootstrap_jar.to_string_lossy().to_string());
-    }
-    if bootstrap_api_jar.is_file()
-        && !legacy
-            .iter()
-            .any(|p| Path::new(p) == bootstrap_api_jar.as_path())
-    {
-        legacy.insert(0, bootstrap_api_jar.to_string_lossy().to_string());
-    }
-
-    // 強制將 bootstrap 與 bootstrap-api 加入 legacy_cp 作為 Classpath 根基
-    let bootstrap_jar = libs.join("net/minecraftforge/bootstrap/2.1.8/bootstrap-2.1.8.jar");
-    let bootstrap_api_jar =
-        libs.join("net/minecraftforge/bootstrap-api/2.1.8/bootstrap-api-2.1.8.jar");
-    if bootstrap_jar.is_file()
-        && !legacy
-            .iter()
-            .any(|p| Path::new(p) == bootstrap_jar.as_path())
-    {
-        legacy.insert(0, bootstrap_jar.to_string_lossy().to_string());
-    }
-    if bootstrap_api_jar.is_file()
-        && !legacy
-            .iter()
-            .any(|p| Path::new(p) == bootstrap_api_jar.as_path())
-    {
-        legacy.insert(0, bootstrap_api_jar.to_string_lossy().to_string());
-    }
-
     let forge_client =
         libs.join("net/minecraftforge/forge/1.21.4-54.1.22/forge-1.21.4-54.1.22-client.jar");
 
-    if forge_client.is_file()
-        && !legacy
-            .iter()
-            .any(|p| Path::new(p) == forge_client.as_path())
-    {
-        legacy.insert(0, forge_client.to_string_lossy().to_string());
-    }
-
-    // 確保 Bootstrap、Bootstrap-API 與 Forge Client 必定存在於 Classpath 頂端
-    let bootstrap_path = libs.join("net/minecraftforge/bootstrap/2.1.8/bootstrap-2.1.8.jar");
-    let bootstrap_api_path =
-        libs.join("net/minecraftforge/bootstrap-api/2.1.8/bootstrap-api-2.1.8.jar");
-
-    if bootstrap_path.exists() {
-        let p_str = bootstrap_path.to_string_lossy().to_string();
-        if !legacy.contains(&p_str) {
-            legacy.insert(0, p_str);
-        }
-    }
-    if bootstrap_api_path.exists() {
-        let p_str = bootstrap_api_path.to_string_lossy().to_string();
-        if !legacy.contains(&p_str) {
-            legacy.insert(0, p_str);
-        }
-    }
-    if forge_client.exists() {
-        let p_str = forge_client.to_string_lossy().to_string();
-        if !legacy.contains(&p_str) {
-            legacy.insert(0, p_str);
+    for jar in [&bootstrap_jar, &bootstrap_api_jar, &forge_client] {
+        if jar.is_file() {
+            let s = jar.to_string_lossy().to_string();
+            if !legacy.contains(&s) { legacy.insert(0, s); }
         }
     }
 
-    // 確保 Bootstrap、Bootstrap-API 與 Forge Client 必定存在於 Classpath 頂端
-    let bootstrap_path = libs.join("net/minecraftforge/bootstrap/2.1.8/bootstrap-2.1.8.jar");
-    let bootstrap_api_path =
-        libs.join("net/minecraftforge/bootstrap-api/2.1.8/bootstrap-api-2.1.8.jar");
-
-    if bootstrap_path.exists() {
-        let p_str = bootstrap_path.to_string_lossy().to_string();
-        if !legacy.contains(&p_str) {
-            legacy.insert(0, p_str);
-        }
-    }
-    if bootstrap_api_path.exists() {
-        let p_str = bootstrap_api_path.to_string_lossy().to_string();
-        if !legacy.contains(&p_str) {
-            legacy.insert(0, p_str);
-        }
-    }
-    if forge_client.exists() {
-        let p_str = forge_client.to_string_lossy().to_string();
-        if !legacy.contains(&p_str) {
-            legacy.insert(0, p_str);
-        }
-    }
+    legacy.retain(|p| {
+        !p.contains("bootstrap-api")
+            && !(p.contains("/sandbox/mc_libraries/")
+                && p.to_ascii_lowercase().contains("failureaccess-"))
+    });
 
     // Bootstrap API stays on the initial module path; do not expose it
     // again to Bootstrap's managed-layer classpath scanner.
@@ -651,6 +574,7 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     legacy.retain(|value| accept_forge_jar(Path::new(value)));
 
     let legacy_cp = legacy.join(":");
+
 
     // JVM module path contains the bootstrap/runtime modules. ModLauncher itself is deliberately
     // supplied through legacyClassPath so Bootstrap can place it in its managed module layer.
@@ -1459,9 +1383,8 @@ fn start_data_bus() {
                     registry.lock().unwrap().remove(&name);
                     println!("[DataBus] '{}' 断开", name);
                 }
-                // tx 在此 drop，写线程退出
-                let _ = tx.send(String::new()); // 触发 rx 关闭前的一次空写也无害；或者直接 drop tx
-                let _ = write_handle.join();
+                drop(tx);
+                let _ = write_handle;
             });
         }
     });

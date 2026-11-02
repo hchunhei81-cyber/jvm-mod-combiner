@@ -33,22 +33,82 @@ public class BusAgent {
         if (myName.equals("neoforge")) {
             inst.addTransformer(new ClassFileTransformer() {
                 @Override
-                public byte[] transform(ClassLoader loader, String className, Class<?> classBeingRedefined,
-                                        java.security.ProtectionDomain protectionDomain, byte[] classfileBuffer) {
-                    if (className != null && className.equals("net/minecraft/client/Minecraft")) {
-                        final ClassLoader targetLoader = loader;
-                        new Thread(() -> {
-                            try {
-                                Thread.sleep(3000);
-                                nfMcClass = Class.forName("net.minecraft.client.Minecraft", false, targetLoader);
-                                nfMcInstance = nfMcClass.getMethod("getInstance").invoke(null);
-                                System.out.println("[BusAgent:neoforge] ✅ 成功锁定 Minecraft 实例！");
-                            } catch (Throwable e) {}
-                        }).start();
+                public byte[] transform(ClassLoader loader, String className,
+                                        Class<?> classBeingRedefined,
+                                        java.security.ProtectionDomain protectionDomain,
+                                        byte[] classfileBuffer) {
+                    if ("net/minecraft/client/Minecraft".equals(className)) {
+                        System.out.println(
+                            "[BusAgent:neoforge] 检测到 Minecraft 类加载，loader=" + loader);
                     }
                     return null;
                 }
             });
+
+            Thread instanceFinder = new Thread(() -> {
+                long deadline = System.currentTimeMillis() + 120000;
+                Throwable lastError = null;
+
+                while (System.currentTimeMillis() < deadline
+                        && nfMcInstance == null) {
+                    try {
+                        ClassLoader contextLoader =
+                            Thread.currentThread().getContextClassLoader();
+
+                        Class<?> mcClass = null;
+                        ClassLoader[] candidates = new ClassLoader[] {
+                            contextLoader,
+                            BusAgent.class.getClassLoader()
+                        };
+
+                        for (ClassLoader candidate : candidates) {
+                            if (candidate == null) continue;
+                            try {
+                                mcClass = Class.forName(
+                                    "net.minecraft.client.Minecraft",
+                                    false, candidate);
+                                break;
+                            } catch (ClassNotFoundException ignored) {
+                            }
+                        }
+
+                        if (mcClass == null) {
+                            lastError = new ClassNotFoundException(
+                                "候选 ClassLoader 均无法找到 Minecraft 类");
+                        } else {
+                            Object instance = mcClass.getMethod("getInstance")
+                                .invoke(null);
+
+                            if (instance != null) {
+                                nfMcClass = mcClass;
+                                nfMcInstance = instance;
+                                System.out.println(
+                                    "[BusAgent:neoforge] 成功获取 Minecraft 实例！"
+                                    + " loader=" + mcClass.getClassLoader());
+                                return;
+                            }
+                        }
+                    } catch (Throwable e) {
+                        lastError = e;
+                    }
+
+                    try {
+                        Thread.sleep(500);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+
+                if (nfMcInstance == null) {
+                    System.err.println(
+                        "[BusAgent:neoforge] 等待 120 秒仍未获取 Minecraft 实例。");
+                    if (lastError != null) lastError.printStackTrace();
+                }
+            }, "BusAgent-MinecraftInstanceFinder");
+
+            instanceFinder.setDaemon(true);
+            instanceFinder.start();
         }
 
         Thread t = new Thread(BusAgent::runBus);
@@ -194,10 +254,12 @@ public class BusAgent {
 
     static void handleNeoForgeSync(String json) {
         System.out.println("[BusAgent:neoforge] 收到同步消息: " + json);
-        System.out.println("[BusAgent:neoforge] 开始处理同步消息");
 
         try {
-            if (nfMcInstance == null || nfMcClass == null) return;
+            if (nfMcInstance == null || nfMcClass == null) {
+                System.out.println("[BusAgent:neoforge] Minecraft 实例尚未就绪");
+                return;
+            }
 
             double x = readJsonNumber(json, "x");
             double y = readJsonNumber(json, "y");
@@ -207,80 +269,159 @@ public class BusAgent {
             boolean sprint = json.contains("\"sprint\":true");
 
             Object mc = nfMcInstance;
-            nfMcClass.getMethod("execute", Runnable.class).invoke(mc, (Runnable) () -> {
+            Method execute = nfMcClass.getMethod("execute", Runnable.class);
+
+            execute.invoke(mc, (Runnable) () -> {
                 try {
                     Object level = nfMcClass.getField("level").get(mc);
-                    if (level == null) return;
+
+                    if (level == null) {
+                        System.out.println("[BusAgent:neoforge] 当前世界为空，等待进入世界");
+                        return;
+                    }
+
                     ClassLoader loader = nfMcClass.getClassLoader();
 
-                    Class<?> levelClass = Class.forName("net.minecraft.client.multiplayer.ClientLevel", true, loader);
-                    Class<?> playerClass = Class.forName("net.minecraft.client.player.RemotePlayer", true, loader);
-                    Class<?> profileClass = Class.forName("com.mojang.authlib.GameProfile", true, loader);
-                    Class<?> entityClass = Class.forName("net.minecraft.world.entity.Entity", true, loader);
+                    Class<?> levelClass = Class.forName(
+                        "net.minecraft.client.multiplayer.ClientLevel", true, loader);
+                    Class<?> playerClass = Class.forName(
+                        "net.minecraft.client.player.RemotePlayer", true, loader);
+                    Class<?> profileClass = Class.forName(
+                        "com.mojang.authlib.GameProfile", true, loader);
+                    Class<?> entityClass = Class.forName(
+                        "net.minecraft.world.entity.Entity", true, loader);
 
                     if (remotePlayer != null && remotePlayerLevel != level) {
-                        System.out.println("[BusAgent:neoforge] 正在创建或更新镜像玩家");
+                        System.out.println("[BusAgent:neoforge] 世界已切换，重建镜像玩家");
                         remotePlayer = null;
                         remotePlayerLevel = null;
                     }
 
                     if (remotePlayer == null) {
-                        Object profile = profileClass.getConstructor(java.util.UUID.class, String.class)
+                        Object profile = profileClass
+                            .getConstructor(java.util.UUID.class, String.class)
                             .newInstance(remotePlayerUuid, "FabricMirror");
-                        Object player = playerClass.getConstructor(levelClass, profileClass)
+
+                        Object player = playerClass
+                            .getConstructor(levelClass, profileClass)
                             .newInstance(level, profile);
 
                         Method getEntity = levelClass.getMethod("getEntity", int.class);
                         Method setId = entityClass.getMethod("setId", int.class);
-                        Method setUUID = entityClass.getMethod("setUUID", java.util.UUID.class);
+                        Method setUUID = entityClass.getMethod(
+                            "setUUID", java.util.UUID.class);
 
                         int candidate = 1_900_000_000;
-                        for (int i = 0; i < 10000; i++, candidate--) {
-                            if (getEntity.invoke(level, candidate) == null) break;
+                        boolean idAvailable = false;
+
+                        for (int i = 0; i < 10000; i++) {
+                            if (getEntity.invoke(level, candidate) == null) {
+                                idAvailable = true;
+                                break;
+                            }
+                            candidate--;
+                        }
+
+                        if (!idAvailable) {
+                            throw new IllegalStateException(
+                                "找不到可用的镜像玩家实体 ID");
                         }
 
                         setId.invoke(player, candidate);
                         setUUID.invoke(player, remotePlayerUuid);
-                        
-                        entityClass.getMethod("setPos", double.class, double.class, double.class)
+
+                        entityClass.getMethod(
+                            "setPos", double.class, double.class, double.class)
                             .invoke(player, x, y, z);
+
+                        entityClass.getMethod("setYRot", float.class)
+                            .invoke(player, yaw);
+                        entityClass.getMethod("setXRot", float.class)
+                            .invoke(player, pitch);
+
+                        try {
+                            entityClass.getMethod("setYHeadRot", float.class)
+                                .invoke(player, yaw);
+                        } catch (NoSuchMethodException ignored) {}
+
+                        try {
+                            entityClass.getMethod("setYBodyRot", float.class)
+                                .invoke(player, yaw);
+                        } catch (NoSuchMethodException ignored) {}
+
+                        try {
+                            entityClass.getMethod("setSprinting", boolean.class)
+                                .invoke(player, sprint);
+                        } catch (NoSuchMethodException ignored) {}
+
                         entityClass.getMethod("setOldPosAndRot").invoke(player);
 
-                        levelClass.getMethod("addEntity", entityClass).invoke(level, player);
-                        System.out.println("[BusAgent:neoforge] 正在创建或更新镜像玩家");
+                        System.out.println(
+                            "[BusAgent:neoforge] 准备加入世界：ID=" + candidate
+                            + "，位置=(" + x + ", " + y + ", " + z + ")");
+
+                        levelClass.getMethod("addEntity", entityClass)
+                            .invoke(level, player);
+
+                        Object registered = getEntity.invoke(level, candidate);
+
+                        if (registered == null) {
+                            throw new IllegalStateException(
+                                "addEntity 执行后，ClientLevel.getEntity(ID) 仍返回 null");
+                        }
+
                         remotePlayer = player;
                         remotePlayerLevel = level;
+
+                        System.out.println(
+                            "[BusAgent:neoforge] 镜像玩家已加入世界："
+                            + player.getClass().getName()
+                            + "，ID=" + candidate
+                            + "，UUID=" + remotePlayerUuid);
+
                     } else {
-                        entityClass.getMethod("setPos", double.class, double.class, double.class)
+                        entityClass.getMethod(
+                            "setPos", double.class, double.class, double.class)
                             .invoke(remotePlayer, x, y, z);
-                        entityClass.getMethod("setOldPosAndRot").invoke(remotePlayer);
+
+                        entityClass.getMethod("setYRot", float.class)
+                            .invoke(remotePlayer, yaw);
+                        entityClass.getMethod("setXRot", float.class)
+                            .invoke(remotePlayer, pitch);
+
+                        try {
+                            entityClass.getMethod("setYHeadRot", float.class)
+                                .invoke(remotePlayer, yaw);
+                        } catch (NoSuchMethodException ignored) {}
+
+                        try {
+                            entityClass.getMethod("setYBodyRot", float.class)
+                                .invoke(remotePlayer, yaw);
+                        } catch (NoSuchMethodException ignored) {}
+
+                        try {
+                            entityClass.getMethod("setSprinting", boolean.class)
+                                .invoke(remotePlayer, sprint);
+                        } catch (NoSuchMethodException ignored) {}
+
+                        entityClass.getMethod("setOldPosAndRot")
+                            .invoke(remotePlayer);
                     }
 
-                    // 尝试设置多个旋转属性
-                    try {
-                        entityClass.getMethod("setYRot", float.class).invoke(remotePlayer, yaw);
-                        entityClass.getMethod("setXRot", float.class).invoke(remotePlayer, pitch);
-                    } catch (NoSuchMethodException ignored) {}
-
-                    try {
-                        // 常见于 1.20+，用于头部旋转
-                        entityClass.getMethod("setYHeadRot", float.class).invoke(remotePlayer, yaw);
-                    } catch (NoSuchMethodException ignored) {}
-
-                    try {
-                        // 常见于 1.20+，用于身体旋转
-                        entityClass.getMethod("setYBodyRot", float.class).invoke(remotePlayer, yaw);
-                    } catch (NoSuchMethodException ignored) {}
-
-                    try {
-                        entityClass.getMethod("setSprinting", boolean.class).invoke(remotePlayer, sprint);
-                    } catch (NoSuchMethodException ignored) {}
-
                 } catch (Throwable e) {
+                    System.err.println(
+                        "[BusAgent:neoforge] 主线程同步失败："
+                        + e.getClass().getName() + ": " + e.getMessage());
                     e.printStackTrace();
                 }
             });
-        } catch (Throwable e) {}
+
+        } catch (Throwable e) {
+            System.err.println(
+                "[BusAgent:neoforge] 消息处理失败："
+                + e.getClass().getName() + ": " + e.getMessage());
+            e.printStackTrace();
+        }
     }
 
     static double readJsonNumber(String json, String key) {

@@ -149,9 +149,9 @@ cargo run
 你可以尝试使用以下命令体验不同模式
 > 目前在试验阶段，崩溃可能常有发生
 
-### frabic
+### Fabric
 ```bash
-cargo run -- --mode farbic
+cargo run -- --mode fabric
 ```
 ### Neoforge
 ```bash

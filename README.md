@@ -162,9 +162,9 @@ If everything is wired correctly, you should see:
 To try different modes,you can try these commands:
 > Modes are currently in testing,crashes may occur
 
-### Frabic
+### Fabric
 ```bash
-cargo run -- --mode frabic
+cargo run -- --mode fabric
 ```
 ### Forge
 ```bash

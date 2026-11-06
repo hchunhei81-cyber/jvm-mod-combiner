@@ -5,7 +5,7 @@ import java.lang.reflect.*;
 import java.util.*;
 
 public class BusAgent {
-    static PrintWriter out;
+    static volatile PrintWriter out;
     static String myName;
     static Instrumentation inst;
 
@@ -13,6 +13,15 @@ public class BusAgent {
     static Object fabricMcInstance = null;
     static Field fabricPlayerField = null;
     static volatile boolean fabricStructureDumped = false;
+
+    static volatile java.lang.reflect.Method fabricExecuteMethod = null;
+    static volatile boolean fabricMethodsBound = false;
+    static final java.util.concurrent.atomic.AtomicBoolean fabricSamplePending =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
+    static volatile String lastFabricState = null;
+    static volatile long lastFabricSendAt = 0L;
+    static volatile boolean fabricSampleErrorPrinted = false;
+
     static Method getXMethod, getYMethod, getZMethod;
     static Method getYRotMethod, getXRotMethod, isSprintingMethod;
 
@@ -44,29 +53,92 @@ public class BusAgent {
 
     static void runBus() {
         String peer = myName.equals("fabric") ? "neoforge" : "fabric";
-        try (Socket socket = new Socket("127.0.0.1", 25565);
-                BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
-            out = new PrintWriter(socket.getOutputStream(), true);
-            out.println("{\"register\":\"" + myName + "\"}");
 
-            String line;
-            while ((line = in.readLine()) != null) {
-                if (line.contains("\"type\":\"player_move\"") && line.contains("\"source\":\"" + peer + "\"")) {
-                    if (myName.equals("neoforge")) {
-                        handleNeoForgeSync(line);
+        while (!Thread.currentThread().isInterrupted()) {
+            try (Socket socket = new Socket()) {
+                socket.connect(
+                    new InetSocketAddress("127.0.0.1", 25565),
+                    3000
+                );
+
+                socket.setKeepAlive(true);
+                socket.setTcpNoDelay(true);
+
+                try (
+                    BufferedReader in = new BufferedReader(
+                        new InputStreamReader(
+                            socket.getInputStream(),
+                            java.nio.charset.StandardCharsets.UTF_8
+                        )
+                    );
+                    PrintWriter writer = new PrintWriter(
+                        new OutputStreamWriter(
+                            socket.getOutputStream(),
+                            java.nio.charset.StandardCharsets.UTF_8
+                        ),
+                        true
+                    )
+                ) {
+                    out = writer;
+                    writer.println("{\"register\":\"" + myName + "\"}");
+
+                    System.out.println(
+                        "[BusAgent:" + myName + "] Connected to DataBus"
+                    );
+
+                    String line;
+
+                    while ((line = in.readLine()) != null) {
+                        if (!line.contains("\"type\":\"player_move\"")) {
+                            continue;
+                        }
+
+                        java.util.regex.Matcher matcher =
+                            java.util.regex.Pattern.compile(
+                                "\"from\"\\s*:\\s*\"([^\"]+)\""
+                            ).matcher(line);
+
+                        if (!matcher.find()) {
+                            continue;
+                        }
+
+                        String source = matcher.group(1);
+
+                        if (!peer.equals(source)) {
+                            continue;
+                        }
+
+                        if (myName.equals("neoforge")) {
+                            handleNeoForgeSync(line);
+                        }
+
+                        // Fabric 接收处理器将在第二轮实现。
                     }
+                } finally {
+                    out = null;
+                }
+
+            } catch (Exception e) {
+                out = null;
+
+                System.out.println(
+                    "[BusAgent:" + myName +
+                    "] Bus disconnected: " + e.getMessage()
+                );
+
+                try {
+                    Thread.sleep(2000);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return;
                 }
             }
-        } catch (Exception e) {
-            System.out.println("[BusAgent:" + myName + "] Bus failed: " + e);
         }
     }
 
+    
     static void monitorFabricPlayer() {
         System.out.println("[BusAgent:fabric] monitor thread started");
-
-        long lastScanLog = 0;
-        boolean errorPrinted = false;
 
         while (!Thread.currentThread().isInterrupted()) {
             try {
@@ -84,93 +156,72 @@ public class BusAgent {
                         .invoke(loader);
 
                     if (instance == null) {
-                        long now = System.currentTimeMillis();
-
-                        if (now - lastScanLog >= 3000) {
-                            System.out.println(
-                                "[BusAgent:fabric][WAIT] Minecraft instance not ready"
-                            );
-                            lastScanLog = now;
-                        }
-
                         Thread.sleep(250);
                         continue;
                     }
 
                     fabricMcInstance = instance;
 
+                    // Minecraft 1.21.4: flk.t is the local player.
+                    fabricPlayerField = instance.getClass().getField("t");
+
+                    // Minecraft inherits execute(Runnable) from bra.
+                    fabricExecuteMethod = instance.getClass().getMethod(
+                        "execute",
+                        Runnable.class
+                    );
+
                     System.out.println(
                         "[BusAgent:fabric][INIT] SUCCESS: " +
                         instance.getClass().getName()
                     );
+
+                    System.out.println(
+                        "[BusAgent:fabric][INIT] player field=" +
+                        fabricPlayerField.getName() +
+                        ", executor=" +
+                        fabricExecuteMethod.getDeclaringClass().getName()
+                    );
                 }
 
-                if (!fabricStructureDumped) {
-                    synchronized (BusAgent.class) {
-                        if (!fabricStructureDumped) {
-                            System.out.println(
-                                "[BusAgent:fabric][STRUCT] Minecraft instance = " +
-                                fabricMcInstance.getClass().getName()
-                            );
-
-                            Class<?> scanClass = fabricMcInstance.getClass();
-
-                            while (scanClass != null &&
-                                   scanClass != Object.class) {
-
-                                System.out.println(
-                                    "[BusAgent:fabric][STRUCT] CLASS " +
-                                    scanClass.getName()
-                                );
-
-                                for (Field field : scanClass.getDeclaredFields()) {
-                                    try {
-                                        field.setAccessible(true);
-                                        Object value = field.get(fabricMcInstance);
-
-                                        System.out.println(
-                                            "[BusAgent:fabric][STRUCT] FIELD " +
-                                            field.getName() +
-                                            " type=" + field.getType().getName() +
-                                            " value=" +
-                                            (value == null
-                                                ? "null"
-                                                : value.getClass().getName())
+                if (fabricSamplePending.compareAndSet(false, true)) {
+                    try {
+                        fabricExecuteMethod.invoke(
+                            fabricMcInstance,
+                            (Runnable) () -> {
+                                try {
+                                    sampleFabricPlayer();
+                                } catch (Throwable e) {
+                                    if (!fabricSampleErrorPrinted) {
+                                        fabricSampleErrorPrinted = true;
+                                        System.err.println(
+                                            "[BusAgent:fabric][ERROR] player sample failed:"
                                         );
-                                    } catch (Throwable e) {
-                                        System.out.println(
-                                            "[BusAgent:fabric][STRUCT] FIELD " +
-                                            field.getName() + " ERROR " + e
-                                        );
+                                        e.printStackTrace(System.err);
                                     }
+                                } finally {
+                                    fabricSamplePending.set(false);
                                 }
-
-                                scanClass = scanClass.getSuperclass();
                             }
-
-                            fabricStructureDumped = true;
-                        }
+                        );
+                    } catch (Throwable e) {
+                        fabricSamplePending.set(false);
+                        throw e;
                     }
                 }
 
-                /*
-                 * 玩家字段扫描和位置发送逻辑暂时保留在原方法中。
-                 * 这里先验证 Minecraft 实例初始化和结构扫描。
-                 */
-                Thread.sleep(250);
+                Thread.sleep(50);
 
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
 
             } catch (Throwable e) {
-                if (!errorPrinted) {
-                    errorPrinted = true;
-                    System.err.println(
-                        "[BusAgent:fabric][ERROR] monitorFabricPlayer failed:"
-                    );
-                    e.printStackTrace(System.err);
-                }
+                fabricSamplePending.set(false);
+
+                System.err.println(
+                    "[BusAgent:fabric][ERROR] monitor failed: " + e
+                );
 
                 try {
                     Thread.sleep(1000);
@@ -181,7 +232,122 @@ public class BusAgent {
             }
         }
     }
-    static synchronized void initNeoForgeMinecraft() {
+
+    static void sampleFabricPlayer() throws Exception {
+        Object mc = fabricMcInstance;
+        if (mc == null || fabricPlayerField == null) {
+            return;
+        }
+
+        Object player = fabricPlayerField.get(mc);
+        if (player == null) {
+            return;
+        }
+
+        if (!fabricMethodsBound) {
+            bindMethods(player.getClass());
+
+            if (getXMethod == null ||
+                getYMethod == null ||
+                getZMethod == null ||
+                getYRotMethod == null ||
+                getXRotMethod == null ||
+                isSprintingMethod == null) {
+                throw new IllegalStateException(
+                    "One or more Minecraft player methods could not be bound"
+                );
+            }
+
+            fabricMethodsBound = true;
+        }
+
+        double x = ((Number) getXMethod.invoke(player)).doubleValue();
+        double y = ((Number) getYMethod.invoke(player)).doubleValue();
+        double z = ((Number) getZMethod.invoke(player)).doubleValue();
+
+        float yaw = ((Number) getYRotMethod.invoke(player)).floatValue();
+        float pitch = ((Number) getXRotMethod.invoke(player)).floatValue();
+
+        boolean sprint = (Boolean) isSprintingMethod.invoke(player);
+
+        String state =
+            Double.toString(x) + "|" +
+            Double.toString(y) + "|" +
+            Double.toString(z) + "|" +
+            Float.toString(yaw) + "|" +
+            Float.toString(pitch) + "|" +
+            sprint;
+
+        long now = System.currentTimeMillis();
+
+        // Send on state changes, or once per second as a heartbeat.
+        boolean changed = !state.equals(lastFabricState);
+        boolean heartbeat = now - lastFabricSendAt >= 1000L;
+
+        if (changed || heartbeat) {
+            sendFabricPlayer(x, y, z, yaw, pitch, sprint, state, now);
+        }
+    }
+
+    static void sendFabricPlayer(
+        double x,
+        double y,
+        double z,
+        float yaw,
+        float pitch,
+        boolean sprint,
+        String state,
+        long now
+    ) {
+        PrintWriter writer = out;
+
+        if (writer == null) {
+            return;
+        }
+
+        String json =
+            "{\"to\":\"neoforge\",\"type\":\"player_move\"," +
+            "\"x\":" + Double.toString(x) +
+            ",\"y\":" + Double.toString(y) +
+            ",\"z\":" + Double.toString(z) +
+            ",\"yaw\":" + Float.toString(yaw) +
+            ",\"pitch\":" + Float.toString(pitch) +
+            ",\"sprint\":" + sprint +
+            "}";
+
+        synchronized (BusAgent.class) {
+            // Recheck the writer after acquiring the lock.
+            writer = out;
+
+            if (writer == null) {
+                return;
+            }
+
+            writer.println(json);
+
+            if (writer.checkError()) {
+                System.err.println(
+                    "[BusAgent:fabric][SEND][ERROR] TCP write failed"
+                );
+                return;
+            }
+        }
+
+        lastFabricState = state;
+        lastFabricSendAt = now;
+
+        System.out.println(
+            "[BusAgent:fabric][SEND] x=" + x +
+            " y=" + y +
+            " z=" + z +
+            " yaw=" + yaw +
+            " pitch=" + pitch +
+            " sprint=" + sprint
+        );
+    }
+
+
+static synchronized void initNeoForgeMinecraft() {
         if (nfMcInstance != null)
             return;
         try {
@@ -320,8 +486,12 @@ public class BusAgent {
         return 0;
     }
 
+    
     static void bindMethods(Class<?> clazz) {
-        System.out.println("[BusAgent:fabric] bindMethods: " + clazz.getName());
+        System.out.println(
+            "[BusAgent:fabric] binding Minecraft 1.21.4 methods: " +
+            clazz.getName()
+        );
 
         getXMethod = null;
         getYMethod = null;
@@ -330,60 +500,33 @@ public class BusAgent {
         getXRotMethod = null;
         isSprintingMethod = null;
 
-        Class<?> c = clazz;
-        int depth = 0;
+        try {
+            // These names were verified against the local 1.21.4 TSRG
+            // mappings and the obfuscated Minecraft runtime JAR.
+            getXMethod = clazz.getMethod("dA");
+            getYMethod = clazz.getMethod("dC");
+            getZMethod = clazz.getMethod("dG");
+            getYRotMethod = clazz.getMethod("dL");
+            getXRotMethod = clazz.getMethod("dN");
+            isSprintingMethod = clazz.getMethod("cj");
 
-        while (c != null && c != Object.class && depth < 12) {
-            for (Method m : c.getDeclaredMethods()) {
-                if (m.getParameterCount() != 0)
-                    continue;
-
-                String name = m.getName();
-                Class<?> rt = m.getReturnType();
-
-                try {
-                    m.setAccessible(true);
-                } catch (Throwable ignored) {
-                }
-
-                if (rt == double.class || rt == Double.class) {
-                    if (name.equals("getX"))
-                        getXMethod = m;
-                    else if (name.equals("getY"))
-                        getYMethod = m;
-                    else if (name.equals("getZ"))
-                        getZMethod = m;
-                }
-
-                if (rt == float.class || rt == Float.class) {
-                    if (name.equals("getYRot"))
-                        getYRotMethod = m;
-                    else if (name.equals("getXRot"))
-                        getXRotMethod = m;
-                }
-
-                if ((rt == boolean.class || rt == Boolean.class) &&
-                        name.toLowerCase(Locale.ROOT).contains("sprint")) {
-                    isSprintingMethod = m;
-                }
-            }
-
-            c = c.getSuperclass();
-            depth++;
+        } catch (NoSuchMethodException e) {
+            System.err.println(
+                "[BusAgent:fabric][ERROR] 1.21.4 method binding failed"
+            );
+            e.printStackTrace(System.err);
         }
 
-        System.out.println("[BusAgent:fabric] 严格绑定结果 X=" +
-                nameOf(getXMethod) + " Y=" + nameOf(getYMethod) +
-                " Z=" + nameOf(getZMethod) +
-                " YRot=" + nameOf(getYRotMethod) +
-                " XRot=" + nameOf(getXRotMethod) +
-                " Sprint=" + nameOf(isSprintingMethod));
-
-        if (getXMethod == null || getYMethod == null || getZMethod == null) {
-            System.out.println(
-                    "[BusAgent:fabric][ERROR] 无法确认 X/Y/Z getter；已禁止猜测绑定。");
-        }
+        System.out.println(
+            "[BusAgent:fabric] binding result X=" + nameOf(getXMethod) +
+            " Y=" + nameOf(getYMethod) +
+            " Z=" + nameOf(getZMethod) +
+            " Yaw=" + nameOf(getYRotMethod) +
+            " Pitch=" + nameOf(getXRotMethod) +
+            " Sprint=" + nameOf(isSprintingMethod)
+        );
     }
+
 
     static String nameOf(Method m) {
         return m == null ? "null" : m.getDeclaringClass().getSimpleName() + "." + m.getName();

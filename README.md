@@ -6,7 +6,7 @@
 
 > A Rust-based microkernel prototype exploring how Fabric and Forge/NeoForge environments can coexist through isolated runtime environments and cross-sandbox communication, without depending on Sinytra Connector.
 
-[中文文档](README.zh.md) · [Known Problems](problems.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-fusion/discussions)
+[中文文档](README.zh.md) · [Known Problems](problems.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-combiner/discussions)
 
 ---
 
@@ -223,8 +223,8 @@ Rust successfully launches Forge 1.21.4 (54.1.22) to the early loading screen.
 ### Clone
 
 ```bash
-git clone https://github.com/hchunhei81-cyber/jvm-mod-fusion.git
-cd jvm-mod-fusion
+git clone https://github.com/hchunhei81-cyber/jvm-mod-combiner.git
+cd jvm-mod-combiner
 ```
 
 ### Configure Java
@@ -404,7 +404,7 @@ This is currently a personal research project.
 
 Bug reports, test results, and technical discussions are welcome.
 
-If you are testing the project, please consider posting in [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-fusion/discussions), preferably under **Showcase / Test Results**.
+If you are testing the project, please consider posting in [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-combiner/discussions), preferably under **Showcase / Test Results**.
 
 Useful information includes:
 

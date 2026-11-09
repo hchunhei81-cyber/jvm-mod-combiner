@@ -1,38 +1,45 @@
-# --- Rust 编译产物 ---
+# --- Rust build output and compiled Java classes ---
+# Cargo's build directory and compiled classes are generated artifacts.
 target/
 *.class
 
-# --- 崩溃报告与日志 ---
+# --- Runtime diagnostics and generated data ---
+# Keep crash reports, logs, and data files out of version control.
 crash-reports/
 logs/
 *.log
 *.dat
 *.dat.*
 
-# --- 系统与编辑器文件 ---
+# --- Local machine, environment, and editor files ---
+# These files can contain machine-specific settings or local environment data.
 .DS_Store
 .env
 bus_test/build/
 bus_test/bus-agent.jar
 
-# --- 备份文件 ---
+# --- Temporary and editor-created backups ---
+# Cover common backup suffixes without excluding ordinary source files.
 *.bak.*
 *.bak
 *.bakup
 *.bakup.*
 
-# --- 沙盒目录 (Sandbox 整体隔离) ---
+# --- Local Minecraft sandbox and save data ---
+# The sandbox and saves are local runtime data, not project sources.
 sandbox/
 saves/
 
-# --- 明确排除的特定沙盒大文件与生成产物 ---
+# --- Explicit sandbox dependency and runtime paths ---
+# Retain these entries as documentation of large generated files and folders.
 sandbox/minecraft-client.jar
 sandbox/forge_env/libraries/net/minecraft/client/
 sandbox/forge_env/libraries/de/oceanlabs/mcp/
 sandbox/forge_env/versions/1.21.4/
 sandbox/mc_libraries/
 
-# --- 根目录下的临时安装器与日志 ---
+# --- Local installers, launch scripts, and native runtime files ---
+# These are downloaded or machine-specific files used to launch the game.
 forge-installer.jar
 forge-installer.jar.log.DS_Store
 *.current
@@ -42,7 +49,12 @@ backups/
 forge_1165_launch.sh
 neoforge_launch.sh
 
-# --- 其他 ---
+# --  Local HTML documentation and generated web content ---
+# Generated HTML files and web content should not be versioned yet.
+html/
+
+# --- Tool metadata, local caches, and project-specific temporary files ---
+# Exclude generated metadata, command history, downloads, and helper scripts.
 .fabric/
 usercache.json
 command_history.txt
@@ -51,4 +63,3 @@ fix_bus.sh
 fix.sh
 fix_main.sh
 others/
-html/

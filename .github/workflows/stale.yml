@@ -21,7 +21,7 @@ jobs:
   stale:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/stale@v9
+      - uses: actions/stale@v11
         with:
           # ---------- Issue settings ----------
           days-before-issue-stale: 30          # No activity for 30 days -> mark stale

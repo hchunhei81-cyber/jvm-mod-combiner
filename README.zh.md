@@ -6,7 +6,7 @@
 
 > 一个使用 Rust 和 Java 开发的跨 Loader 互操作研究项目。目标是通过隔离的运行环境和跨沙盒通信，让 Fabric 与 Forge/NeoForge 能够协同运行，而不依赖 Sinytra Connector。
 
-[English README](README.md) · [技术问题清单](problems.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-fusion/discussions)
+[English README](README.md) · [技术问题清单](problems.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-combiner/discussions)
 
 ---
 
@@ -224,8 +224,8 @@ Rust 成功启动 Forge 1.21.4（54.1.22），并进入早期加载界面。
 ### 克隆仓库
 
 ```bash
-git clone https://github.com/hchunhei81-cyber/jvm-mod-fusion.git
-cd jvm-mod-fusion
+git clone https://github.com/hchunhei81-cyber/jvm-mod-combiner.git
+cd jvm-mod-combiner
 ```
 
 ### 配置 Java
@@ -394,7 +394,7 @@ JVM Mod Combiner 探索不同的架构：
 
 欢迎提交 Bug、测试结果和技术讨论。
 
-如果你正在测试本项目，欢迎在 [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-fusion/discussions) 的 **Showcase / Test Results** 分类发布测试结果。
+如果你正在测试本项目，欢迎在 [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-combiner/discussions) 的 **Showcase / Test Results** 分类发布测试结果。
 
 建议提供：
 

@@ -1474,11 +1474,21 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
 fn start_data_bus() -> std::io::Result<()> {
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Write};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{atomic::{AtomicU64, Ordering}, Arc, Mutex};
 
-    // name -> writer channel; 每个连接一个线程写，避免多线程同时写一个 TcpStream
-    let registry: Arc<Mutex<HashMap<String, std::sync::mpsc::Sender<String>>>> =
+    // Each registration is tied to one specific TCP connection.
+    struct PeerRegistration {
+        connection_id: u64,
+        sender: std::sync::mpsc::Sender<String>,
+    }
+
+    // name -> current connection registration
+    let registry: Arc<Mutex<HashMap<String, PeerRegistration>>> =
         Arc::new(Mutex::new(HashMap::new()));
+
+    // Monotonically increasing ID prevents an old connection from
+    // deleting a newer connection registered under the same name.
+    let next_connection_id = Arc::new(AtomicU64::new(1));
 
     let listener = TcpListener::bind("127.0.0.1:25565")?;
     println!("[DataBus] 路由总线已启动，监听 127.0.0.1:25565");
@@ -1494,7 +1504,12 @@ fn start_data_bus() -> std::io::Result<()> {
             };
 
             let registry = registry.clone();
+            let next_connection_id = next_connection_id.clone();
+
             thread::spawn(move || {
+                let connection_id =
+                    next_connection_id.fetch_add(1, Ordering::Relaxed);
+
                 let peer = stream
                     .peer_addr()
                     .map(|a| a.to_string())
@@ -1553,7 +1568,13 @@ fn start_data_bus() -> std::io::Result<()> {
                         match name {
                             Some(n) => {
                                 println!("[DataBus] {} 注册为 '{}'", peer, n);
-                                registry.lock().unwrap().insert(n.clone(), tx.clone());
+                                registry.lock().unwrap().insert(
+                                    n.clone(),
+                                    PeerRegistration {
+                                        connection_id,
+                                        sender: tx.clone(),
+                                    },
+                                );
                                 my_name = Some(n);
                             }
                             None => {
@@ -1610,16 +1631,20 @@ fn start_data_bus() -> std::io::Result<()> {
                         // 广播模式：发给所有已注册的客户端
                         let payload = serde_json::to_string(&forward).unwrap_or_default();
                         let reg = registry.lock().unwrap();
-                        for (name, peer_tx) in reg.iter() {
+                        for (name, registration) in reg.iter() {
                             if name != &from {
-                                if peer_tx.send(payload.clone()).is_ok() {
+                                if registration.sender.send(payload.clone()).is_ok() {
                                     println!("[DataBus] {} 广播 -> {}", from, name);
                                 }
                             }
                         }
                     } else {
                         // 点对点路由模式
-                        let target_tx = registry.lock().unwrap().get(to).cloned();
+                        let target_tx = registry
+                            .lock()
+                            .unwrap()
+                            .get(to)
+                            .map(|registration| registration.sender.clone());
                         match target_tx {
                             Some(peer_tx) => {
                                 let payload = serde_json::to_string(&forward).unwrap_or_default();
@@ -1647,8 +1672,27 @@ fn start_data_bus() -> std::io::Result<()> {
                 }
 
                 if let Some(name) = my_name {
-                    registry.lock().unwrap().remove(&name);
-                    println!("[DataBus] '{}' 断开", name);
+                    let mut reg = registry.lock().unwrap();
+
+                    let is_current_connection = reg
+                        .get(&name)
+                        .map(|registration| {
+                            registration.connection_id == connection_id
+                        })
+                        .unwrap_or(false);
+
+                    if is_current_connection {
+                        reg.remove(&name);
+                        println!(
+                            "[DataBus] '{}' 断开，已清理当前注册项",
+                            name
+                        );
+                    } else {
+                        println!(
+                            "[DataBus] '{}' 旧连接断开，保留新连接注册项",
+                            name
+                        );
+                    }
                 }
                 drop(tx);
                 let _ = write_handle;

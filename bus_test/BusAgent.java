@@ -15,7 +15,14 @@ public class BusAgent {
     static volatile boolean fabricStructureDumped = false;
 
     static volatile java.lang.reflect.Method fabricExecuteMethod = null;
-    static volatile boolean fabricMethodsBound = false;
+    enum FabricBindingState {
+        UNINITIALIZED,
+        READY,
+        FAILED
+    }
+
+    static volatile FabricBindingState fabricBindingState =
+        FabricBindingState.UNINITIALIZED;
     static final java.util.concurrent.atomic.AtomicBoolean fabricSamplePending =
         new java.util.concurrent.atomic.AtomicBoolean(false);
     static volatile String lastFabricState = null;
@@ -301,21 +308,14 @@ public class BusAgent {
             return;
         }
 
-        if (!fabricMethodsBound) {
-            bindMethods(player.getClass());
-
-            if (getXMethod == null ||
-                getYMethod == null ||
-                getZMethod == null ||
-                getYRotMethod == null ||
-                getXRotMethod == null ||
-                isSprintingMethod == null) {
-                throw new IllegalStateException(
-                    "One or more Minecraft player methods could not be bound"
-                );
+        if (fabricBindingState == FabricBindingState.UNINITIALIZED) {
+            if (!bindMethods(player.getClass())) {
+                return;
             }
+        }
 
-            fabricMethodsBound = true;
+        if (fabricBindingState != FabricBindingState.READY) {
+            return;
         }
 
         double x = ((Number) getXMethod.invoke(player)).doubleValue();
@@ -923,44 +923,66 @@ public class BusAgent {
     }
 
     
-    static void bindMethods(Class<?> clazz) {
+    static boolean bindMethods(Class<?> clazz) {
+        if (fabricBindingState != FabricBindingState.UNINITIALIZED) {
+            return fabricBindingState == FabricBindingState.READY;
+        }
+
         System.out.println(
             "[BusAgent:fabric] binding Minecraft 1.21.4 methods: " +
             clazz.getName()
         );
 
-        getXMethod = null;
-        getYMethod = null;
-        getZMethod = null;
-        getYRotMethod = null;
-        getXRotMethod = null;
-        isSprintingMethod = null;
-
         try {
-            // These names were verified against the local 1.21.4 TSRG
-            // mappings and the obfuscated Minecraft runtime JAR.
-            getXMethod = clazz.getMethod("dA");
-            getYMethod = clazz.getMethod("dC");
-            getZMethod = clazz.getMethod("dG");
-            getYRotMethod = clazz.getMethod("dL");
-            getXRotMethod = clazz.getMethod("dN");
-            isSprintingMethod = clazz.getMethod("cj");
+            // Resolve every method into local variables first.
+            // Do not publish a partially initialized binding.
+            Method x = clazz.getMethod("dA");
+            Method y = clazz.getMethod("dC");
+            Method z = clazz.getMethod("dG");
+            Method yaw = clazz.getMethod("dL");
+            Method pitch = clazz.getMethod("dN");
+            Method sprint = clazz.getMethod("cj");
 
-        } catch (NoSuchMethodException e) {
+            // Commit only after all six lookups succeed.
+            getXMethod = x;
+            getYMethod = y;
+            getZMethod = z;
+            getYRotMethod = yaw;
+            getXRotMethod = pitch;
+            isSprintingMethod = sprint;
+
+            fabricBindingState = FabricBindingState.READY;
+
+            System.out.println(
+                "[BusAgent:fabric] binding result X=" + nameOf(x) +
+                " Y=" + nameOf(y) +
+                " Z=" + nameOf(z) +
+                " Yaw=" + nameOf(yaw) +
+                " Pitch=" + nameOf(pitch) +
+                " Sprint=" + nameOf(sprint)
+            );
+
+            System.out.println(
+                "[BusAgent:fabric] method binding state: READY"
+            );
+
+            return true;
+
+        } catch (NoSuchMethodException | SecurityException e) {
+            fabricBindingState = FabricBindingState.FAILED;
+
             System.err.println(
-                "[BusAgent:fabric][ERROR] 1.21.4 method binding failed"
+                "[BusAgent:fabric][ERROR] 1.21.4 method binding failed; " +
+                "binding permanently disabled"
             );
             e.printStackTrace(System.err);
-        }
 
-        System.out.println(
-            "[BusAgent:fabric] binding result X=" + nameOf(getXMethod) +
-            " Y=" + nameOf(getYMethod) +
-            " Z=" + nameOf(getZMethod) +
-            " Yaw=" + nameOf(getYRotMethod) +
-            " Pitch=" + nameOf(getXRotMethod) +
-            " Sprint=" + nameOf(isSprintingMethod)
-        );
+            System.err.println(
+                "[BusAgent:fabric] method binding state: FAILED"
+            );
+
+            return false;
+        }
     }
 
 

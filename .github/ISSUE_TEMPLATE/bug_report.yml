@@ -1,0 +1,101 @@
+name: Bug Report
+description: Create a report to help us fix crashes or routing errors
+title: '[BUG]: '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感謝你提出 Bug 報告！請據實填寫以下表單以協助我們排查問題。
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what the bug is.
+      placeholder: 請描述發生了什麼問題...
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: sandbox
+    attributes:
+      label: Which sandbox is affected?
+      options:
+        - label: Sandbox A (Fabric)
+        - label: Sandbox B (Forge / NeoForge)
+        - label: Rust Microkernel / Data Bus
+        - label: Other (please specify in the description or additional context)
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: To Reproduce
+      description: Steps to reproduce the behavior.
+      value: |
+        1. Run `cargo run -- --mode=...`
+        2. Wait for the main menu...
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: A clear and concise description of what you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs-screenshots
+    attributes:
+      label: Logs & Screenshots
+      description: |
+        If applicable, paste the terminal output or add screenshots to help explain your problem.
+        *(Please ensure you redact any personal information like your absolute user paths `/Users/yourname/...` before pasting).*
+      placeholder: 請在此貼上 Log 紀錄或拖放圖片...
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Environment Information
+        請完成以下環境欄位填寫：
+
+  - type: input
+    id: env-os
+    attributes:
+      label: "Environment: OS"
+      placeholder: "e.g. macOS 14.0 (arm64), Windows 11, Ubuntu 22.04"
+    validations:
+      required: true
+
+  - type: input
+    id: env-jdk
+    attributes:
+      label: "Environment: JDK Version"
+      placeholder: "e.g. Temurin 21.0.13, OpenJDK 22"
+
+  - type: input
+    id: env-mc
+    attributes:
+      label: "Environment: Minecraft Version + Loader"
+      placeholder: "e.g. Fabric 1.21.4, NeoForge 21.1.191"
+
+  - type: input
+    id: env-rust
+    attributes:
+      label: "Environment: Rust Version"
+      placeholder: "執行 `rustc --version` 取得的資訊"
+
+  - type: input
+    id: env-jni
+    attributes:
+      label: "Environment: jni crate version"
+      placeholder: "e.g. 0.22.4"
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add any other context about the problem here (e.g., specific mods installed, Mixin conflicts).

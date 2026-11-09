@@ -6,7 +6,7 @@
 
 > 一个使用 Rust 和 Java 开发的跨 Loader 互操作研究项目。目标是通过隔离的运行环境和跨沙盒通信，让 Fabric 与 Forge/NeoForge 能够协同运行，而不依赖 Sinytra Connector。
 
-[English README](README.md) · [技术问题清单](Problems.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-fusion/discussions)
+[English README](README.md) · [技术问题清单](problems.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-fusion/discussions)
 
 ---
 
@@ -310,7 +310,7 @@ cargo run -- --mode bus-test
 
 ## 已知问题
 
-当前技术问题与调查记录请查看 [Problems.md](Problems.md)。
+当前技术问题与调查记录请查看 [Problems.md](problems.md)。
 
 主要挑战包括：
 

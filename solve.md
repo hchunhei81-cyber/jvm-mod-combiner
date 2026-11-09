@@ -1,6 +1,6 @@
 # JVM Mod Combiner: Architectural Challenges & Proposed Solutions
 
-> This document complements [Problems.md](./Problems.md).
+> This document complements [Problems.md](problems.md).
 >
 > `Problems.md` records the technical problems encountered while building the current prototype and the solutions or workarounds implemented so far.
 >

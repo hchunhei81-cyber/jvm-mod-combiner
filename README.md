@@ -6,7 +6,7 @@
 
 > A Rust-based microkernel prototype exploring how Fabric and Forge/NeoForge environments can coexist through isolated runtime environments and cross-sandbox communication, without depending on Sinytra Connector.
 
-[中文文档](README.zh.md) · [Known Problems](Problems.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-fusion/discussions)
+[中文文档](README.zh.md) · [Known Problems](problems.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-fusion/discussions)
 
 ---
 
@@ -301,7 +301,7 @@ Starts the standalone TCP routing service on:
 
 ## Known Problems
 
-See [Problems.md](Problems.md) for the current technical issue list and investigation notes.
+See [Problems.md](problems.md) for the current technical issue list and investigation notes.
 
 Some major challenges include:
 

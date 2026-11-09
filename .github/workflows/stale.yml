@@ -1,0 +1,82 @@
+# ============================================
+# Stale Issue / PR auto-management
+# Path: .github/workflows/stale.yml
+# Docs: https://github.com/actions/stale
+# ============================================
+
+name: Stale
+
+on:
+  schedule:
+    # Run once daily at 01:00 UTC (09:00 Beijing time)
+    - cron: "0 1 * * *"
+  # Allow manual trigger from the Actions tab for debugging
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          # ---------- Issue settings ----------
+          days-before-issue-stale: 30          # No activity for 30 days -> mark stale
+          days-before-issue-close: 14          # 14 more days of silence -> close
+          stale-issue-label: "stale"
+          stale-issue-message: |
+            This issue has been automatically marked as **stale** because it has
+            not had any activity for 30 days.
+
+            If the problem still exists, please reply with any update (e.g. new
+            logs or current status) and we will keep it open. Otherwise it will
+            be closed automatically in **14 days**.
+
+            Thank you for your understanding!
+          close-issue-message: |
+            This issue has been automatically closed due to inactivity.
+
+            If the problem persists, feel free to reopen it or file a new issue
+            with the latest logs and reproduction steps.
+          close-issue-reason: "not_planned"
+
+          # ---------- Pull request settings ----------
+          days-before-pr-stale: 45             # No activity for 45 days -> mark stale
+          days-before-pr-close: 14             # 14 more days of silence -> close
+          stale-pr-label: "stale"
+          stale-pr-message: |
+            This pull request has been automatically marked as **stale** because
+            it has not had any activity for 45 days.
+
+            If you are still working on it, please reply or push a new commit.
+            Otherwise it will be closed automatically in **14 days**.
+          close-pr-message: |
+            This pull request has been automatically closed due to inactivity.
+
+            If you want to continue working on it later, feel free to reopen it
+            or submit a new pull request.
+
+          # ---------- General behaviour ----------
+          # Issues/PRs carrying any of these labels will never be marked stale
+          exempt-issue-labels: "pinned,security,help wanted,good first issue,in-progress"
+          exempt-pr-labels: "pinned,security,work-in-progress,blocked"
+
+          # Skip anything that has an assignee
+          exempt-all-issue-assignees: true
+          exempt-all-pr-assignees: true
+
+          # Skip anything attached to a milestone
+          exempt-all-issue-milestones: true
+          exempt-all-pr-milestones: true
+
+          # Cap operations per run to avoid hammering the API
+          operations-per-run: 50
+
+          # Automatically remove the stale label when new activity arrives
+          remove-stale-when-updated: true
+
+          # Set to true for dry-run debugging
+          debug-only: false

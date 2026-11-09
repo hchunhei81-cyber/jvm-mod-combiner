@@ -1,0 +1,51 @@
+name: Feature Request
+description: Suggest an idea for the JVM Mod Combiner
+title: '[FEAT]: '
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感謝你為 JVM Mod Combiner 提出新想法！請填寫以下表單，幫助我們評估此功能的需求與架構影響。
+
+  - type: textarea
+    id: problem-relation
+    attributes:
+      label: Is your feature request related to a problem? Please describe.
+      description: A clear and concise description of what the problem is.
+      placeholder: "Ex. I'm always frustrated when [...]"
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution-desired
+    attributes:
+      label: Describe the solution you'd like
+      description: A clear and concise description of what you want to happen.
+      placeholder: "e.g., A specific data bus protocol, cross-platform support, registry syncing"
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives-considered
+    attributes:
+      label: Describe alternatives you've considered
+      description: A clear and concise description of any alternative solutions or features you've considered.
+
+  - type: checkboxes
+    id: architectural-impact
+    attributes:
+      label: Architectural Impact
+      description: Which part of the microkernel does this affect?
+      options:
+        - label: Rust JVM orchestration / launcher
+        - label: Sandbox isolation / ClassLoader
+        - label: Data Bus (TCP / IPC protocol)
+        - label: Cross-sandbox data translation (Mixin/Registry)
+        - label: Documentation / Tooling
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add any other context or screenshots about the feature request here.

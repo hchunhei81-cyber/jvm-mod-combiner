@@ -1,0 +1,52 @@
+# ============================================
+# Auto-assign new issues and pull requests
+# Path: .github/workflows/auto-assign.yml
+# ============================================
+
+name: Auto Assign
+
+on:
+  issues:
+    types: [opened]
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  assign:
+    runs-on: ubuntu-latest
+    # 如果事件发起人就是你自己，跳过，避免给自己重复分配
+    if: github.actor != 'hchunhei81-cyber'
+    steps:
+      - name: Assign issue or PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const pr = context.payload.pull_request;
+
+            // 兼容 issues 和 pull_request 两种 payload
+            const number = issue?.number ?? pr?.number;
+            if (!Number.isInteger(number)) {
+              core.notice('No issue or PR number found in payload.');
+              return;
+            }
+
+            // 已经有受理人的跳过，不覆盖手动分配
+            const existing = issue?.assignees ?? pr?.assignees ?? [];
+            if (existing.length > 0) {
+              core.info('Already has assignees, skipping.');
+              return;
+            }
+
+            await github.rest.issues.addAssignees({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: number,
+              assignees: ['hchunhei81-cyber'],
+            });
+
+            core.info(`Assigned #${number} to hchunhei81-cyber.`);

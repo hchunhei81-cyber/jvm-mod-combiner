@@ -50,15 +50,6 @@ public class BusAgent {
     static final java.util.concurrent.atomic.AtomicBoolean nfProbePending =
         new java.util.concurrent.atomic.AtomicBoolean(false);
 
-    // NeoForge sender: independent reflection cache and transmission state.
-    static volatile Class<?> nfPlayerMethodsClass = null;
-    static volatile Method nfGetXMethod, nfGetYMethod, nfGetZMethod;
-    static volatile Method nfGetYRotMethod, nfGetXRotMethod, nfIsSprintingMethod;
-    static volatile boolean nfPlayerMethodsBound = false;
-    static volatile String nfLastState = null;
-    static volatile long nfLastSendAt = 0L;
-    static volatile boolean nfSendSuccessLogged = false;
-
 
     static final java.util.UUID remotePlayerUuid = java.util.UUID.nameUUIDFromBytes(
             "jvm-mod-combiner:fabric-mirror".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -121,9 +112,6 @@ public class BusAgent {
                             dataBusConnected = true;
                             nfReconnectCleanupPending = true;
                             lastFabricReceiveAt = 0L;
-                            nfLastState = null;
-                            nfLastSendAt = 0L;
-                            nfSendSuccessLogged = false;
                         }
                     }
                     writer.println("{\"register\":\"" + myName + "\"}");
@@ -513,132 +501,6 @@ public class BusAgent {
                     Thread.currentThread().interrupt();
                     return;
                 }
-            }
-        }
-    }
-
-    static void sampleNeoForgePlayer(Object player) throws Exception {
-        if (player == null) return;
-
-        Class<?> playerClass = player.getClass();
-
-        if (!nfPlayerMethodsBound || nfPlayerMethodsClass != playerClass) {
-            bindNeoForgePlayerMethods(playerClass);
-        }
-
-        double x = ((Number) nfGetXMethod.invoke(player)).doubleValue();
-        double y = ((Number) nfGetYMethod.invoke(player)).doubleValue();
-        double z = ((Number) nfGetZMethod.invoke(player)).doubleValue();
-
-        float yaw = ((Number) nfGetYRotMethod.invoke(player)).floatValue();
-        float pitch = ((Number) nfGetXRotMethod.invoke(player)).floatValue();
-
-        boolean sprint = (Boolean) nfIsSprintingMethod.invoke(player);
-
-        String state =
-            Double.toString(x) + "|" +
-            Double.toString(y) + "|" +
-            Double.toString(z) + "|" +
-            Float.toString(yaw) + "|" +
-            Float.toString(pitch) + "|" +
-            sprint;
-
-        long now = System.currentTimeMillis();
-
-        boolean changed = !state.equals(nfLastState);
-        boolean heartbeat = now - nfLastSendAt >= 1000L;
-
-        if (changed || heartbeat) {
-            sendNeoForgePlayer(
-                x, y, z, yaw, pitch,
-                sprint, state, now, changed
-            );
-        }
-    }
-
-    static void bindNeoForgePlayerMethods(Class<?> playerClass)
-        throws Exception {
-
-        // Do not reuse Fabric 1.21.4 obfuscated method names here.
-        Method x = playerClass.getMethod("getX");
-        Method y = playerClass.getMethod("getY");
-        Method z = playerClass.getMethod("getZ");
-        Method yaw = playerClass.getMethod("getYRot");
-        Method pitch = playerClass.getMethod("getXRot");
-        Method sprint = playerClass.getMethod("isSprinting");
-
-        nfGetXMethod = x;
-        nfGetYMethod = y;
-        nfGetZMethod = z;
-        nfGetYRotMethod = yaw;
-        nfGetXRotMethod = pitch;
-        nfIsSprintingMethod = sprint;
-
-        nfPlayerMethodsClass = playerClass;
-        nfPlayerMethodsBound = true;
-
-        System.out.println(
-            "[BusAgent:neoforge][BIND] LocalPlayer methods " +
-            "X=" + x.getName() +
-            " Y=" + y.getName() +
-            " Z=" + z.getName() +
-            " Yaw=" + yaw.getName() +
-            " Pitch=" + pitch.getName() +
-            " Sprint=" + sprint.getName()
-        );
-    }
-
-    static void sendNeoForgePlayer(
-        double x,
-        double y,
-        double z,
-        float yaw,
-        float pitch,
-        boolean sprint,
-        String state,
-        long now,
-        boolean changed
-    ) {
-        String json =
-            "{\"to\":\"fabric\",\"type\":\"player_move\"," +
-            "\"x\":" + Double.toString(x) +
-            ",\"y\":" + Double.toString(y) +
-            ",\"z\":" + Double.toString(z) +
-            ",\"yaw\":" + Float.toString(yaw) +
-            ",\"pitch\":" + Float.toString(pitch) +
-            ",\"sprint\":" + sprint +
-            "}";
-
-        synchronized (BusAgent.class) {
-            PrintWriter writer = out;
-
-            if (writer == null) return;
-
-            writer.println(json);
-
-            if (writer.checkError()) {
-                System.err.println(
-                    "[BusAgent:neoforge][SEND][ERROR] TCP write failed"
-                );
-                return;
-            }
-
-            // Only update the cache after a successful write.
-            nfLastState = state;
-            nfLastSendAt = now;
-
-            if (!nfSendSuccessLogged || changed) {
-                nfSendSuccessLogged = true;
-
-                System.out.println(
-                    "[BusAgent:neoforge][SEND] player_move -> fabric" +
-                    " x=" + x +
-                    " y=" + y +
-                    " z=" + z +
-                    " yaw=" + yaw +
-                    " pitch=" + pitch +
-                    " sprint=" + sprint
-                );
             }
         }
     }

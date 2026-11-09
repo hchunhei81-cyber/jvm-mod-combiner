@@ -1579,6 +1579,25 @@ fn start_data_bus() -> std::io::Result<()> {
                         .unwrap_or(false);
                     let from = my_name.clone().unwrap_or_default();
 
+                    // One-way authority policy:
+                    // Fabric is the only authoritative player-state publisher.
+                    // No other registered client may publish player_move.
+                    let message_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+                    if message_type == "player_move" && from != "fabric" {
+                        println!(
+                            "[DataBus][REJECT] '{}' attempted to publish player_move",
+                            from
+                        );
+
+                        let _ = tx.send(
+                            r#"{"error":"player_state_authority_violation","message_type":"player_move","authoritative_sender":"fabric"}"#
+                                .to_string(),
+                        );
+
+                        continue;
+                    }
+
                     if to.is_empty() && !is_broadcast {
                         let _ = tx.send(r#"{"error":"missing_to"}"#.to_string());
                         continue;

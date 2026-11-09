@@ -106,15 +106,23 @@ Tested primarily on macOS with Apple Silicon and Temurin JDK 21.
 - [x] Fabric player-state messages have been routed through the Rust DataBus to NeoForge.
 - [x] NeoForge can discover its `Minecraft` singleton, `ClientLevel`, and `LocalPlayer` through the Java Agent.
 - [x] NeoForge has a proof-of-concept `RemotePlayer` injection path for mirroring Fabric player state.
+- [x] Initial mirror removal after Fabric heartbeat timeout has been verified at runtime.
+- [x] Initial mirror recreation after Fabric re-enters a world has been verified at runtime.
 
 ### Currently in progress
 
-- [ ] NeoForge local-player state sender.
-- [ ] Fabric-side receiver and remote-player mirror implementation.
-- [ ] Bidirectional player-state synchronization.
-- [ ] More robust player identity and entity lifecycle management.
-- [ ] Version-specific reflection and mapping resolution.
-- [ ] Better synchronization behavior under latency and packet loss.
+- [ ] Rebuild and package the Java Agent with the receiver-only NeoForge behavior.
+- [ ] Enforce the one-way player-state authority policy in the Rust DataBus.
+- [ ] Reject NeoForge-originated authoritative `player_move` messages.
+- [ ] Improve remote-player identity and entity lifecycle management.
+- [ ] Add protocol validation, sequence numbers, and stale-state rejection.
+- [ ] Verify disconnect, reconnect, and world-transition recovery.
+- [ ] Improve synchronization behavior under latency and packet loss.
+
+**Current authority model:** Fabric is the sole authoritative source of player
+movement state. NeoForge receives Fabric state and maintains a remote-player
+mirror. Reverse-direction requests or diagnostics may be supported in the
+future, but NeoForge must not publish authoritative `player_move` state.
 
 ### Not yet implemented
 
@@ -357,9 +365,20 @@ This project is research into those challenges, not a claim that they have alrea
 - [x] Fabric-to-NeoForge message delivery.
 - [x] NeoForge player discovery.
 - [x] NeoForge remote-player injection prototype.
-- [ ] NeoForge player-state sender.
-- [ ] Fabric receiver and mirror injection.
-- [ ] Bidirectional synchronization.
+- [x] Initial Fabric-to-NeoForge position and rotation updates.
+- [x] Initial mirror removal after Fabric heartbeat timeout.
+- [x] Initial mirror recreation after Fabric world reload.
+- [ ] Rebuild and package the receiver-only Java Agent.
+- [ ] Enforce one-way player-state authority in the Rust DataBus.
+- [ ] Reject NeoForge-originated authoritative `player_move` messages.
+- [ ] Verify DataBus disconnect and reconnect lifecycle behavior.
+- [ ] Improve entity identity, lifecycle, and stale-state handling.
+- [ ] Add interpolation and synchronization quality controls.
+
+The synchronization model is intentionally asymmetric: Fabric generates
+authoritative player state, while NeoForge receives that state and maintains
+a remote mirror. This does not prohibit explicitly defined reverse-direction
+requests, diagnostics, or interaction messages.
 
 ### Phase 4 — Interoperability
 

@@ -479,68 +479,119 @@ Potential future problems include:
 
 These problems become increasingly important when synchronization expands beyond player coordinates.
 
-### 6.2 Proposed Solution: A Structured Messaging Layer
+### 6.2 Proposed Solution: An Authority-Aware Messaging Layer
 
-The DataBus should evolve from a simple JSON router into a protocol-aware messaging service.
+The DataBus should evolve from a simple JSON router into a protocol-aware
+messaging service. Routing alone is insufficient: the bus must also enforce
+which sandbox is allowed to publish each authoritative state category.
 
-**1. Message Classification**
+**1. Explicit Authority Model**
+
+The initial player-state protocol has one authoritative source:
+
+- Fabric is the authoritative publisher of local-player movement state.
+- NeoForge is a receiver-only consumer of authoritative `player_move` messages.
+- NeoForge may maintain a visual or gameplay-side mirror, but that mirror
+  must never become a second source of authoritative player movement.
+- Reverse-direction messages may be introduced for explicitly defined
+  requests, diagnostics, capability reports, and acknowledgements.
+
+This is an architectural rule, not merely a convention followed by the
+Java Agents.
+
+**2. Sender Identity and Message Authorization**
+
+The Rust DataBus must derive the sender identity from the registered TCP
+client connection. It must not trust a sender name supplied only inside
+the JSON payload.
+
+Before routing a message, the DataBus should validate:
+
+- The registered sender identity.
+- The message type.
+- The sender's permission to publish that message type.
+- The destination and broadcast policy.
+- Required fields and value ranges.
+- Protocol version and message size.
+
+For the initial policy:
+
+| Registered sender | Message type | Policy |
+|---|---|---|
+| Fabric | `player_move` | Allow |
+| NeoForge | `player_move` | Reject |
+| NeoForge | Explicit request or diagnostic | Allow only when defined |
+| Fabric | Explicit response or diagnostic | Allow only when defined |
+
+A rejected message must not be routed to any recipient. The rejection should
+be observable through a structured error or diagnostic log.
+
+**3. Message Classification**
 
 Separate messages into categories:
 
 | Message category | Example | Proposed handling |
 |---|---|---|
-| High-frequency state | Player position | Latest-state priority |
-| Discrete events | Attack request | Preserve event identity |
+| Authoritative state | Fabric `player_move` | Source-authorized, latest-state priority |
+| Requests | Interaction request | Explicit request/response semantics |
+| Discrete events | Spawn or remove event | Preserve event identity |
 | Initialization | Entity registration | Reliable delivery |
 | Heartbeat | Client health | Periodic monitoring |
 | World metadata | Dimension information | Snapshot-based updates |
+| Diagnostics | Runtime status | Non-authoritative reporting |
 
-**2. Backpressure**
+Message type and sender permission must be validated together. A message
+category must not implicitly grant every sandbox permission to publish it.
 
-Do not allow a slow receiver to accumulate an unlimited number of outdated movement packets.
+**4. Ordering, Backpressure, and Stale-State Rejection**
 
-For high-frequency state, replace obsolete queued updates with the newest state whenever possible.
+Do not allow a slow receiver to accumulate an unlimited number of outdated
+movement packets.
 
-Discrete gameplay events must not be silently discarded.
+For high-frequency authoritative state:
 
-**3. Reconnection and Resynchronization**
+- Attach a monotonically increasing sequence number per source session.
+- Include a timestamp and session or connection generation.
+- Reject updates older than the latest accepted state.
+- Prefer the newest queued movement state when intermediate states are obsolete.
+- Keep discrete events separate so they are not silently discarded.
+
+Sequence numbers from a previous connection generation must not be treated
+as newer than state from the current session.
+
+**5. Reconnection and Resynchronization**
 
 After reconnecting:
 
-- Re-register the sandbox.
-- Exchange protocol capabilities.
-- Request a fresh state snapshot.
-- Recreate or recover remote entities.
-- Resume incremental updates.
+- Register the sandbox identity again.
+- Establish a new connection generation.
+- Exchange protocol versions and capabilities.
+- Wait for a fresh authoritative Fabric state snapshot.
+- Recreate or recover the NeoForge mirror.
+- Resume incremental state updates only after the initial snapshot is accepted.
 
-**4. Message Validation**
+A reconnect must not cause NeoForge to publish its local player as a substitute
+authority when Fabric is unavailable.
 
-Every message should be validated before routing.
-
-This includes:
-
-- Message type.
-- Destination.
-- Required fields.
-- Numeric ranges.
-- Protocol version.
-- Message size.
-
-**5. Transport Evolution**
+**6. Transport Evolution**
 
 Keep TCP for the current prototype.
 
-Only consider shared-memory IPC, memory-mapped queues, or other lower-latency transports after profiling demonstrates that TCP is a meaningful bottleneck.
+Only consider shared-memory IPC, memory-mapped queues, or other lower-latency
+transports after profiling demonstrates that TCP is a meaningful bottleneck.
 
-The phrase "zero-copy" should be reserved for an implementation that actually avoids the relevant memory copies. The current TCP JSON implementation is an IPC prototype, not a zero-copy transport.
+The current TCP JSON implementation is an IPC prototype, not a zero-copy
+transport.
 
 ---
 
 ## 7. Development Strategy: What We Will Actually Implement
 
-The architecture above describes long-term challenges. The implementation should proceed incrementally rather than attempting to solve every problem at once.
+The architecture above describes long-term challenges. Implementation should
+proceed incrementally, preserving the one-way authority model before expanding
+the protocol.
 
-### Phase 1 — Stabilize the Current Prototype
+### Phase 1 — Enforce and Stabilize the Current One-Way Prototype
 
 **Priority: Highest**
 
@@ -553,29 +604,53 @@ The architecture above describes long-term challenges. The implementation should
 - [x] NeoForge discovers its Minecraft instance.
 - [x] NeoForge discovers its `ClientLevel`.
 - [x] NeoForge discovers its `LocalPlayer`.
-- [x] NeoForge can receive Fabric state and create a `RemotePlayer` mirror in the prototype.
-- [ ] Implement NeoForge-to-Fabric player-state sending.
-- [ ] Implement Fabric-side remote entity receiving and mirroring.
-- [ ] Verify bidirectional synchronization.
-- [ ] Verify reconnection and state recovery.
+- [x] NeoForge can receive Fabric state and create a `RemotePlayer` mirror
+      in the prototype.
+- [x] The NeoForge monitor no longer actively samples its local player for
+      authoritative movement transmission in the edited Java source.
+- [ ] Rebuild and package the Java Agent containing the receiver-only change.
+- [ ] Add Rust-side sender authorization for message types.
+- [ ] Reject `player_move` from the registered `neoforge` connection.
+- [ ] Preserve explicitly permitted reverse-direction message types.
+- [ ] Verify that Fabric `player_move` continues to reach NeoForge.
+- [ ] Verify that NeoForge `player_move` is rejected and never routed.
+- [ ] Verify that rejection does not disconnect either sandbox.
+- [ ] Verify reconnect and fresh-state recovery.
 - [ ] Verify that both clients remain responsive during synchronization.
 
-The next immediate implementation task is to make NeoForge sample its local player on the Minecraft game thread and send position, rotation, and sprint state through the DataBus.
+The immediate implementation task is to rebuild the Java Agent and verify that
+the NeoForge monitor is receiver-only at runtime.
 
-The following task is to implement the corresponding Fabric receiver.
+The next task is to enforce the same policy at the Rust DataBus boundary.
+The Rust layer is the final authority for message routing and must reject
+unauthorized state publication even if a Java Agent is misconfigured.
 
-### Phase 2 — Establish a Stable Synchronization Protocol
+### Phase 2 — Establish a Versioned Synchronization Protocol
 
 - [ ] Introduce protocol versioning.
 - [ ] Add sequence numbers and timestamps.
+- [ ] Add connection or session generations.
 - [ ] Normalize player state.
 - [ ] Add dimension and world identity information.
 - [ ] Implement stale-packet rejection.
 - [ ] Add heartbeat and timeout handling.
 - [ ] Implement reconnect and full-state resynchronization.
 - [ ] Separate continuous state updates from discrete events.
+- [ ] Define explicit permissions for each message type.
 
-### Phase 3 — Expand Beyond Player Coordinates
+### Phase 3 — Stabilize Remote Player Lifecycle
+
+- [ ] Establish stable remote-player identity.
+- [ ] Prevent entity ID collisions.
+- [ ] Handle spawn and despawn events.
+- [ ] Handle dimension and world transitions.
+- [ ] Make removal failures retryable.
+- [ ] Prevent duplicate mirrors after reconnection.
+- [ ] Add interpolation and smoothing.
+- [ ] Handle missing chunks and unloaded entity regions.
+- [ ] Test repeated world unload and reload cycles.
+
+### Phase 4 — Expand Beyond Player Coordinates
 
 - [ ] Entity discovery and entity identity mapping.
 - [ ] Entity spawn and despawn events.
@@ -586,9 +661,10 @@ The following task is to implement the corresponding Fabric receiver.
 - [ ] Dimension and world compatibility checks.
 - [ ] Mod-specific compatibility adapters.
 
-Each feature must be tested independently before being included in the general synchronization protocol.
+Each feature must define its authoritative source, permitted message directions,
+consistency requirements, and failure behavior before implementation.
 
-### Phase 4 — Improve Compatibility and Reliability
+### Phase 5 — Improve Compatibility and Portability
 
 - [ ] Establish loader-specific adapter interfaces.
 - [ ] Implement capability-based synchronization.
@@ -597,19 +673,8 @@ Each feature must be tested independently before being included in the general s
 - [ ] Profile CPU, memory, and network overhead.
 - [ ] Test behavior under GC pauses and temporary disconnections.
 - [ ] Build automated compatibility tests for supported Minecraft versions.
-
-### Phase 5 — Cross-Platform Support and User Experience
-
-- [ ] Windows support.
-- [ ] Linux support.
-- [ ] macOS stability improvements.
-- [ ] Automated Java and Minecraft environment detection.
-- [ ] Improved dependency resolution.
-- [ ] Unified process and window management.
-- [ ] Optional window integration.
-- [ ] User-configurable synchronization policies.
-
----
+- [ ] Verify Windows and Linux support.
+- [ ] Improve automated Java and Minecraft environment detection.
 
 ## 8. Architectural Principles
 
@@ -617,7 +682,7 @@ The following principles will guide future engineering decisions.
 
 1. **Isolation before integration.** Keep loader internals separate wherever possible.
 2. **Asynchronous communication before lockstep.** One sandbox must not control the tick rate of another.
-3. **Explicit authority before reconciliation.** Avoid assuming two independent simulations will produce identical results.
+3. **Explicit authority before reconciliation.** Fabric is the sole authoritative publisher of player movement state; NeoForge consumes that state as a receiver. Reverse-direction requests must not become a second authoritative state stream.
 4. **Normalized data before internal object sharing.** Minecraft classes must not become the cross-loader protocol.
 5. **Adapters before universal bytecode manipulation.** Prefer stable integration boundaries when available.
 6. **Graceful degradation before hard failure.** Unsupported features should fall back to visual proxies or disabled synchronization.
@@ -628,22 +693,45 @@ The following principles will guide future engineering decisions.
 
 ## 9. Final Direction
 
-JVM Mod Combiner is not intended to make Fabric and Forge/NeoForge internally identical.
+JVM Mod Combiner is not intended to make Fabric and Forge/NeoForge internally
+identical.
 
-The goal is to allow independently running mod-loader environments to exchange selected game state and interact through explicitly defined synchronization interfaces.
+The goal is to allow independently running mod-loader environments to exchange
+selected game state and interact through explicitly defined synchronization
+interfaces.
 
-The distinction is important:
+The initial player synchronization architecture is intentionally asymmetric:
 
-- The loaders remain independent.
-- Their class spaces remain isolated.
-- Their game loops remain independent.
-- Rust coordinates communication.
-- Loader-specific Java Agents translate local game state.
-- The DataBus carries normalized messages.
-- Compatibility adapters define what can be synchronized.
+- Fabric is the sole authoritative source of player movement state.
+- NeoForge receives Fabric state and maintains a remote-player mirror.
+- Rust coordinates communication and enforces sender authorization.
+- Loader-specific Java Agents translate local runtime data into normalized
+  protocol messages.
+- Reverse-direction messages may carry explicitly defined requests,
+  acknowledgements, diagnostics, or capability reports.
+- Reverse-direction messages must not create a second authoritative
+  `player_move` stream.
 
-A fully compatible cross-loader Minecraft environment is a much larger objective than launching two clients.
+The authority policy must be enforced at multiple layers:
 
-The practical path is to prove each layer separately, beginning with player-state synchronization, then expanding toward entities, blocks, inventories, and selected modded systems.
+1. The NeoForge Java Agent must not actively sample and publish its local
+   player as authoritative movement state.
+2. The Rust DataBus must reject unauthorized `player_move` messages based on
+   the registered connection identity.
+3. The receiver must validate protocol version, session generation, sequence
+   number, and state freshness before applying updates.
 
-**The immediate objective is not universal mod compatibility. It is a stable, measurable, bidirectional synchronization foundation.**
+A Java Agent convention alone is not a security or correctness boundary.
+The DataBus must enforce the protocol even if a client sends an invalid
+message.
+
+A fully compatible cross-loader Minecraft environment is a much larger
+objective than launching two clients or mirroring player coordinates.
+
+The practical path is to prove each layer separately: enforce one-way player
+authority, stabilize mirror lifecycle and recovery, then expand toward entities,
+blocks, inventories, and selected modded systems.
+
+**The immediate objective is a stable, measurable, Fabric-authoritative
+player-state pipeline with Rust-enforced message permissions—not bidirectional
+player-state synchronization.**

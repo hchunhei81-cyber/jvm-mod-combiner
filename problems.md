@@ -1405,57 +1405,60 @@ The NeoForge Agent receives and parses the message and updates the mirror entity
 The current implementation is a proof of concept. It requires more testing for movement smoothness, network latency, entity lifecycle, and version compatibility.
 
 ---
+## 8.5 NeoForge-to-Fabric Synchronization - Historical Design
 
-## 8.5 NeoForge-to-Fabric Synchronization
+<badge color="warning">Superseded by the one-way authority architecture</badge>
 
-<badge color="warning">In progress</badge>
+**Historical objective**
 
-**Objective**
-
-Implement the reverse direction:
+The original prototype considered a reverse player-state synchronization path:
 
 ```text
 NeoForge LocalPlayer
-        |
-        v
+       |
+       v
 NeoForge Java Agent
-        |
-        v
+       |
+       v
 Rust DataBus
-        |
-        v
+       |
+       v
 Fabric Java Agent
 ```
+The original design attempted to make both sandboxes publish their local-player movement state and mirror the remote player.
 
-**Planned sender behavior**
+### Why this design was retired
 
-The NeoForge Agent should:
+Bidirectional authoritative player-state synchronization creates two competing sources of truth.
 
-1. Sample the local player on the Minecraft game thread.
-2. Read X, Y, Z, yaw, pitch, and sprint state.
-3. Send state changes immediately.
-4. Send a heartbeat approximately once per second.
-5. Preserve state consistency after TCP reconnection.
+Different Minecraft versions, independent game loops, and different world states introduce conflicts that require additional ownership, conflict-resolution, and feedback-loop prevention mechanisms.
 
-**Known implementation considerations**
+The current prototype does not need two authoritative player-state publishers.
 
-- Game-state access must occur on the Minecraft game thread.
-- NeoForge reflection bindings must be independent of Fabric bindings.
-- The sender must not update its last-successful-state cache when the TCP writer is unavailable.
-- Reconnection should trigger a fresh state transmission.
-- The sender must avoid repeatedly logging the same reflection or TCP failure.
+### Current implementation status
+- The active call to sampleNeoForgePlayer(player) has been removed from the edited NeoForge monitor source.
+- NeoForge is intended to operate as a receiver-only client.
+- The old sampleNeoForgePlayer() and sendNeoForgePlayer() methods remain in the Java source but are inactive unless called by another code path.
+- The edited Java source has not yet been rebuilt and packaged into the formal bus-agent.jar.
+- Rust DataBus does not yet enforce the one-way sender authorization rule.
+
+### Current architecture policy
+
+Fabric is the sole authoritative publisher of player movement state.
+
+NeoForge receives Fabric player_move messages and updates its remote-player mirror. NeoForge must not publish authoritative player_move messages back to Fabric.
+
+Future reverse-direction messages may include explicitly defined interaction requests, acknowledgements, diagnostics, or capability reports. Each requires its own protocol definition and authorization rules.
 
 **Remaining work**
 
-- Complete and verify the NeoForge sender.
-- Implement Fabric-side message reception.
-- Inject a remote mirror entity into Fabric.
-- Test simultaneous movement in both directions.
-- Prevent synchronization feedback loops.
+- Rebuild and package the updated Java Agent.
+- Verify that NeoForge no longer publishes local-player movement state.
+- Add Rust-side authorization based on the registered TCP connection identity.
+- Reject NeoForge-originated `player_move` messages before routing.
+- Verify that permitted reverse-direction message types remain supported.
 
-Until the Fabric receive path is implemented and verified, bidirectional player synchronization must not be considered complete.
-
----
+The historical bidirectional design is retained for architectural context.
 
 # 9. ClassLoader Isolation and Mixin Compatibility
 
@@ -1751,13 +1754,21 @@ Validate the same launch pipeline on:
 
 The following order minimizes the risk of expanding the architecture before the current prototype is stable.
 
-### Priority 1 — Complete Bidirectional Player Synchronization
+### Priority 1 — Enforce and Stabilize One-Way Player-State Authority
 
-- [ ] Complete NeoForge player-state sender.
-- [ ] Implement Fabric-side receiver.
-- [ ] Add Fabric remote-player injection.
-- [ ] Verify both directions independently.
-- [ ] Test reconnect and state resynchronization.
+**Goal:** Enforce Fabric as the sole authoritative player-state publisher and keep NeoForge receiver-only.
+
+- [x] Establish Fabric as the sole authoritative player-state source.
+- [x] Remove the active NeoForge player-state sampling call from the edited monitor source.
+- [ ] Rebuild and package the updated Java Agent.
+- [ ] Enforce sender authorization in the Rust DataBus using registered connection identity.
+- [ ] Reject `player_move` messages originating from the registered NeoForge connection.
+- [ ] Preserve explicitly authorized reverse-direction message types.
+- [ ] Verify Fabric-to-NeoForge player-state delivery.
+- [ ] Verify that rejected NeoForge `player_move` messages do not disconnect the client.
+- [ ] Test reconnect behavior and fresh state transmission.
+- [ ] Add protocol versioning, sequence numbers, timestamps, and session generations.
+- [ ] Reject stale or out-of-session player-state updates.
 
 ### Priority 2 — Improve Entity Lifecycle Management
 
@@ -1792,6 +1803,28 @@ The following order minimizes the risk of expanding the architecture before the 
 - [ ] Develop a stable shared data interface.
 - [ ] Investigate shared-memory transport.
 
+## Development Order
+
+The intended implementation order is:
+
+1. Rebuild and package the receiver-only Java Agent.
+2. Implement Rust DataBus sender authorization.
+3. Verify Fabric-to-NeoForge player-state delivery.
+4. Verify NeoForge `player_move` rejection while preserving explicitly allowed reverse-direction messages.
+5. Verify that rejected messages do not disconnect the NeoForge client.
+6. Test heartbeat timeout, mirror removal, and mirror recreation.
+7. Improve entity lifecycle handling and failure recovery.
+8. Add protocol versioning, timestamps, sequence numbers, and session generations.
+9. Expand entity and gameplay synchronization features.
+10. Continue launcher refactoring and cross-version compatibility testing.
+
+## Current Development Focus
+
+The current focus is enforcing and stabilizing the one-way player-state authority architecture.
+
+**Next milestone:**
+
+Complete the receiver-only Java Agent rebuild, enforce sender authorization in the Rust DataBus, and verify reliable Fabric-to-NeoForge synchronization with correct rejection of unauthorized reverse player-state messages.
 ---
 
 ## Final Note

@@ -30,6 +30,16 @@ public class BusAgent {
     static volatile Class<?> nfMcClass = null;
     static volatile Object remotePlayer = null;
     static volatile Object remotePlayerLevel = null;
+
+    // NeoForge mirror lifecycle state.
+    static volatile boolean dataBusConnected = false;
+    static volatile boolean nfReconnectCleanupPending = false;
+    static volatile long dataBusGeneration = 0L;
+    static volatile long lastFabricReceiveAt = 0L;
+    static final long FABRIC_TIMEOUT_MS = 3000L;
+    static final java.util.concurrent.atomic.AtomicBoolean nfRemovalPending =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
+
     static volatile boolean nfInitialized = false;
 
     static volatile boolean nfMcFoundLogged = false;
@@ -39,6 +49,15 @@ public class BusAgent {
 
     static final java.util.concurrent.atomic.AtomicBoolean nfProbePending =
         new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    // NeoForge sender: independent reflection cache and transmission state.
+    static volatile Class<?> nfPlayerMethodsClass = null;
+    static volatile Method nfGetXMethod, nfGetYMethod, nfGetZMethod;
+    static volatile Method nfGetYRotMethod, nfGetXRotMethod, nfIsSprintingMethod;
+    static volatile boolean nfPlayerMethodsBound = false;
+    static volatile String nfLastState = null;
+    static volatile long nfLastSendAt = 0L;
+    static volatile boolean nfSendSuccessLogged = false;
 
 
     static final java.util.UUID remotePlayerUuid = java.util.UUID.nameUUIDFromBytes(
@@ -95,12 +114,32 @@ public class BusAgent {
                         true
                     )
                 ) {
-                    out = writer;
+                    synchronized (BusAgent.class) {
+                        out = writer;
+                        if (myName.equals("neoforge")) {
+                            dataBusGeneration++;
+                            dataBusConnected = true;
+                            nfReconnectCleanupPending = true;
+                            lastFabricReceiveAt = 0L;
+                            nfLastState = null;
+                            nfLastSendAt = 0L;
+                            nfSendSuccessLogged = false;
+                        }
+                    }
                     writer.println("{\"register\":\"" + myName + "\"}");
 
                     System.out.println(
                         "[BusAgent:" + myName + "] Connected to DataBus"
                     );
+                    if (myName.equals("neoforge")) {
+                        scheduleRemotePlayerRemoval(
+                            "bus-reconnected",
+                            dataBusGeneration,
+                            2,
+                            0L
+                        );
+                    }
+
 
                     String line;
 
@@ -125,6 +164,9 @@ public class BusAgent {
                         }
 
                         if (myName.equals("neoforge")) {
+                            synchronized (BusAgent.class) {
+                                lastFabricReceiveAt = System.currentTimeMillis();
+                            }
                             handleNeoForgeSync(line);
                         }
 
@@ -132,11 +174,12 @@ public class BusAgent {
                     }
                 } finally {
                     out = null;
+                    markDataBusDisconnected("stream-ended");
                 }
 
             } catch (Exception e) {
                 out = null;
-
+                markDataBusDisconnected("connection-error");
                 System.out.println(
                     "[BusAgent:" + myName +
                     "] Bus disconnected: " + e.getMessage()
@@ -373,6 +416,8 @@ public class BusAgent {
             try {
                 initNeoForgeMinecraft();
 
+                checkRemotePlayerLifecycle();
+
                 Object mc = nfMcInstance;
 
                 if (mc != null) {
@@ -422,6 +467,10 @@ public class BusAgent {
                                         }
                                     }
 
+                                    // NeoForge is a receiver-only client.
+                                    // Fabric is the sole authoritative player-state source.
+                                    // Never sample or transmit NeoForge LocalPlayer state.
+
                                 } catch (Throwable e) {
                                     if (!nfProbeErrorPrinted) {
                                         nfProbeErrorPrinted = true;
@@ -468,7 +517,133 @@ public class BusAgent {
         }
     }
 
-static synchronized void initNeoForgeMinecraft() {
+    static void sampleNeoForgePlayer(Object player) throws Exception {
+        if (player == null) return;
+
+        Class<?> playerClass = player.getClass();
+
+        if (!nfPlayerMethodsBound || nfPlayerMethodsClass != playerClass) {
+            bindNeoForgePlayerMethods(playerClass);
+        }
+
+        double x = ((Number) nfGetXMethod.invoke(player)).doubleValue();
+        double y = ((Number) nfGetYMethod.invoke(player)).doubleValue();
+        double z = ((Number) nfGetZMethod.invoke(player)).doubleValue();
+
+        float yaw = ((Number) nfGetYRotMethod.invoke(player)).floatValue();
+        float pitch = ((Number) nfGetXRotMethod.invoke(player)).floatValue();
+
+        boolean sprint = (Boolean) nfIsSprintingMethod.invoke(player);
+
+        String state =
+            Double.toString(x) + "|" +
+            Double.toString(y) + "|" +
+            Double.toString(z) + "|" +
+            Float.toString(yaw) + "|" +
+            Float.toString(pitch) + "|" +
+            sprint;
+
+        long now = System.currentTimeMillis();
+
+        boolean changed = !state.equals(nfLastState);
+        boolean heartbeat = now - nfLastSendAt >= 1000L;
+
+        if (changed || heartbeat) {
+            sendNeoForgePlayer(
+                x, y, z, yaw, pitch,
+                sprint, state, now, changed
+            );
+        }
+    }
+
+    static void bindNeoForgePlayerMethods(Class<?> playerClass)
+        throws Exception {
+
+        // Do not reuse Fabric 1.21.4 obfuscated method names here.
+        Method x = playerClass.getMethod("getX");
+        Method y = playerClass.getMethod("getY");
+        Method z = playerClass.getMethod("getZ");
+        Method yaw = playerClass.getMethod("getYRot");
+        Method pitch = playerClass.getMethod("getXRot");
+        Method sprint = playerClass.getMethod("isSprinting");
+
+        nfGetXMethod = x;
+        nfGetYMethod = y;
+        nfGetZMethod = z;
+        nfGetYRotMethod = yaw;
+        nfGetXRotMethod = pitch;
+        nfIsSprintingMethod = sprint;
+
+        nfPlayerMethodsClass = playerClass;
+        nfPlayerMethodsBound = true;
+
+        System.out.println(
+            "[BusAgent:neoforge][BIND] LocalPlayer methods " +
+            "X=" + x.getName() +
+            " Y=" + y.getName() +
+            " Z=" + z.getName() +
+            " Yaw=" + yaw.getName() +
+            " Pitch=" + pitch.getName() +
+            " Sprint=" + sprint.getName()
+        );
+    }
+
+    static void sendNeoForgePlayer(
+        double x,
+        double y,
+        double z,
+        float yaw,
+        float pitch,
+        boolean sprint,
+        String state,
+        long now,
+        boolean changed
+    ) {
+        String json =
+            "{\"to\":\"fabric\",\"type\":\"player_move\"," +
+            "\"x\":" + Double.toString(x) +
+            ",\"y\":" + Double.toString(y) +
+            ",\"z\":" + Double.toString(z) +
+            ",\"yaw\":" + Float.toString(yaw) +
+            ",\"pitch\":" + Float.toString(pitch) +
+            ",\"sprint\":" + sprint +
+            "}";
+
+        synchronized (BusAgent.class) {
+            PrintWriter writer = out;
+
+            if (writer == null) return;
+
+            writer.println(json);
+
+            if (writer.checkError()) {
+                System.err.println(
+                    "[BusAgent:neoforge][SEND][ERROR] TCP write failed"
+                );
+                return;
+            }
+
+            // Only update the cache after a successful write.
+            nfLastState = state;
+            nfLastSendAt = now;
+
+            if (!nfSendSuccessLogged || changed) {
+                nfSendSuccessLogged = true;
+
+                System.out.println(
+                    "[BusAgent:neoforge][SEND] player_move -> fabric" +
+                    " x=" + x +
+                    " y=" + y +
+                    " z=" + z +
+                    " yaw=" + yaw +
+                    " pitch=" + pitch +
+                    " sprint=" + sprint
+                );
+            }
+        }
+    }
+
+    static synchronized void initNeoForgeMinecraft() {
         if (nfMcInstance != null)
             return;
         try {
@@ -508,9 +683,24 @@ static synchronized void initNeoForgeMinecraft() {
             float pitch = (float) readJsonNumber(json, "pitch");
             boolean sprint = readJsonBool(json, "sprint");
 
+            final long syncGeneration;
+            synchronized (BusAgent.class) {
+                if (!dataBusConnected) {
+                    return;
+                }
+                syncGeneration = dataBusGeneration;
+            }
+
             Object mc = nfMcInstance;
             nfMcClass.getMethod("execute", Runnable.class).invoke(mc, (Runnable) () -> {
                 try {
+                    synchronized (BusAgent.class) {
+                        if (!dataBusConnected ||
+                            dataBusGeneration != syncGeneration) {
+                            return;
+                        }
+                    }
+
                     Object level = nfMcClass.getField("level").get(mc);
                     if (level == null)
                         return;
@@ -522,8 +712,7 @@ static synchronized void initNeoForgeMinecraft() {
                     Class<?> entityClass = Class.forName("net.minecraft.world.entity.Entity", true, loader);
 
                     if (remotePlayer != null && remotePlayerLevel != level) {
-                        remotePlayer = null;
-                        remotePlayerLevel = null;
+                        removeRemotePlayerNow("world-changed");
                     }
 
                     if (remotePlayer == null) {
@@ -590,6 +779,261 @@ static synchronized void initNeoForgeMinecraft() {
             });
         } catch (Throwable e) {
             System.out.println("[BusAgent:neoforge] handle err: " + e);
+        }
+    }
+
+
+    // Must only be called on the NeoForge Minecraft game thread.
+    // Must only be called on the NeoForge Minecraft game thread.
+    static void removeRemotePlayerNow(String reason) {
+        Object player = remotePlayer;
+
+        if (player == null) {
+            remotePlayerLevel = null;
+            return;
+        }
+
+        boolean removed = false;
+        Throwable removalError = null;
+
+        try {
+            player.getClass().getMethod("discard").invoke(player);
+            removed = true;
+        } catch (Throwable discardError) {
+            removalError = discardError;
+
+            try {
+                ClassLoader loader = player.getClass().getClassLoader();
+
+                Class<?> reasonClass = Class.forName(
+                    "net.minecraft.world.entity.Entity$RemovalReason",
+                    true,
+                    loader
+                );
+
+                Object discarded = Enum.valueOf(
+                    (Class<Enum>) reasonClass.asSubclass(Enum.class),
+                    "DISCARDED"
+                );
+
+                player.getClass()
+                    .getMethod("remove", reasonClass)
+                    .invoke(player, discarded);
+
+                removed = true;
+
+            } catch (Throwable fallbackError) {
+                removalError = fallbackError;
+
+                try {
+                    removed = Boolean.TRUE.equals(
+                        player.getClass()
+                            .getMethod("isRemoved")
+                            .invoke(player)
+                    );
+                } catch (Throwable ignored) {
+                    // Keep the reference so a later lifecycle check can retry.
+                }
+            }
+        }
+
+        if (removed) {
+            if (remotePlayer == player) {
+                remotePlayer = null;
+                remotePlayerLevel = null;
+            }
+
+            System.out.println(
+                "[BusAgent:neoforge][LIFECYCLE] "
+                + "Mirror removed reason=" + reason
+            );
+        } else {
+            System.err.println(
+                "[BusAgent:neoforge][LIFECYCLE][ERROR] "
+                + "Mirror removal failed; reference retained. reason="
+                + reason + " error=" + removalError
+            );
+        }
+    }
+
+
+    static void markDataBusDisconnected(String reason) {
+        if (!"neoforge".equals(myName)) {
+            return;
+        }
+
+        final long generation;
+
+        synchronized (BusAgent.class) {
+            if (!dataBusConnected) {
+                return;
+            }
+
+            dataBusConnected = false;
+            lastFabricReceiveAt = 0L;
+            dataBusGeneration++;
+            generation = dataBusGeneration;
+            out = null;
+        }
+
+        System.out.println(
+            "[BusAgent:neoforge][LIFECYCLE] DataBus disconnected: " + reason
+        );
+
+        scheduleRemotePlayerRemoval(
+            "bus-disconnected",
+            generation,
+            0,
+            0L
+        );
+    }
+
+    // Called by the NeoForge monitor thread.
+    static void checkRemotePlayerLifecycle() {
+        if (!"neoforge".equals(myName)) {
+            return;
+        }
+
+        final boolean connected;
+        final long generation;
+        final long lastReceive;
+        final boolean reconnectCleanup;
+
+        synchronized (BusAgent.class) {
+            connected = dataBusConnected;
+            generation = dataBusGeneration;
+            lastReceive = lastFabricReceiveAt;
+            reconnectCleanup = nfReconnectCleanupPending;
+        }
+
+        if (connected && reconnectCleanup) {
+            if (remotePlayer == null) {
+                synchronized (BusAgent.class) {
+                    if (dataBusGeneration == generation &&
+                        dataBusConnected &&
+                        remotePlayer == null) {
+                        nfReconnectCleanupPending = false;
+                    }
+                }
+                return;
+            }
+
+            scheduleRemotePlayerRemoval(
+                "bus-reconnected",
+                generation,
+                2,
+                0L
+            );
+            return;
+        }
+
+        if (remotePlayer == null) {
+            return;
+        }
+
+        if (!connected) {
+            scheduleRemotePlayerRemoval(
+                "bus-disconnected",
+                generation,
+                0,
+                0L
+            );
+            return;
+        }
+
+        if (lastReceive > 0L &&
+            System.currentTimeMillis() - lastReceive > FABRIC_TIMEOUT_MS) {
+
+            scheduleRemotePlayerRemoval(
+                "fabric-heartbeat-timeout",
+                generation,
+                1,
+                lastReceive
+            );
+        }
+    }
+
+    // condition:
+    // 0 = remove only while disconnected
+    // 1 = remove only if the expected heartbeat is still stale
+    // 2 = force cleanup for the current connection generation
+    static void scheduleRemotePlayerRemoval(
+        String reason,
+        long generation,
+        int condition,
+        long expectedReceiveAt
+    ) {
+        Object mc = nfMcInstance;
+        Class<?> mcClass = nfMcClass;
+
+        if (mc == null || mcClass == null || remotePlayer == null) {
+            return;
+        }
+
+        if (!nfRemovalPending.compareAndSet(false, true)) {
+            return;
+        }
+
+        try {
+            mcClass.getMethod("execute", Runnable.class).invoke(
+                mc,
+                (Runnable) () -> {
+                    try {
+                        synchronized (BusAgent.class) {
+                            if (dataBusGeneration != generation) {
+                                return;
+                            }
+
+                            if (condition == 0 && dataBusConnected) {
+                                return;
+                            }
+
+                            if (condition == 1) {
+                                if (!dataBusConnected ||
+                                    lastFabricReceiveAt != expectedReceiveAt ||
+                                    expectedReceiveAt == 0L ||
+                                    System.currentTimeMillis() - expectedReceiveAt
+                                        <= FABRIC_TIMEOUT_MS) {
+                                    return;
+                                }
+
+                                // Prevent repeated timeout scheduling.
+                                lastFabricReceiveAt = 0L;
+                            }
+
+                            if (condition == 2 && !dataBusConnected) {
+                                return;
+                            }
+                        }
+
+                        removeRemotePlayerNow(reason);
+                        if (condition == 2) {
+                            synchronized (BusAgent.class) {
+                                if (dataBusGeneration == generation &&
+                                    dataBusConnected) {
+                                    nfReconnectCleanupPending = false;
+                                }
+                            }
+                        }
+
+                    } catch (Throwable e) {
+                        System.err.println(
+                            "[BusAgent:neoforge][LIFECYCLE][ERROR] "
+                            + "Scheduled cleanup failed: " + e
+                        );
+                    } finally {
+                        nfRemovalPending.set(false);
+                    }
+                }
+            );
+
+        } catch (Throwable e) {
+            nfRemovalPending.set(false);
+
+            System.err.println(
+                "[BusAgent:neoforge][LIFECYCLE][ERROR] "
+                + "Could not schedule cleanup: " + e
+            );
         }
     }
 

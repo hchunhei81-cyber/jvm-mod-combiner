@@ -64,49 +64,30 @@
 - [x] Inject a mirror `RemotePlayer` into NeoForge's client world.
 - [x] Update the mirror entity using received Fabric movement data.
 
-**Current limitation:** The existing player synchronization and mirror injection are proof-of-concept functionality. They do not yet establish complete bidirectional synchronization or gameplay equivalence.
+**Current status:** The initial one-way Fabric-to-NeoForge player-state pipeline and RemotePlayer injection have been verified as proof-of-concept functionality. Heartbeat timeout cleanup and mirror recreation have also received initial runtime verification.
+
+Fabric is the sole authoritative player-state publisher. NeoForge operates as a receiver-only client. This prototype does not establish complete gameplay equivalence or general cross-loader compatibility.
 
 ---
 
 ## 🟡 High Priority
 
-### 6. Complete Bidirectional Player Synchronization
+### 6. Enforce One-Way Player-State Authority
 
-**Goal:** Establish a stable movement synchronization pipeline in both directions.
+**Goal:** Enforce Fabric as the sole authoritative player-state publisher and keep NeoForge receiver-only.
 
-- [ ] Implement the NeoForge local-player state sender.
-  - Sample the local player on the Minecraft game thread.
-  - Extract X, Y, Z, yaw, pitch, and sprint state.
-  - Send `player_move` messages to Fabric through the DataBus.
-  - Send updates when the state changes.
-  - Send a periodic heartbeat approximately once per second.
-
-- [ ] Implement the Fabric-side receiver.
-  - Parse incoming NeoForge movement messages.
-  - Validate the message source and destination.
-  - Schedule all Minecraft world and entity operations on the game thread.
-  - Create or update the corresponding remote player.
-
-- [ ] Prevent synchronization loops.
-  - Never retransmit a received remote-player update as local-player input.
-  - Distinguish local-player state from remote-player state.
-
-- [ ] Add connection recovery.
-  - Reset synchronization state after reconnecting.
-  - Resend the latest player state after a connection is restored.
-  - Handle disconnected peers without crashing either game.
-
-- [ ] Add player lifecycle events.
-  - `player_online`
-  - `player_offline`
-  - `player_spawn`
-  - `player_remove`
-
-- [ ] Verify continuous synchronization in both directions.
-  - Position
-  - Rotation
-  - Sprint state
-  - World and dimension transitions
+- [x] Establish Fabric as the sole authoritative player-state source.
+- [x] Remove the active `sampleNeoForgePlayer(player)` call from the edited NeoForge monitor source.
+- [ ] Rebuild and package the updated Java Agent.
+- [ ] Enforce sender authorization in the Rust DataBus using registered TCP connection identity.
+- [ ] Reject `player_move` messages originating from the registered NeoForge connection.
+- [ ] Preserve explicitly authorized reverse-direction message types, such as interaction requests and diagnostics.
+- [ ] Verify Fabric-to-NeoForge player-state delivery using the rebuilt Agent.
+- [ ] Verify that rejected NeoForge `player_move` messages do not disconnect the client.
+- [ ] Test reconnection and fresh player-state transmission.
+- [ ] Add protocol versioning, timestamps, sequence numbers, and session generations.
+- [ ] Reject stale or out-of-session player-state updates.
+- [ ] Verify that unauthorized messages cannot bypass the sender authorization policy.
 
 ### 7. Stabilize Remote Player Mirroring
 
@@ -250,21 +231,22 @@ The TCP DataBus is already implemented. The next step is to evolve it from a bas
 - [ ] If the maintenance cost is too high, document 1.16.5 as unsupported rather than compromising the stability of newer versions.
 
 ---
-
 ## Development Order
 
 The intended implementation order is:
 
-1. Complete NeoForge → Fabric player-state transmission.
-2. Implement Fabric-side message reception and mirror creation.
-3. Verify bidirectional movement synchronization.
-4. Stabilize entity identity, lifecycle, and interpolation.
-5. Improve DataBus reliability and protocol validation.
-6. Expand synchronization to entities and basic gameplay state.
-7. Refactor dependency resolution and NeoForge launch orchestration.
-8. Investigate Mixin compatibility and cross-loader API adapters.
-9. Expand platform support.
-10. Research advanced rendering and mod compatibility.
+1. Rebuild and package the receiver-only Java Agent.
+2. Implement Rust DataBus sender authorization using registered connection identity.
+3. Verify Fabric-to-NeoForge player-state delivery.
+4. Verify NeoForge `player_move` rejection while preserving explicitly authorized reverse-direction messages.
+5. Verify rejected messages do not disconnect the NeoForge client.
+6. Test heartbeat timeout, mirror removal, and mirror recreation.
+7. Stabilize entity identity, lifecycle management, and failure recovery.
+8. Add protocol versioning, timestamps, sequence numbers, and session generations.
+9. Expand synchronization to additional entities and basic gameplay state.
+10. Refactor dependency resolution and NeoForge launch orchestration.
+11. Investigate Mixin compatibility and cross-loader API adapters.
+12. Expand platform support and research advanced mod compatibility.
 
 ---
 
@@ -290,6 +272,8 @@ Rust launcher, Fabric and NeoForge startup, Java Agent injection, TCP DataBus, a
 
 <badge color="warning">Next milestone</badge>
 
-Complete bidirectional player-state synchronization and verify that both sandboxes can maintain independent game loops without synchronization deadlocks.
+Rebuild the receiver-only Java Agent, enforce one-way sender authorization in the Rust DataBus, and verify reliable Fabric-to-NeoForge player-state synchronization.
+
+The next milestone also includes testing unauthorized reverse `player_move` rejection, reconnect behavior, and RemotePlayer lifecycle recovery.
 
 > The immediate objective is not to make every Fabric mod work with every NeoForge mod. It is to build a reliable, measurable foundation on which broader interoperability can be developed.

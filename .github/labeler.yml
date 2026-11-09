@@ -1,0 +1,71 @@
+# ============================================
+# PR auto-labeling rules
+# Path: .github/labeler.yml
+# Used by: .github/workflows/labeler.yml
+# Docs: https://github.com/actions/labeler
+# ============================================
+
+# ---------- Rust kernel ----------
+rust:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.rs"
+          - "Cargo.toml"
+          - "Cargo.lock"
+
+# ---------- Java agent ----------
+java:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.java"
+          - "bus_test/**"
+
+# ---------- Data bus / networking ----------
+bus:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/BusAgent.java"
+          - "**/MonsterSync.java"
+          - "src/**/bus*.rs"
+
+# ---------- Build & CI ----------
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/**"
+          - ".github/ISSUE_TEMPLATE/**"
+          - ".github/labeler.yml"
+          - ".github/dependabot.yml"
+
+# ---------- Documentation ----------
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - "docs/**"
+          - "README*"
+
+# ---------- Frontend / promo site ----------
+frontend:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.html"
+          - "**/*.css"
+          - "**/*.js"
+
+# ---------- Config & manifests ----------
+config:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.yml"
+          - "**/*.yaml"
+          - "**/*.toml"
+          - "**/*.json"
+          - "**/*.txt"
+
+# ---------- Sandbox / test assets ----------
+sandbox:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "sandbox/**"
+          - "**/*.jar"

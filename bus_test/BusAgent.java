@@ -237,7 +237,7 @@ public class BusAgent {
                             fabricMcInstance,
                             (Runnable) () -> {
                                 try {
-                                    sampleFabricPlayer();
+                sampleFabricPlayer();
                                 } catch (Throwable e) {
                                     if (!fabricSampleErrorPrinted) {
                                         fabricSampleErrorPrinted = true;
@@ -246,6 +246,16 @@ public class BusAgent {
                                         );
                                         e.printStackTrace(System.err);
                                     }
+                                }
+
+                                // M1: sample hostile mobs independently of player sampling.
+                                try {
+                MonsterSync.sample(fabricMcInstance);
+                                } catch (Throwable mobError) {
+                                    System.err.println(
+                                        "[BusAgent:fabric][ERROR] MonsterSync invocation failed: " +
+                                        mobError
+                                    );
                                 } finally {
                                     fabricSamplePending.set(false);
                                 }

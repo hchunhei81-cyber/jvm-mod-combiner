@@ -531,7 +531,9 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     for jar in [&bootstrap_jar, &bootstrap_api_jar, &forge_client] {
         if jar.is_file() {
             let s = jar.to_string_lossy().to_string();
-            if !legacy.contains(&s) { legacy.insert(0, s); }
+            if !legacy.contains(&s) {
+                legacy.insert(0, s);
+            }
         }
     }
 
@@ -574,7 +576,6 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     legacy.retain(|value| accept_forge_jar(Path::new(value)));
 
     let legacy_cp = legacy.join(":");
-
 
     // JVM module path contains the bootstrap/runtime modules. ModLauncher itself is deliberately
     // supplied through legacyClassPath so Bootstrap can place it in its managed module layer.
@@ -838,7 +839,9 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
             }
         }
         if !added {
-            eprintln!("[forge] ERROR: Mojang Logging JAR not found (expected com/mojang/logging/1.2.7/logging-1.2.7.jar)");
+            eprintln!(
+                "[forge] ERROR: Mojang Logging JAR not found (expected com/mojang/logging/1.2.7/logging-1.2.7.jar)"
+            );
         }
     }
     // ===== END MOJANG_LOGGING_PATCH =====
@@ -853,7 +856,10 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
             }
             eprintln!("[forge] Added JarJarSelector: {}", jj.display());
         } else {
-            eprintln!("[forge] ERROR: JarJarSelector JAR not found: {}", jj.display());
+            eprintln!(
+                "[forge] ERROR: JarJarSelector JAR not found: {}",
+                jj.display()
+            );
         }
     }
     // ===== END JARJAR_SELECTOR_PATCH =====
@@ -868,7 +874,10 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
             }
             eprintln!("[forge] Added JarJarMetadata: {}", meta.display());
         } else {
-            eprintln!("[forge] ERROR: JarJarMetadata JAR not found: {}", meta.display());
+            eprintln!(
+                "[forge] ERROR: JarJarMetadata JAR not found: {}",
+                meta.display()
+            );
         }
     }
     // ===== END JARJAR_METADATA_PATCH =====
@@ -883,13 +892,13 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
             }
             eprintln!("[forge] Added failureaccess: {}", fa.display());
         } else {
-            eprintln!("[forge] ERROR: failureaccess JAR not found: {}", fa.display());
+            eprintln!(
+                "[forge] ERROR: failureaccess JAR not found: {}",
+                fa.display()
+            );
         }
     }
     // ===== END FAILUREACCESS_PATCH =====
-
-
-
 
     // Remove duplicate physical JAR paths while preserving order.
     let mut seen_forge_cp = std::collections::HashSet::new();
@@ -1018,167 +1027,375 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
 }
 
 fn launch_neoforge_subprocess(sandbox_dir: &Path) {
-    let mc_root = PathBuf::from(env::var("HOME").expect("HOME"))
-        .join("Library/Application Support/minecraft");
-    let _version = "neoforge-21.1.191";
-    let neoforge_ver = "21.1.191";
-    let unix_args = mc_root.join(format!(
-        "libraries/net/neoforged/neoforge/{}/unix_args.txt",
-        neoforge_ver
-    ));
-    if !unix_args.is_file() {
-        eprintln!(
-            "[neoforge] ERROR: unix_args.txt 不存在: {}",
-            unix_args.display()
-        );
-        eprintln!("[neoforge] 先用 --installServer 跑一次 installer 生成它");
+    use std::process::{Command, Stdio};
+
+    const PROFILE_ID: &str = "neoforge-21.4.161";
+    const MC_VERSION: &str = "1.21.4";
+
+    fn fail(message: &str) {
+        eprintln!("[neoforge] ERROR: {}", message);
+    }
+
+    fn append_profile_args(value: &Value, output: &mut Vec<String>, allow_features: bool) {
+        match value {
+            Value::String(s) => output.push(s.clone()),
+
+            Value::Array(items) => {
+                for item in items {
+                    append_profile_args(item, output, allow_features);
+                }
+            }
+
+            Value::Object(object) => {
+                if let Some(rules) = object.get("rules").and_then(Value::as_array) {
+                    // 本启动器目前不启用 demo、quick-play、自定义分辨率等功能。
+                    if !allow_features
+                        && rules.iter().any(|r| {
+                            r.get("features")
+                                .and_then(Value::as_object)
+                                .is_some_and(|f| !f.is_empty())
+                        })
+                    {
+                        return;
+                    }
+                }
+
+                if !rules_allow(value) {
+                    return;
+                }
+
+                if let Some(inner) = object.get("value") {
+                    append_profile_args(inner, output, allow_features);
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    fn replace_vars(input: &str, vars: &[(&str, &str)]) -> String {
+        let mut output = input.to_string();
+        for (key, value) in vars {
+            output = output.replace(key, value);
+        }
+        output
+    }
+
+    let home = match env::var("HOME") {
+        Ok(v) => PathBuf::from(v),
+        Err(e) => {
+            fail(&format!("无法读取 HOME: {}", e));
+            return;
+        }
+    };
+
+    let mc_root = home.join("Library/Application Support/minecraft");
+    let libraries_dir = mc_root.join("libraries");
+
+    let profile_path = mc_root
+        .join("versions")
+        .join(PROFILE_ID)
+        .join(format!("{}.json", PROFILE_ID));
+
+    let vanilla_path = mc_root
+        .join("versions")
+        .join(MC_VERSION)
+        .join(format!("{}.json", MC_VERSION));
+
+    if !profile_path.is_file() {
+        fail(&format!(
+            "NeoForge profile 不存在: {}",
+            profile_path.display()
+        ));
         return;
     }
 
-    // 读 unix_args.txt，拆成参数。文件里每行可能含多个以空格分隔的参数，
-    // 但路径里也可能有空格（macOS 的 Application Support），所以按行读、
-    // 只对每行的第一个 token 识别，其余保留原样。
-    let content = fs::read_to_string(&unix_args).expect("read unix_args.txt");
-    let mut jvm_args: Vec<String> = Vec::new();
+    if !vanilla_path.is_file() {
+        fail(&format!(
+            "Minecraft profile 不存在: {}",
+            vanilla_path.display()
+        ));
+        return;
+    }
 
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() {
+    let profile: Value = match fs::read_to_string(&profile_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+    {
+        Some(v) => v,
+        None => {
+            fail("NeoForge JSON 解析失败");
+            return;
+        }
+    };
+
+    let vanilla: Value = match fs::read_to_string(&vanilla_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+    {
+        Some(v) => v,
+        None => {
+            fail("Minecraft JSON 解析失败");
+            return;
+        }
+    };
+
+    let profile_id = profile
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or(PROFILE_ID);
+
+    let inherited = profile
+        .get("inheritsFrom")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+
+    if inherited != MC_VERSION {
+        fail(&format!(
+            "版本不匹配: NeoForge inheritsFrom={}，预期 {}",
+            inherited, MC_VERSION
+        ));
+        return;
+    }
+
+    let main_class = match profile.get("mainClass").and_then(Value::as_str) {
+        Some(v) => v,
+        None => {
+            fail("profile 缺少 mainClass");
+            return;
+        }
+    };
+
+    let asset_index = match vanilla.pointer("/assetIndex/id").and_then(Value::as_str) {
+        Some(v) => v,
+        None => {
+            fail("原版 profile 缺少 assetIndex.id");
+            return;
+        }
+    };
+
+    let assets_root = mc_root.join("assets");
+    let natives_dir = sandbox_dir.join("natives");
+
+    if let Err(e) = fs::create_dir_all(&natives_dir) {
+        fail(&format!("创建 natives 目录失败: {}", e));
+        return;
+    }
+
+    // ---------------------------------------------------------
+    // 1. 收集 Minecraft + NeoForge 依赖
+    // ---------------------------------------------------------
+
+    let mut classpath: Vec<String> = Vec::new();
+    let mut native_jars: Vec<PathBuf> = Vec::new();
+
+    let mut all_libraries: Vec<&Value> = Vec::new();
+
+    for lib in profile
+        .get("libraries")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        all_libraries.push(lib);
+    }
+
+    for lib in vanilla
+        .get("libraries")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        all_libraries.push(lib);
+    }
+
+    for lib in all_libraries {
+        if !rules_allow(lib) {
             continue;
         }
-        // unix_args.txt 里每个逻辑参数一行，但 -p 那一行是 "-p <path>" 两个 token
-        // 以及 "-Dkey=value" 是单 token。按空白切分，但路径里的空格需要保留：
-        // 官方文件里路径不含空格（相对路径 libraries/...），所以直接切分即可。
-        for tok in line.split_whitespace() {
-            jvm_args.push(tok.to_string());
+
+        let name = lib.get("name").and_then(Value::as_str).unwrap_or("");
+
+        // NeoForge 21.4.161 requires ASM 9.8.
+        // Exclude older ASM artifacts inherited from Minecraft 1.21.4.
+        if name.starts_with("org.ow2.asm:") && !name.ends_with(":9.8") {
+            eprintln!("[neoforge] Skip incompatible ASM dependency: {}", name);
+            continue;
+        }
+
+        let artifact_path = lib
+            .pointer("/downloads/artifact/path")
+            .and_then(Value::as_str);
+
+        let is_native = name.contains(":natives-macos") || name.contains(":natives-macos-arm64");
+
+        if is_native {
+            if let Some(relative) = artifact_path {
+                let path = libraries_dir.join(relative);
+                if path.is_file() && !native_jars.contains(&path) {
+                    native_jars.push(path);
+                } else if !path.is_file() {
+                    eprintln!("[neoforge] WARNING: native JAR 不存在: {}", path.display());
+                }
+            }
+            continue;
+        }
+
+        if let Some(relative) = artifact_path {
+            let path = libraries_dir.join(relative);
+
+            if path.is_file() {
+                let value = path.to_string_lossy().to_string();
+                if !classpath.contains(&value) {
+                    classpath.push(value);
+                }
+            } else {
+                eprintln!("[neoforge] WARNING: dependency 缺失: {}", path.display());
+            }
         }
     }
 
-    // 把 forgeserver 换成 forgeclient
-    for a in jvm_args.iter_mut() {
-        if a == "forgeserver" {
-            *a = "forgeclient".to_string();
+    // 2. 提取 macOS 原生库
+    // ---------------------------------------------------------
+
+    let mut extracted_count = 0usize;
+
+    for jar in &native_jars {
+        let status = Command::new("unzip")
+            .arg("-oq")
+            .arg(jar)
+            .arg("-d")
+            .arg(&natives_dir)
+            .status();
+
+        match status {
+            Ok(s) if s.success() => extracted_count += 1,
+            Ok(s) => {
+                eprintln!(
+                    "[neoforge] WARNING: native 提取失败 {}，status={}",
+                    jar.display(),
+                    s
+                );
+            }
+            Err(e) => {
+                fail(&format!("无法执行 unzip: {}", e));
+                return;
+            }
         }
     }
 
-    // 扫描 LWJGL jar 并追加到 legacyClassPath（服务端 unix_args 不含客户端 LWJGL 依赖）
-    let lwjgl_root = mc_root.join("libraries/org/lwjgl");
-    let mut lwjgl_jars: Vec<String> = Vec::new();
-    fn walk_lwjgl(dir: &Path, out: &mut Vec<String>) {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    walk_lwjgl(&p, out);
-                } else if let Some(n) = p.file_name().and_then(|n| n.to_str()) {
-                    let ps = p.to_string_lossy();
-                    // 只要路径里含 /3.3.3/ 的 jar（普通 + natives 都要），排除 3.4.x
-                    if n.ends_with(".jar") && ps.contains("/3.3.3/") {
-                        out.push(ps.to_string());
-                    }
-                }
-            }
-        }
-    }
-    walk_lwjgl(&lwjgl_root, &mut lwjgl_jars);
-    eprintln!("[neoforge] 扫描到 {} 个 LWJGL jar", lwjgl_jars.len());
+    // ---------------------------------------------------------
+    // 3. JVM 参数：NeoForge + Vanilla
+    // ---------------------------------------------------------
 
-    // 扫描 ICU4J（客户端字体渲染需要）
-    let icu_root = mc_root.join("libraries/com/ibm/icu");
-    let mut icu_jars: Vec<String> = Vec::new();
-    fn walk_icu(dir: &Path, out: &mut Vec<String>) {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    walk_icu(&p, out);
-                } else if let Some(n) = p.file_name().and_then(|n| n.to_str()) {
-                    if n.ends_with(".jar") {
-                        out.push(p.to_string_lossy().to_string());
-                    }
-                }
-            }
-        }
-    }
-    walk_icu(&icu_root, &mut icu_jars);
-    eprintln!("[neoforge] 扫描到 {} 个 ICU4J jar", icu_jars.len());
+    let mut jvm_args: Vec<String> = Vec::new();
 
-    // 扫描 text2speech（客户端 Narrator 需要）
-    let tts_root = mc_root.join("libraries/com/mojang/text2speech");
-    let mut tts_jars: Vec<String> = Vec::new();
-    fn walk_tts(dir: &Path, out: &mut Vec<String>) {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    walk_tts(&p, out);
-                } else if let Some(n) = p.file_name().and_then(|n| n.to_str()) {
-                    if n.ends_with(".jar") {
-                        out.push(p.to_string_lossy().to_string());
-                    }
-                }
-            }
-        }
-    }
-    walk_tts(&tts_root, &mut tts_jars);
-    eprintln!("[neoforge] 扫描到 {} 个 text2speech jar", tts_jars.len());
-    // 找到 jvm_args 里的 -DlegacyClassPath=...，追加 LWJGL
-    for a in jvm_args.iter_mut() {
-        if a.starts_with("-DlegacyClassPath=") {
-            let mut val = a.trim_start_matches("-DlegacyClassPath=").to_string();
-            for j in &lwjgl_jars {
-                if !val.contains(j) {
-                    val.push(':');
-                    val.push_str(j);
-                }
-            }
-            for j in &icu_jars {
-                if !val.contains(j) {
-                    val.push(':');
-                    val.push_str(j);
-                }
-            }
-            for j in &tts_jars {
-                if !val.contains(j) {
-                    val.push(':');
-                    val.push_str(j);
-                }
-            }
-            *a = format!("-DlegacyClassPath={}", val);
-            break;
-        }
-    }
+    append_profile_args(
+        &profile.pointer("/arguments/jvm").unwrap_or(&Value::Null),
+        &mut jvm_args,
+        false,
+    );
 
-    // 补客户端 game 参数
-    let game_args: Vec<String> = vec![
-        "--gameDir".into(),
-        sandbox_dir.to_string_lossy().to_string(),
-        "--assetsDir".into(),
-        sandbox_dir.join("assets").to_string_lossy().to_string(),
-        "--assetIndex".into(),
-        "17".into(),
-        "--version".into(),
-        "1.21.1".into(),
-        "--username".into(),
-        "Dev".into(),
-        "--uuid".into(),
-        "00000000000000000000000000000000".into(),
-        "--accessToken".into(),
-        "0".into(),
-        "--userType".into(),
-        "legacy".into(),
-        "--versionType".into(),
-        "release".into(),
+    append_profile_args(
+        &vanilla.pointer("/arguments/jvm").unwrap_or(&Value::Null),
+        &mut jvm_args,
+        false,
+    );
+
+    let classpath_string = classpath.join(":");
+
+    let vars = [
+        ("${library_directory}", libraries_dir.to_str().unwrap_or("")),
+        ("${classpath_separator}", ":"),
+        ("${classpath}", classpath_string.as_str()),
+        ("${natives_directory}", natives_dir.to_str().unwrap_or("")),
+        ("${assets_root}", assets_root.to_str().unwrap_or("")),
+        ("${assets_index_name}", asset_index),
+        ("${version_name}", profile_id),
+        ("${launcher_name}", "JVM-Mod-Combiner"),
+        ("${launcher_version}", "0.1.0"),
     ];
 
-    let java = if let Ok(out) = std::process::Command::new("/usr/libexec/java_home")
+    for arg in jvm_args.iter_mut() {
+        *arg = replace_vars(arg, &vars);
+    }
+
+    // 修复 profile 中 ASM 模块路径缺少 classpath_separator 的拼接。
+    for arg in jvm_args.iter_mut() {
+        *arg = arg.replace(".jar${library_directory}", ".jar:${library_directory}");
+    }
+
+    if !jvm_args.iter().any(|a| a == "-XstartOnFirstThread") {
+        eprintln!("[neoforge] WARNING: JVM 参数中没有 -XstartOnFirstThread");
+    }
+
+    // 检查模块路径中的文件是否存在。
+    if let Some(index) = jvm_args.iter().position(|a| a == "-p") {
+        if let Some(module_path) = jvm_args.get(index + 1) {
+            for entry in module_path.split(':') {
+                if !entry.is_empty() && !Path::new(entry).is_file() {
+                    fail(&format!("模块路径 JAR 不存在: {}", entry));
+                    return;
+                }
+            }
+        } else {
+            fail("-p 后缺少模块路径");
+            return;
+        }
+    } else {
+        fail("NeoForge JVM 参数缺少 -p 模块路径");
+        return;
+    }
+
+    // ---------------------------------------------------------
+    // 4. Game 参数：Vanilla + NeoForge
+    // ---------------------------------------------------------
+
+    let mut game_args: Vec<String> = Vec::new();
+
+    append_profile_args(
+        &vanilla.pointer("/arguments/game").unwrap_or(&Value::Null),
+        &mut game_args,
+        false,
+    );
+
+    append_profile_args(
+        &profile.pointer("/arguments/game").unwrap_or(&Value::Null),
+        &mut game_args,
+        false,
+    );
+
+    let game_vars = [
+        ("${auth_player_name}", "Dev"),
+        ("${version_name}", profile_id),
+        ("${game_directory}", sandbox_dir.to_str().unwrap_or("")),
+        ("${assets_root}", assets_root.to_str().unwrap_or("")),
+        ("${assets_index_name}", asset_index),
+        ("${auth_uuid}", "00000000000000000000000000000000"),
+        ("${auth_access_token}", "0"),
+        ("${clientid}", ""),
+        ("${auth_xuid}", ""),
+        ("${user_type}", "legacy"),
+        ("${version_type}", "release"),
+    ];
+
+    for arg in game_args.iter_mut() {
+        *arg = replace_vars(arg, &game_vars);
+    }
+
+    // ---------------------------------------------------------
+    // 5. Java 21
+    // ---------------------------------------------------------
+
+    let java = if let Ok(out) = Command::new("/usr/libexec/java_home")
         .arg("-v")
         .arg("21")
         .output()
     {
-        let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if !p.is_empty() {
-            format!("{}/bin/java", p)
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+
+        if !path.is_empty() {
+            format!("{}/bin/java", path)
         } else {
             "java".to_string()
         }
@@ -1186,44 +1403,75 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
         "java".to_string()
     };
 
-    let mut cmd = std::process::Command::new(&java);
-    // 工作目录设成 mc_root，因为 unix_args.txt 里是相对路径 libraries/...
-    cmd.current_dir(&mc_root);
-    // macOS: GLFW 窗口必须在 main thread 创建
-    if cfg!(target_os = "macos") {
-        cmd.arg("-XstartOnFirstThread");
-    }
-    for a in &jvm_args {
-        cmd.arg(a);
-    }
-    // 强行注入 Agent 到 NeoForge 子进程
-    let agent_jar = std::env::current_dir()
-        .unwrap()
-        .join("bus_test/bus-agent.jar");
-    if agent_jar.exists() {
-        let arg = format!("-javaagent:{}={}", agent_jar.display(), "NeoForge-Sandbox");
-        cmd.env("JAVA_TOOL_OPTIONS", arg.clone());
-        eprintln!("[neoforge] 已强制注入 JAVA_TOOL_OPTIONS: {}", arg);
-    } else {
-        eprintln!("[neoforge] 警告: 找不到 bus-agent.jar");
-    }
+    // ---------------------------------------------------------
+    // 6. Java Agent
+    // ---------------------------------------------------------
 
-    for a in &game_args {
-        cmd.arg(a);
-    }
-
-    println!("[neoforge] Launching: {:?}", cmd);
-    cmd.stdout(std::process::Stdio::inherit());
-    cmd.stderr(std::process::Stdio::inherit());
-    match cmd.spawn() {
-        Ok(mut child) => {
-            let _ = child.wait();
+    let project_root = match env::current_dir() {
+        Ok(v) => v,
+        Err(e) => {
+            fail(&format!("无法获取当前目录: {}", e));
+            return;
         }
-        Err(e) => eprintln!("[neoforge] spawn failed: {}", e),
+    };
+
+    let agent_jar = project_root.join("bus_test/bus-agent.jar");
+
+    let mut cmd = Command::new(&java);
+    cmd.current_dir(&mc_root);
+
+    // 旧代码通过 JAVA_TOOL_OPTIONS 注入，可能造成重复注入。
+    // 新实现直接作为 JVM 参数注入。
+    cmd.env_remove("JAVA_TOOL_OPTIONS");
+
+    for arg in &jvm_args {
+        cmd.arg(arg);
+    }
+
+    if agent_jar.is_file() {
+        let agent_arg = format!("-javaagent:{}=NeoForge-Sandbox", agent_jar.display());
+        cmd.arg(agent_arg);
+        eprintln!("[neoforge] Java Agent 已加入 JVM 参数");
+    } else {
+        eprintln!(
+            "[neoforge] WARNING: Agent JAR 不存在: {}",
+            agent_jar.display()
+        );
+    }
+
+    cmd.arg(main_class);
+
+    for arg in &game_args {
+        cmd.arg(arg);
+    }
+
+    eprintln!("[neoforge] Profile: {}", profile_id);
+    eprintln!("[neoforge] Minecraft: {}", MC_VERSION);
+    eprintln!("[neoforge] Main class: {}", main_class);
+    eprintln!("[neoforge] Classpath JAR 数量: {}", classpath.len());
+    eprintln!("[neoforge] Native JAR 数量: {}", native_jars.len());
+    eprintln!("[neoforge] Native 提取成功数量: {}", extracted_count);
+    eprintln!("[neoforge] Asset index: {}", asset_index);
+    eprintln!("[neoforge] JVM 参数数量: {}", jvm_args.len());
+    eprintln!("[neoforge] Game 参数数量: {}", game_args.len());
+    eprintln!("[neoforge] Java: {}", java);
+    eprintln!("[neoforge] 启动 NeoForge 21.4.161...");
+
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
+
+    match cmd.spawn() {
+        Ok(mut child) => match child.wait() {
+            Ok(status) => {
+                eprintln!("[neoforge] 进程退出状态: {}", status);
+            }
+            Err(e) => fail(&format!("等待 NeoForge 进程失败: {}", e)),
+        },
+        Err(e) => fail(&format!("启动 Java 失败: {}", e)),
     }
 }
 
-fn start_data_bus() {
+fn start_data_bus() -> std::io::Result<()> {
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Write};
     use std::sync::{Arc, Mutex};
@@ -1232,10 +1480,10 @@ fn start_data_bus() {
     let registry: Arc<Mutex<HashMap<String, std::sync::mpsc::Sender<String>>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
-    thread::spawn(move || {
-        let listener = TcpListener::bind("127.0.0.1:25565").unwrap();
-        println!("[DataBus] 路由总线已启动，监听 127.0.0.1:25565");
+    let listener = TcpListener::bind("127.0.0.1:25565")?;
+    println!("[DataBus] 路由总线已启动，监听 127.0.0.1:25565");
 
+    thread::spawn(move || {
         for stream in listener.incoming() {
             let stream = match stream {
                 Ok(s) => s,
@@ -1388,6 +1636,7 @@ fn start_data_bus() {
             });
         }
     });
+    Ok(())
 }
 
 fn main() {
@@ -1402,7 +1651,7 @@ fn main() {
 
     if is_bus_test {
         println!("=== 启动数据总线测试模式 ===");
-        start_data_bus();
+        start_data_bus().expect("[DataBus] bus-test 无法监听 127.0.0.1:25565");
         loop {
             thread::sleep(std::time::Duration::from_secs(60));
         }
@@ -1410,7 +1659,7 @@ fn main() {
 
     if is_fusion {
         println!("=== 启动双沙盒 Fusion 模式 ===");
-        start_data_bus(); // 在拉起子进程前开启总线
+        start_data_bus().expect("[DataBus] Fusion 父进程无法监听 127.0.0.1:25565");
         let current_dir = env::current_dir().unwrap();
         let sandbox_dir = current_dir.join("sandbox");
 
@@ -1424,6 +1673,7 @@ fn main() {
             // 不要再通过 JAVA_TOOL_OPTIONS 注入第二次。
             cmd.args(&["run", "--", "--mode", "fabric"]);
 
+            cmd.env("JVM_COMBINER_BUS_EXTERNAL", "1");
             cmd.status().unwrap();
         });
 
@@ -1434,6 +1684,7 @@ fn main() {
             let mut cmd = std::process::Command::new("cargo");
 
             cmd.args(&["run", "--", "--mode", "neoforge"]);
+            cmd.env("JVM_COMBINER_BUS_EXTERNAL", "1");
             cmd.status().unwrap();
         });
 
@@ -1464,9 +1715,18 @@ fn main() {
         .any(|pair| pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("neoforge"))
         || args.iter().any(|arg| arg == "neoforge");
     if is_neoforge {
+        if env::var_os("JVM_COMBINER_BUS_EXTERNAL").is_none() {
+            start_data_bus().expect("[DataBus] NeoForge 无法监听 127.0.0.1:25565");
+        }
+
         launch_neoforge_subprocess(&sandbox_dir);
         return;
     }
+    // Fabric uses JNI, so start DataBus before creating the JVM.
+    if env::var_os("JVM_COMBINER_BUS_EXTERNAL").is_none() {
+        start_data_bus().expect("[DataBus] Fabric 无法监听 127.0.0.1:25565");
+    }
+
     let (bootstrap_cp, legacy_cp) = build_classpath(is_forge, &sandbox_dir);
 
     let join = |v: &Vec<PathBuf>| -> String {

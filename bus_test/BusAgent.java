@@ -32,6 +32,15 @@ public class BusAgent {
     static volatile Object remotePlayerLevel = null;
     static volatile boolean nfInitialized = false;
 
+    static volatile boolean nfMcFoundLogged = false;
+    static volatile boolean nfLevelReadyLogged = false;
+    static volatile boolean nfPlayerReadyLogged = false;
+    static volatile boolean nfProbeErrorPrinted = false;
+
+    static final java.util.concurrent.atomic.AtomicBoolean nfProbePending =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
+
+
     static final java.util.UUID remotePlayerUuid = java.util.UUID.nameUUIDFromBytes(
             "jvm-mod-combiner:fabric-mirror".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
@@ -46,6 +55,13 @@ public class BusAgent {
 
         if (myName.equals("fabric")) {
             Thread monitor = new Thread(BusAgent::monitorFabricPlayer);
+            monitor.setDaemon(true);
+            monitor.start();
+        } else if (myName.equals("neoforge")) {
+            Thread monitor = new Thread(
+                BusAgent::monitorNeoForgePlayer,
+                "BusAgent-NeoForge-Monitor"
+            );
             monitor.setDaemon(true);
             monitor.start();
         }
@@ -347,6 +363,111 @@ public class BusAgent {
     }
 
 
+
+    static void monitorNeoForgePlayer() {
+        System.out.println(
+            "[BusAgent:neoforge][MONITOR] thread started"
+        );
+
+        while (!Thread.currentThread().isInterrupted()) {
+            try {
+                initNeoForgeMinecraft();
+
+                Object mc = nfMcInstance;
+
+                if (mc != null) {
+                    if (!nfMcFoundLogged) {
+                        nfMcFoundLogged = true;
+                        System.out.println(
+                            "[BusAgent:neoforge][INIT] Minecraft instance found"
+                        );
+                    }
+
+                    if (nfProbePending.compareAndSet(false, true)) {
+                        try {
+                            nfMcClass.getMethod(
+                                "execute",
+                                Runnable.class
+                            ).invoke(mc, (Runnable) () -> {
+                                try {
+                                    Object level =
+                                        nfMcClass.getField("level").get(mc);
+
+                                    Object player =
+                                        nfMcClass.getField("player").get(mc);
+
+                                    boolean levelReady = level != null;
+                                    boolean playerReady =
+                                        levelReady && player != null;
+
+                                    synchronized (BusAgent.class) {
+                                        if (levelReady != nfLevelReadyLogged) {
+                                            nfLevelReadyLogged = levelReady;
+
+                                            System.out.println(
+                                                levelReady
+                                                ? "[BusAgent:neoforge][INIT] ClientLevel ready"
+                                                : "[BusAgent:neoforge][WAIT] ClientLevel unavailable"
+                                            );
+                                        }
+
+                                        if (playerReady != nfPlayerReadyLogged) {
+                                            nfPlayerReadyLogged = playerReady;
+
+                                            System.out.println(
+                                                playerReady
+                                                ? "[BusAgent:neoforge][LIVE] LocalPlayer ready"
+                                                : "[BusAgent:neoforge][WAIT] LocalPlayer unavailable"
+                                            );
+                                        }
+                                    }
+
+                                } catch (Throwable e) {
+                                    if (!nfProbeErrorPrinted) {
+                                        nfProbeErrorPrinted = true;
+                                        System.err.println(
+                                            "[BusAgent:neoforge][ERROR] player probe failed: " + e
+                                        );
+                                        e.printStackTrace(System.err);
+                                    }
+                                } finally {
+                                    nfProbePending.set(false);
+                                }
+                            });
+                        } catch (Throwable e) {
+                            nfProbePending.set(false);
+
+                            if (!nfProbeErrorPrinted) {
+                                nfProbeErrorPrinted = true;
+                                System.err.println(
+                                    "[BusAgent:neoforge][ERROR] execute failed: " + e
+                                );
+                            }
+                        }
+                    }
+                }
+
+                Thread.sleep(250);
+
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+
+            } catch (Throwable e) {
+                System.err.println(
+                    "[BusAgent:neoforge][ERROR] monitor failed: " + e
+                );
+
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }
+    }
+
 static synchronized void initNeoForgeMinecraft() {
         if (nfMcInstance != null)
             return;
@@ -360,7 +481,6 @@ static synchronized void initNeoForgeMinecraft() {
                 }
             }
             if (nfMcClass == null) {
-                System.out.println("[BusAgent:neoforge] 还没找到 Minecraft 类");
                 return;
             }
             nfMcInstance = nfMcClass.getMethod("getInstance").invoke(null);

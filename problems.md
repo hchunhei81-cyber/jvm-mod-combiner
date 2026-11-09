@@ -1,139 +1,1805 @@
-## JVM Mod Combiner: 踩坑与解决记录 (PROBLEM.md)
+# JVM Mod Combiner — Problems & Solutions
 
-本文档记录了在使用 Rust 微内核启动不同版本的 Minecraft 加载器时，所遇到的核心技术难点、报错原因以及最终的解决/绕过方案。
+> This document records the major technical problems encountered during the development of JVM Mod Combiner, including their symptoms, root causes, attempted solutions, workarounds, and current status.
+>
+> The project involves launching and investigating different Minecraft mod loaders through a Rust-based JVM orchestration layer.
+>
+> Some problems have been resolved, some have only been worked around, and others remain under investigation. Each section distinguishes verified results from unconfirmed explanations.
 
----
-
-## 一、Fabric 1.21.4 启动问题 (Mod Loader 早期)
-
-### 1. 缺 ASM 与 sponge-mixin 依赖
-*   **现象**：启动 `KnotClient` 时抛出 `ClassNotFoundException`。
-*   **原因**：Rust 侧手动构建的 Classpath 缺少 Fabric 依赖的底层字节码操作库。
-*   **解决**：手动补全 `asm` / `asm-tree` / `asm-analysis` / `asm-commons` / `asm-util`（当时用的是 9.9.1），并从本地 Minecraft `libraries` 复制 `sponge-mixin.jar` 进入沙盒。
-
-### 2. 报错 "No game providers present on the class path"
-*   **现象**：Fabric 初始化失败，找不到游戏主类。
-*   **原因**：没有告诉 Fabric 游戏所在的 JAR 在哪，且 Fabric 的类路径隔离机制挡住了游戏主类。
-*   **解决**：在启动参数（或系统属性）中强行注入：
-    *   `-Dfabric.gameJarPath=/path/to/minecraft-client.jar`
-    *   `-Dfabric.debug.disableClassPathIsolation=true`
-    *   `-Dfabric.gameVersion=1.21.4`
-
-### 3. Classpath 全量复制导致版本冲突
-*   **现象**：`NoSuchMethodError` 或 `ClassNotFoundException`，比如 Authlib、DataFixerUpper 或 LWJGL 版本不匹配。
-*   **原因**：为了省事，直接把整个 `libraries` 目录塞进了 Classpath，导致不同版本的库互相覆盖。
-*   **解决**：编写 `resolve_classpath()` 逻辑，直接解析 `1.21.4.json`，根据当前系统架构（macOS / arm64）的 rules 进行筛选，精准定位所需 JAR。
-
-### 4. LWJGL natives 缺失
-*   **现象**：报错 `Failed to locate library: liblwjgl.dylib` 或 `MemoryUtil` 初始化失败。
-*   **原因**：natives 包没有被正确解压或找不到。
-*   **解决**：单独下载并解压 LWJGL 3.3.3 的 macOS-arm64 natives 到指定目录，并通过 `-Djava.library.path` 显式指定。
+**Project status:** Experimental prototype. Fabric, Forge, and NeoForge startup experiments have achieved significant milestones, but complete cross-loader interoperability is not yet implemented.
 
 ---
 
-## 二、NeoForge 1.21.1 启动问题 (ModLauncher 11)
+# 1. Fabric 1.21.4 Startup Problems
 
-### 1. `ModLauncher null starting` 与 NullPointerException
-*   **现象**：BootstrapLauncher 启动时，`TypesafeMap.putIfAbsent` 抛出 NPE。
-*   **原因**：ModLauncher 作为 JPMS 模块加载时，Manifest 中的版本号被忽略，`getImplementationVersion()` 返回 null。
-*   **解决**：放弃修改原始 JAR 的 Manifest（因为模块化加载根本不吃这套），转为手动构建正确的 `--module-path` 和 `-DlegacyClassPath`，确保 BootstrapLauncher 正常识别 ModLauncher。
+## 1.1 Missing ASM and Sponge Mixin Dependencies
 
-### 2. `ServiceConfigurationError`: Unable to get public no-arg constructor
-*   **现象**：早期窗口 (`EarlyProgressVisualization`) 崩溃。
-*   **解决**：在游戏目录 `config/fml.toml` 中关闭早期窗口：`earlyWindowControl = false`。
+<badge color="success">Resolved</badge>
 
-### 3. `NoSuchElementException` 与 `Missing classes`
-*   **现象**：子进程启动时直接崩溃，或者报缺失基础类。
-*   **原因**：服务端模板 `unix_args.txt` 不包含客户端渲染所需的库（如 ICU4J、text2speech 等），且 Java 9+ 的模块导出限制导致反射失败。
-*   **解决**：
-    *   利用 Python 脚本扫描并将 `ICU4J`、`text2speech`、LWJGL 强行追加到 `legacyClassPath` 中。
-    *   添加启动参数 `--add-opens` 和 `--add-exports`，解放 `java.base` 下的相关模块。
-    *   加入 `-XstartOnFirstThread` 解决 macOS 主线程创建 GLFW 窗口的限制。
+**Symptoms**
 
----
+Fabric initialization failed with `ClassNotFoundException` while attempting to load `KnotClient` and its supporting classes.
 
-## 三、Forge 1.16.5 启动问题 (ModLauncher 8)
+**Root cause**
 
-*(注：此版本最终因底层死锁未能跑通，以下为尝试过程与原因分析)*
+The manually constructed Rust classpath did not contain all the low-level bytecode manipulation libraries required by Fabric.
 
-### 1. 官方 Installer 的 `jarsplitter` 哈希死锁
-*   **现象**：Installer 运行到 `jarsplitter` 时报 `Expected: xxx` / `Actual: xxx` 哈希不匹配，导致安装失败。
-*   **原因**：macOS 的 zlib 实现（zlib-ng）与 Forge 早期 Installer 依赖的经典 zlib 产生的压缩输出有差异，导致哈希校验永远无法通过。
-*   **尝试解决**：换用 Java 8u312（无效）；换用 Forge 36.2.42（无效）。
-*   **最终绕过**：在 Windows 虚拟机中运行 Installer 成功生成了 `srg.jar`、`extra.jar` 等文件，并将其拷贝到 Mac 使用。
+Important dependencies included:
 
-### 2. 缺失 `fmlloader` 与 `FMLClientLaunchHandler`
-*   **现象**：`Cannot find launch target fmlclient`。
-*   **原因**：Forge 1.16.5 的启动类被官方藏得很深。它没有作为独立的 Maven 依赖发布，导致全网寻找 `fmlloader-1.16.5-36.2.42.jar` 均返回 404。同时，`universal.jar` 和 `client.jar` 中也没有这个类。
-*   **尝试解决**：用 Prism 隐藏目录里的 1.17+ 版本“偷天换日”。
-*   **最终失败原因**：高版本 ModLauncher 接口无法识别 1.17 的 FML 服务，抛出 `Invalid Services found fml`。
+- ASM
+- ASM Tree
+- ASM Analysis
+- ASM Commons
+- ASM Util
+- Sponge Mixin
+
+**Solution**
+
+Extended the classpath construction logic to include the required ASM components and Sponge Mixin.
+
+The dependencies were located in the local Minecraft libraries directory and copied or referenced from the sandbox environment.
+
+ASM 9.9.1 was used in one of the dependency configurations during this investigation. The exact version must remain compatible with the selected loader.
+
+**Verification**
+
+Fabric successfully passed the earlier missing-class stage and proceeded to the KnotClient initialization pipeline.
 
 ---
 
-## 四、跨平台杂项与底层工具类问题
+## 1.2 `No game providers present on the class path`
 
-### 1. JNI 0.22 巨变
-*   **现象**：大量 API 编译报错。
-*   **解决**：使用 `InitArgsBuilder` + `JNIVersion::V1_8` 启动 JVM；必须开启 `invocation` feature；字符串和签名必须使用 `jni_str!` 和 `jni_sig!` 宏；`JObjectArray` 的构造参数变更需要传入 `JObject::null()`。
+<badge color="success">Resolved</badge>
 
-### 2. Java 版本兼容与模块化限制
-*   **现象**：高版本 Java（17/21）报 `InaccessibleObjectException`（如 `sun.security.util`、`java.util.jar`）。
-*   **解决**：在启动脚本中动态注入大量的 `--add-opens` 和 `--add-exports`。例如：
-    `--add-exports java.base/sun.security.util=ALL-UNNAMED`
-    `--add-opens java.base/java.util.jar=ALL-UNNAMED`
+**Symptoms**
 
-### 3. 全量扫描导致的高版本类污染
-*   **现象**：报 `UnsupportedClassVersionError`（class file version 60.0 / 61.0 / 69.0）。
-*   **原因**：本地 `libraries` 目录里有多个版本的加载器（如 ModLauncher 10、11，NeoForge 的 FML 等），Rust 或脚本在扫描时误把 Java 16+ 编译的类加载进了 Java 8 的进程。
-*   **解决**：写了强力的 Python 脚本，读取 JAR 包内的 class 文件魔数，过滤掉 major version > 52 的所有文件。
+Fabric failed to initialize because it could not locate a valid Minecraft game provider.
+
+Typical error:
+
+```text
+No game providers present on the class path
+```
+
+**Root cause**
+
+The manually launched environment did not correctly identify the Minecraft game JAR.
+
+Additionally, Fabric's classpath isolation mechanism prevented the game classes from being discovered through the expected classpath configuration.
+
+**Solution**
+
+Explicitly supplied the game JAR location and adjusted Fabric's classpath isolation configuration.
+
+Relevant JVM properties:
+
+```text
+-Dfabric.gameJarPath=/path/to/minecraft-client.jar
+-Dfabric.debug.disableClassPathIsolation=true
+-Dfabric.gameVersion=1.21.4
+```
+
+The actual game JAR path must be resolved dynamically from the local Minecraft installation.
+
+**Verification**
+
+Fabric recognized the Minecraft game provider and proceeded to launch the client.
 
 ---
 
-## 五、跨版本玩家镜像与坐标同步问题（Fabric 1.21.4 / NeoForge 1.21.1）
+## 1.3 Classpath Conflicts Caused by Copying the Entire Libraries Directory
 
-### 1. NeoForge 未能及时获取 Minecraft 实例
+<badge color="success">Improved</badge>
 
-- **现象**：DataBus 已收到 Fabric 发送的 `player_move` 消息，但处理坐标时，`nfMcInstance` 或 `nfMcClass` 仍为 `null`。
-- **原因**：Minecraft 实例初始化与坐标消息处理之间存在时序问题；原有代码只延迟 3 秒获取实例，且没有验证 `getInstance()` 的返回值是否为 `null`。
-- **解决措施**：增加实例状态诊断日志；将实例获取改为最多重试 180 次、每次间隔 1 秒，并仅在获取到非空实例后报告成功。
+**Symptoms**
 
-### 2. Fabric 与 NeoForge 的镜像玩家位置及世界环境不一致
+Errors included:
 
-- **现象**：Fabric 端正常显示玩家及森林环境，NeoForge 端也成功显示 `FabricMirror` 镜像玩家，但镜像玩家出现在地下封闭空间。
-- **原因分析**：两个客户端使用不同的 Minecraft 版本（1.21.4 与 1.21.1），可能存在世界状态、区块加载或维度差异；具体原因尚未确认。
-- **解决措施**：确认 DataBus 能持续转发 Fabric 的真实坐标，并在 NeoForge 中显示镜像实体。后续需要对比两端玩家的实际坐标、所在维度及区块加载状态，再修复位置与世界环境不一致的问题。
+```text
+NoSuchMethodError
+ClassNotFoundException
+```
 
-### 3. Minecraft 窗口失去焦点后自动进入 ESC 菜单
+Some failures involved libraries such as Authlib, DataFixerUpper, and LWJGL.
 
-- **现象**：切换到浏览器或其他应用时，Fabric 与 NeoForge 客户端都会自动进入 ESC 暂停菜单，影响双客户端同时运行。
-- **排查与处理**：检查 Minecraft 的窗口失焦自动暂停行为，尝试通过 `F3 + P` 切换失焦自动暂停设置，并检查客户端各自的 `options.txt` 配置。
-- **后续验证**：确认两个客户端在切换应用后仍能保持运行，并检查 DataBus 坐标同步是否持续进行。
+**Root cause**
 
-## 六、Forge 1.21.4 启动问题（ModLauncher 10.2.4）
+Initially, copying the entire Minecraft `libraries` directory into the classpath introduced multiple versions of the same dependency.
 
-(注：目前尚未确认完整启动成功，以下为实际报错、尝试过程与原因分析)
+A JAR being present does not necessarily mean it is the correct version for the current Minecraft installation.
 
-### 1. ModLauncher JAR 定位失败
+**Solution**
 
-* 现象：启动时出现 ERROR: ModLauncher JAR not found。
-* 原因：启动器预期路径与实际文件定位存在不一致的可能，目录中还出现了不同命名的 ModLauncher JAR。
-* 尝试解决：检查 JAR 路径、文件名，并调整 Rust 启动器的路径构造逻辑。
+Implemented a Rust-side `resolve_classpath()` routine that reads the Minecraft version manifest.
 
-### 2. 多个依赖的 Module Path 缺失
+The resolver:
 
-* 现象：module path missing，涉及 securemodules、forgespi、fmlloader、Bootstrap API、ASM 等组件。
-* 原因：JAR 文件存在不代表 JVM 能正确解析模块；Classpath 与 Module Path 的配置可能不一致。
-* 尝试解决：检查模块描述符、调整依赖路径、尝试过滤重复的 ModLauncher 条目。
+1. Parses the Minecraft version JSON.
+2. Reads individual library declarations.
+3. Evaluates operating-system rules.
+4. Filters libraries according to the current platform and architecture.
+5. Resolves the required JAR paths.
+6. Includes the appropriate native classifiers.
 
-### 3. Bootstrap 服务发现失败
+For the Apple Silicon test environment, relevant rules include:
 
-* 现象：预期的 META-INF/services/net.minecraftforge.bootstrap.api.BootstrapEntryPoint 服务描述符最初不存在。
-* 原因：服务接口、实现类和注册方式之间可能存在不匹配；但描述符缺失本身不足以证明它是唯一故障原因。
-* 尝试解决：检查模块描述符，并尝试向处理后的 ModLauncher JAR 注入服务描述符。
+```text
+macOS
+arm64
+natives-macos-arm64
+natives-macos
+```
 
-### 4. 强制注入 Bootstrap JAR 后仍然启动失败
+**Verification**
 
-* 现象：提示 成功在 Classpath 最前方强制注入 Bootstrap JAR，但随后仍出现 ModLauncher JAR not found、forge-client JAR missing 等错误。
-* 原因：Classpath 注入成功不代表文件定位、模块解析和启动入口均正确。
-* 尝试解决：调整 Classpath 顺序、清理重复依赖，并修改 Rust 启动参数构造逻辑。
->以目前而言，forge已在试验上成功
+The launcher successfully resolved the required dependencies from Minecraft 1.21.4 metadata.
+
+One recorded dependency-resolution run resolved 32 of 77 declared libraries before subsequent classpath construction.
+
+Further work is still needed to make dependency resolution fully portable and comprehensive.
+
+---
+
+## 1.4 LWJGL Native Library Loading Failure
+
+<badge color="success">Resolved in tested macOS configuration</badge>
+
+**Symptoms**
+
+Typical errors:
+
+```text
+Failed to locate library: liblwjgl.dylib
+```
+
+or:
+
+```text
+MemoryUtil initialization failed
+```
+
+**Root cause**
+
+The LWJGL Java libraries were available, but their platform-specific native binaries were not correctly extracted or located.
+
+**Solution**
+
+Downloaded and extracted the appropriate LWJGL macOS ARM64 native libraries into a dedicated directory.
+
+Configured:
+
+```text
+-Djava.library.path=/path/to/natives
+```
+
+**Verification**
+
+The Minecraft client successfully initialized its graphics and sound subsystems in the tested environment.
+
+---
+
+## 1.5 Missing Netty Dependency at Runtime
+
+<badge color="warning">Requires further verification</badge>
+
+**Symptoms**
+
+A Fabric launch reached the KnotClient initialization stage but subsequently encountered:
+
+```text
+NoClassDefFoundError:
+io/netty/util/ResourceLeakDetector$Level
+```
+
+**Root cause**
+
+The immediate failure indicated that the runtime could not resolve the required Netty class.
+
+Although Guava had been downloaded and verified, Guava was unrelated to the missing Netty class.
+
+This demonstrated that successfully resolving one dependency does not guarantee that the complete runtime dependency graph is available.
+
+**Investigation**
+
+The following checks were performed:
+
+- Verified the downloaded Guava JAR.
+- Confirmed that the expected Guava class existed inside the archive.
+- Inspected the manually assembled classpath.
+- Identified the missing Netty class as a separate dependency-resolution issue.
+
+**Current status**
+
+The Netty classpath issue requires verification against the exact Minecraft version metadata and actual runtime classpath.
+
+The fix must ensure that the correct Netty JAR, rather than an arbitrary version, is selected.
+
+---
+
+# 2. NeoForge 1.21.1 Startup Problems — ModLauncher 11
+
+## 2.1 `ModLauncher null starting` and NullPointerException
+
+<badge color="success">Resolved / bypassed</badge>
+
+**Symptoms**
+
+BootstrapLauncher failed during ModLauncher initialization.
+
+A representative failure involved:
+
+```text
+TypesafeMap.putIfAbsent
+NullPointerException
+```
+
+The startup logs also showed:
+
+```text
+ModLauncher null starting
+```
+
+**Root cause**
+
+The initial investigation focused on ModLauncher version metadata and manifest attributes.
+
+When ModLauncher is loaded as a JPMS module, its runtime metadata lookup does not necessarily behave like ordinary classpath-based JAR loading.
+
+Consequently, `getImplementationVersion()` can return `null` if the expected metadata is unavailable through the actual loading path.
+
+The exact failure also depends on the selected ModLauncher and BootstrapLauncher versions.
+
+**Solution / workaround**
+
+Rather than relying on rewriting the original JAR manifest, the launcher was reworked to construct the expected module and legacy classpaths.
+
+Important components included:
+
+- `--module-path`
+- `-DlegacyClassPath`
+- BootstrapLauncher dependencies
+- SecureJarHandler dependencies
+- Correct JVM argument ordering
+
+This approach was more reliable than attempting to solve the problem through manifest modification alone.
+
+**Verification**
+
+NeoForge 1.21.1 successfully progressed through the earlier ModLauncher initialization failure and reached the Minecraft client startup process.
+
+---
+
+## 2.2 `ServiceConfigurationError` and Early Window Initialization
+
+<badge color="success">Workaround verified</badge>
+
+**Symptoms**
+
+The early loading window crashed with an error resembling:
+
+```text
+ServiceConfigurationError:
+Unable to get public no-arg constructor
+```
+
+The failure involved:
+
+```text
+EarlyProgressVisualization
+```
+
+**Root cause**
+
+The early window service initialization path was incompatible with the tested manually constructed launch environment.
+
+The exact interaction between service discovery and the early window implementation was not fully isolated.
+
+**Workaround**
+
+Modified:
+
+```text
+config/fml.toml
+```
+
+Set:
+
+```toml
+earlyWindowControl = false
+```
+
+**Verification**
+
+Disabling early window control allowed the startup process to bypass the specific failure.
+
+This is a workaround, not a general solution for every early-window initialization problem.
+
+---
+
+## 2.3 `NoSuchElementException` and Missing Client Classes
+
+<badge color="success">Resolved in tested configuration</badge>
+
+**Symptoms**
+
+The NeoForge client process failed with missing-class errors or exceptions during startup.
+
+**Root cause**
+
+The supplied `unix_args.txt` was not sufficient for the manually constructed client environment.
+
+Some client-side dependencies were missing from the effective legacy classpath.
+
+Examples investigated included:
+
+- ICU4J
+- Text-to-speech libraries
+- LWJGL components
+
+Java's module encapsulation also restricted some reflective access paths.
+
+**Solution**
+
+Used Python scripts to inspect the installed libraries and append the missing dependencies to the effective legacy classpath.
+
+Additional JVM module-access options were introduced where required.
+
+Example:
+
+```text
+--add-opens
+--add-exports
+```
+
+For macOS, the following option was also required:
+
+```text
+-XstartOnFirstThread
+```
+
+This addresses the platform-specific requirement for creating the GLFW window on the first application thread.
+
+**Verification**
+
+NeoForge 1.21.1 successfully reached the Minecraft client environment in the tested configuration.
+
+---
+
+# 3. Forge 1.16.5 Startup Problems — ModLauncher 8
+
+> This version was investigated but was not successfully brought to a working client state. The following records describe the attempted solutions and unresolved causes.
+
+## 3.1 Official Installer JAR Splitter Hash Mismatch
+
+<badge color="danger">Unresolved for native macOS installation</badge>
+
+**Symptoms**
+
+The official installer failed during its JAR splitting stage.
+
+Representative output:
+
+```text
+Expected: xxx
+Actual: xxx
+```
+
+The hash verification failure prevented the installer from completing.
+
+**Investigation**
+
+Several possibilities were considered, including differences in compression behavior between the macOS environment and the installer dependencies.
+
+The suspected interaction with the system zlib implementation was not conclusively established.
+
+**Attempts**
+
+- Switched to Java 8u312.
+- Tested Forge 36.2.42.
+- Repeated the installation process.
+
+These attempts did not resolve the failure.
+
+**Workaround**
+
+Ran the official installer in a Windows virtual machine.
+
+The generated files, including:
+
+```text
+srg.jar
+extra.jar
+```
+
+were copied back to macOS.
+
+This allowed the investigation to proceed without relying on the failing native macOS installation step.
+
+---
+
+## 3.2 Missing `fmlloader` and `FMLClientLaunchHandler`
+
+<badge color="danger">Unresolved</badge>
+
+**Symptoms**
+
+The launch process failed with:
+
+```text
+Cannot find launch target fmlclient
+```
+
+**Root cause**
+
+Forge 1.16.5 uses an older launch architecture.
+
+The required FML client launch classes were not available through the initially assembled dependency paths.
+
+Attempts to locate a standalone artifact resembling:
+
+```text
+fmlloader-1.16.5-36.2.42.jar
+```
+
+were unsuccessful.
+
+The inspected `universal.jar` and `client.jar` did not provide the required launch class.
+
+**Attempted workaround**
+
+Tried substituting a newer FML implementation found in a local Prism Launcher installation.
+
+**Final failure**
+
+The newer ModLauncher environment could not correctly recognize the older FML service implementation.
+
+The process eventually failed with:
+
+```text
+Invalid Services found fml
+```
+
+**Conclusion**
+
+Forge 1.16.5 requires a version-specific launch pipeline. Substituting newer FML or ModLauncher components is not a reliable compatibility strategy.
+
+---
+
+# 4. Forge 1.21.4 Startup Problems — ModLauncher 10.2.4
+
+> **Updated status:** Forge 1.21.4 has now achieved experimental startup success in the project. The issues below document the earlier failures and the investigation that led to the working configuration.
+
+## 4.1 ModLauncher JAR Discovery Failure
+
+<badge color="success">Overcome in experimental startup</badge>
+
+**Symptoms**
+
+The launcher reported:
+
+```text
+ERROR: ModLauncher JAR not found
+```
+
+**Root cause**
+
+The Rust launcher expected a particular JAR location and filename, but the local installation contained differently named or duplicated ModLauncher artifacts.
+
+**Investigation**
+
+Inspected the actual library directory and verified the expected artifact paths.
+
+The launcher path-construction logic was adjusted to match the installed dependency layout.
+
+**Result**
+
+The ModLauncher JAR discovery problem was overcome in the later experimental startup configuration.
+
+---
+
+## 4.2 Missing Dependencies on the Module Path
+
+<badge color="success">Overcome in experimental startup</badge>
+
+**Symptoms**
+
+The JVM reported missing module-path dependencies involving components such as:
+
+- SecureModules
+- ForgeSPI
+- FMLLoader
+- Bootstrap API
+- ASM
+
+**Root cause**
+
+A JAR existing on disk does not mean that the JVM can resolve it as a JPMS module.
+
+Classpath and module-path entries serve different purposes.
+
+The initial configuration did not consistently reproduce the module layout expected by the Forge bootstrap process.
+
+**Investigation**
+
+Used tools such as:
+
+```bash
+jar --describe-module --file dependency.jar
+```
+
+and:
+
+```bash
+javap -classpath dependency.jar -p some.package.SomeClass
+```
+
+Inspected the module descriptors, dependency paths, and duplicate entries.
+
+**Result**
+
+The module-path construction was revised, and the Forge 1.21.4 startup experiment subsequently progressed successfully.
+
+---
+
+## 4.3 Bootstrap Service Discovery Failure
+
+<badge color="success">Overcome in experimental startup; implementation details remain version-specific</badge>
+
+**Symptoms**
+
+The expected service descriptor was initially missing:
+
+```text
+META-INF/services/net.minecraftforge.bootstrap.api.BootstrapEntryPoint
+```
+
+**Root cause**
+
+The initial investigation found a mismatch between the expected service interface, implementation classes, and service registration mechanism.
+
+However, the missing descriptor alone did not establish the complete root cause.
+
+**Attempts**
+
+- Inspected the JAR module descriptors.
+- Inspected service registration files.
+- Tested injecting a service descriptor into a processed ModLauncher JAR.
+
+**Result**
+
+The bootstrap configuration was revised sufficiently for the later Forge startup experiment.
+
+Manual service descriptor injection should not be treated as a universal solution; the actual service provider mechanism must match the Forge version.
+
+---
+
+## 4.4 Bootstrap JAR Injection Did Not Initially Solve Startup
+
+<badge color="success">Overcome in later configuration</badge>
+
+**Symptoms**
+
+Even after the bootstrap JAR was injected at the beginning of the classpath, the launcher continued to report errors resembling:
+
+```text
+ModLauncher JAR not found
+forge-client JAR missing
+```
+
+**Root cause**
+
+Successful classpath insertion does not guarantee:
+
+- Correct file discovery.
+- Correct module resolution.
+- Correct service loading.
+- Correct bootstrap entry-point selection.
+
+These are separate stages of the Java launch process.
+
+**Investigation**
+
+Adjusted classpath ordering, removed duplicate dependency entries, and revised Rust-side JVM argument construction.
+
+**Current status**
+
+Forge 1.21.4 has experimentally reached the early loading stage.
+
+Further testing is required to establish full client startup and stable gameplay.
+
+---
+
+## 4.5 Duplicate ModLauncher Modules and `UnionFileSystemProvider`
+
+<badge color="warning">Requires further verification</badge>
+
+**Symptoms**
+
+The Forge investigation encountered duplicate ModLauncher-related artifacts and module-resolution conflicts.
+
+One reported conflict involved:
+
+```text
+UnionFileSystemProvider
+```
+
+**Root cause**
+
+Multiple dependency versions or duplicate module entries can cause the JVM to resolve conflicting implementations or encounter module-layer initialization failures.
+
+The presence of similarly named JARs in the library directory made it important to distinguish between the actual selected artifact and unused alternatives.
+
+**Investigation**
+
+- Inspected ModLauncher 10.2.4.
+- Checked the launcher constructor and bytecode with `javap`.
+- Inspected module-path construction.
+- Checked for duplicate ModLauncher entries.
+- Compared the expected module layout against the local Forge installation.
+
+**Current status**
+
+The later Forge 1.21.4 startup experiment succeeded, but the dependency-selection logic should still be hardened against duplicate modules.
+
+---
+
+# 5. Rust, JNI, and JVM Integration Problems
+
+## 5.1 JNI 0.22 API Changes
+
+<badge color="success">Resolved</badge>
+
+**Symptoms**
+
+The Rust JNI integration produced numerous compilation errors after moving to JNI crate version 0.22.
+
+**Root cause**
+
+The JNI crate API changed substantially compared with earlier versions.
+
+Several APIs, string conversion patterns, and object construction methods no longer matched the previous implementation.
+
+**Solution**
+
+Updated the Rust integration to use the new API patterns.
+
+Important components include:
+
+```rust
+InitArgsBuilder
+JNIVersion::V1_8
+jni_str!
+jni_sig!
+```
+
+The required `invocation` feature was also enabled.
+
+For example, `JObjectArray` construction requires the appropriate object initialization arguments, including:
+
+```rust
+JObject::null()
+```
+
+where applicable.
+
+**Verification**
+
+Rust successfully launches an embedded JVM and invokes Java methods through JNI.
+
+---
+
+## 5.2 Java Module Encapsulation and `InaccessibleObjectException`
+
+<badge color="success">Workaround implemented</badge>
+
+**Symptoms**
+
+Java 17 and Java 21 environments produced errors such as:
+
+```text
+InaccessibleObjectException
+```
+
+Some failures involved:
+
+```text
+sun.security.util
+java.util.jar
+```
+
+**Root cause**
+
+The Java Platform Module System restricts reflective access to internal packages.
+
+Older libraries and launchers may assume unrestricted access to these APIs.
+
+**Solution / workaround**
+
+Added the required module-access arguments to the JVM launch configuration.
+
+Examples:
+
+```text
+--add-exports java.base/sun.security.util=ALL-UNNAMED
+--add-opens java.base/java.util.jar=ALL-UNNAMED
+```
+
+Additional packages must be opened only when required by the selected loader and dependency versions.
+
+**Remaining concern**
+
+Excessive use of `--add-opens` and `--add-exports` can conceal deeper compatibility problems. The long-term objective is to minimize these flags and use version-appropriate launch configurations.
+
+---
+
+## 5.3 `UnsupportedClassVersionError` from Library Scanning
+
+<badge color="success">Filtering workaround implemented</badge>
+
+**Symptoms**
+
+The JVM reported:
+
+```text
+UnsupportedClassVersionError
+```
+
+Examples of encountered class-file major versions included:
+
+```text
+60.0
+61.0
+69.0
+```
+
+**Root cause**
+
+The local Minecraft libraries directory contained multiple generations of Java dependencies and mod-loader components.
+
+Broad directory scanning could accidentally include classes compiled for a newer Java runtime.
+
+For example:
+
+| Class-file major version | Java version |
+|---|---|
+| 52 | Java 8 |
+| 60 | Java 16 |
+| 61 | Java 17 |
+| 65 | Java 21 |
+| 69 | Java 25 |
+
+The exact compatibility requirement depends on the Minecraft and loader versions being launched.
+
+**Solution / workaround**
+
+Implemented Python-based JAR inspection that reads class-file headers and filters out incompatible classes where the legacy environment requires an older Java version.
+
+**Remaining concern**
+
+Filtering class files is not a substitute for dependency resolution.
+
+The preferred approach is to select the correct version of each dependency before constructing the classpath.
+
+---
+
+## 5.4 JVM Argument Ordering
+
+<badge color="success">Resolved in tested launch configurations</badge>
+
+**Symptoms**
+
+Some JVM properties and module arguments were not interpreted as expected during the launch process.
+
+**Root cause**
+
+JVM options, system properties, classpath arguments, and application arguments must appear in the correct positions.
+
+For example, JVM options placed after the main class are interpreted as application arguments rather than JVM configuration.
+
+**Solution**
+
+Revised the Rust launch command construction to keep JVM options before the application entry point.
+
+This includes:
+
+- `-D` system properties.
+- `-X` runtime options.
+- `--add-opens`.
+- `--add-exports`.
+- `--module-path`.
+- Classpath arguments.
+
+**Verification**
+
+The tested Fabric and NeoForge launch configurations progressed beyond the earlier argument-ordering failures.
+
+---
+
+# 6. Rust DataBus and IPC Problems
+
+## 6.1 DataBus Connection Refused
+
+<badge color="success">Resolved</badge>
+
+**Symptoms**
+
+Java Agents reported:
+
+```text
+Connection refused
+```
+
+when attempting to connect to:
+
+```text
+127.0.0.1:25565
+```
+
+**Root cause**
+
+The Java Agent attempted to connect before the Rust DataBus had successfully bound its TCP listener.
+
+The original asynchronous startup arrangement made the listener startup race harder to detect.
+
+In Fusion mode, multiple child processes also needed to share a single DataBus rather than independently attempting to bind the same address.
+
+**Solution**
+
+Changed the Rust DataBus startup function:
+
+```rust
+fn start_data_bus() -> std::io::Result<()>
+```
+
+The listener is now bound synchronously before the accept thread is spawned.
+
+The startup error is propagated to the caller.
+
+Fusion mode starts one shared DataBus in the parent process and sets:
+
+```text
+JVM_COMBINER_BUS_EXTERNAL=1
+```
+
+in both child environments.
+
+Standalone Fabric and NeoForge modes start their own DataBus unless this environment variable is present.
+
+**Verification**
+
+Standalone NeoForge successfully produced logs resembling:
+
+```text
+[DataBus] 路由总线已启动，监听 127.0.0.1:25565
+[DataBus] 127.0.0.1:59996 注册为 'neoforge'
+[BusAgent:neoforge] Connected to DataBus
+```
+
+Both Fabric and NeoForge have also successfully registered with the same Fusion DataBus in a concurrent launch.
+
+---
+
+## 6.2 Client Registration and Message Routing
+
+<badge color="success">Verified prototype</badge>
+
+**Symptoms**
+
+Both clients could connect to TCP, but messages needed a reliable destination and source identity.
+
+**Solution**
+
+Implemented named client registration and JSON message routing.
+
+The clients register using messages such as:
+
+```json
+{"register":"fabric"}
+```
+
+and:
+
+```json
+{"register":"neoforge"}
+```
+
+Messages use a destination field:
+
+```json
+{
+  "to": "neoforge",
+  "type": "player_move",
+  "x": 3.0,
+  "y": 64.0,
+  "z": 8.5
+}
+```
+
+The Rust DataBus forwards messages to the registered destination and attaches the sender identity as `from`.
+
+**Verification**
+
+The following communication pattern has been verified:
+
+```text
+Fabric -> DataBus -> NeoForge
+NeoForge -> DataBus -> Fabric
+```
+
+The `hello` / `ack` routing test succeeded.
+
+**Important distinction**
+
+The current implementation is TCP-based IPC.
+
+It is not a shared-memory bus and does not provide true zero-copy transfer semantics.
+
+---
+
+## 6.3 DataBus Disconnection and Reconnection
+
+<badge color="warning">Requires additional stress testing</badge>
+
+**Symptoms**
+
+A sandbox may lose its TCP connection while the other sandbox continues running.
+
+Potential consequences include:
+
+- Lost movement messages.
+- Stale player state.
+- Delayed synchronization after reconnection.
+- A sender believing that an old state has already been transmitted.
+
+**Existing implementation**
+
+The Java Agent attempts to reconnect when its socket connection fails.
+
+The Rust DataBus maintains separate client connections and writer channels.
+
+**Remaining work**
+
+- Explicit connection-state tracking.
+- Reconnection backoff.
+- State resynchronization after reconnect.
+- Heartbeat monitoring.
+- Handling duplicate or stale messages.
+- Detecting disconnected destination clients.
+
+A successful TCP write should not be treated as proof that the remote game has applied the state.
+
+---
+
+## 6.4 Concurrent TCP Writes
+
+<badge color="success">Improved</badge>
+
+**Symptoms**
+
+Multiple threads may attempt to write messages to the same client connection.
+
+Without synchronization, JSON messages could become interleaved or corrupted.
+
+**Solution**
+
+The Rust DataBus uses a separate writer thread and an `mpsc` channel for each connection.
+
+Conceptually:
+
+```text
+Client Handler
+      |
+      v
+  mpsc Sender
+      |
+      v
+  Writer Thread
+      |
+      v
+  TCP Stream
+```
+
+This keeps actual socket writes serialized for each connection.
+
+The Java Agent also synchronizes its writes around the shared `PrintWriter`.
+
+**Remaining concern**
+
+Connection replacement and shutdown behavior should continue to be tested under concurrent reconnect conditions.
+
+---
+
+# 7. Java Agent and Runtime Instrumentation Problems
+
+## 7.1 Java Agent Injection and Class Transformation
+
+<badge color="success">Verified</badge>
+
+**Objective**
+
+Inject runtime instrumentation without requiring direct Mixin integration for every diagnostic or synchronization task.
+
+**Implementation**
+
+The Rust launcher supplies a Java Agent through JVM startup arguments:
+
+```text
+-javaagent:/path/to/bus-agent.jar
+```
+
+The Agent uses:
+
+```java
+public static void premain(
+    String agentArgs,
+    Instrumentation instrumentation
+)
+```
+
+A `ClassFileTransformer` observes classes loaded by the Fabric runtime.
+
+**Verification**
+
+Example output:
+
+```text
+[BusAgent:fabric] premain
+[BusAgent:fabric] MC-CLIENT: net/minecraft/client/main/Main loader=KnotClassLoader
+[BusAgent:fabric] MC-CLIENT: net/minecraft/client/ClientBrandRetriever loader=KnotClassLoader
+```
+
+This establishes that the Agent can be initialized and can observe classes loaded by Fabric's KnotClassLoader.
+
+It does not mean that arbitrary runtime class modification or Mixin conflict resolution has already been implemented.
+
+---
+
+## 7.2 Fabric Player Monitor NullPointerException
+
+<badge color="success">Resolved</badge>
+
+**Symptoms**
+
+The Fabric monitoring thread repeatedly produced `NullPointerException` errors.
+
+The failure originated around:
+
+```text
+BusAgent.monitorFabricPlayer
+```
+
+**Root cause**
+
+The monitor attempted to inspect the Minecraft instance before Fabric had fully initialized its game instance.
+
+The relevant reference was still:
+
+```java
+fabricMcInstance == null
+```
+
+**Solution**
+
+Added null protection and a wait/retry path.
+
+The monitor now waits for the Minecraft instance before attempting player discovery.
+
+**Verification**
+
+The monitor produced clean initialization output:
+
+```text
+[BusAgent:fabric][INIT] SUCCESS: flk
+```
+
+The earlier repeated NPE spam was eliminated.
+
+---
+
+## 7.3 NeoForge Player Discovery Initialization Race
+
+<badge color="success">Resolved for player discovery</badge>
+
+**Symptoms**
+
+The DataBus could receive Fabric `player_move` messages while NeoForge still had:
+
+```java
+nfMcInstance == null
+```
+
+or:
+
+```java
+nfMcClass == null
+```
+
+The original receive-side initialization path depended on incoming synchronization messages.
+
+If a message arrived before the Minecraft client was ready, the synchronization handler could not safely access the game state.
+
+**Root cause**
+
+NeoForge's Minecraft lifecycle and the DataBus connection lifecycle were independent.
+
+The original implementation initialized the NeoForge Minecraft reference only when the receive handler needed it.
+
+This created a timing dependency between remote messages and local client initialization.
+
+**Solution**
+
+Added an independent NeoForge monitoring thread.
+
+The monitor repeatedly:
+
+1. Searches for the loaded `net.minecraft.client.Minecraft` class.
+2. Calls the static `getInstance()` method.
+3. Waits for a non-null Minecraft instance.
+4. Schedules readiness checks through `Minecraft.execute()`.
+5. Checks `ClientLevel`.
+6. Checks `LocalPlayer`.
+7. Logs readiness transitions.
+
+The monitor also uses an atomic flag to avoid scheduling duplicate probes.
+
+**Verification**
+
+The following messages were observed:
+
+```text
+[BusAgent:neoforge][MONITOR] thread started
+[BusAgent:neoforge][INIT] Minecraft instance found
+[BusAgent:neoforge][INIT] ClientLevel ready
+[BusAgent:neoforge][LIVE] LocalPlayer ready
+```
+
+This verifies that NeoForge player discovery works in the tested client session.
+
+It does not yet verify bidirectional state synchronization.
+
+---
+
+## 7.4 Runtime Reflection and Minecraft Mapping Differences
+
+<badge color="warning">Version-specific implementation</badge>
+
+**Symptoms**
+
+Minecraft methods are not always accessible through the same method names across different runtime environments.
+
+Directly using development names can fail when the runtime uses obfuscated names.
+
+**Fabric implementation**
+
+The tested Fabric 1.21.4 environment required reflective access to methods identified through local mappings and runtime inspection.
+
+The current implementation uses method names including:
+
+```text
+dA
+dC
+dG
+dL
+dN
+cj
+```
+
+These correspond to the player position, rotation, and sprint-state accessors in the tested runtime.
+
+**NeoForge implementation**
+
+NeoForge uses a different runtime setup.
+
+The NeoForge sender is designed to resolve methods independently rather than reusing Fabric's method cache.
+
+The expected Mojang-style method names include:
+
+```java
+getX()
+getY()
+getZ()
+getYRot()
+getXRot()
+isSprinting()
+```
+
+**Remaining work**
+
+- Resolve method mappings dynamically.
+- Verify mappings against each exact Minecraft version.
+- Avoid hardcoded names where practical.
+- Detect missing or incompatible methods without repeatedly flooding the logs.
+- Support future Minecraft versions.
+
+---
+
+# 8. Cross-Version Player Mirroring and State Synchronization
+
+Tested version combination:
+
+```text
+Fabric     Minecraft 1.21.4
+NeoForge   Minecraft 1.21.1
+```
+
+## 8.1 NeoForge Remote Player Initialization
+
+<badge color="success">Prototype implemented</badge>
+
+**Objective**
+
+Create a remote player entity in the NeoForge sandbox to represent the Fabric local player.
+
+**Implementation**
+
+The NeoForge Agent uses reflection to access Minecraft runtime classes and construct a `RemotePlayer`.
+
+The mirror is given a recognizable name:
+
+```text
+FabricMirror
+```
+
+Its UUID is derived from a stable identifier associated with the Fabric mirror.
+
+A high candidate entity ID is used to reduce the risk of colliding with ordinary game entities.
+
+**Verification**
+
+The NeoForge client successfully displayed the injected mirror player in the tested environment.
+
+This proves that the NeoForge runtime can accept a remotely controlled player entity through the current reflection-based prototype.
+
+**Remaining work**
+
+- Stable UUID management.
+- Entity ID collision handling.
+- Duplicate entity prevention.
+- Respawn and disconnect handling.
+- Dimension transitions.
+- Player removal when the source disconnects.
+- Compatibility with different Minecraft versions.
+
+---
+
+## 8.2 Fabric and NeoForge Mirror Appearing in Different Environments
+
+<badge color="warning">Under investigation</badge>
+
+**Symptoms**
+
+Fabric displayed the local player in a forest environment.
+
+NeoForge also displayed the `FabricMirror` entity, but the mirror appeared in an underground enclosed area.
+
+The two clients did not appear to show the same surrounding environment.
+
+**Possible causes**
+
+The clients were running different Minecraft versions:
+
+```text
+Fabric:   1.21.4
+NeoForge: 1.21.1
+```
+
+Potential explanations include:
+
+- Different terrain-generation behavior.
+- Different world seeds.
+- Different dimension state.
+- Different chunk availability.
+- Different client world initialization timing.
+- Different coordinates or coordinate interpretation.
+- Differences in the mirror entity's initialization and positioning.
+
+The exact cause has not been confirmed.
+
+**Current investigation**
+
+The DataBus successfully forwarded Fabric's player coordinates, and NeoForge successfully displayed the mirror entity.
+
+The next step is to compare both clients':
+
+- X, Y, and Z coordinates.
+- Dimension identifiers.
+- World seeds.
+- Loaded chunk positions.
+- Local-player position.
+- Mirror-player position.
+
+**Remaining work**
+
+Establish whether the discrepancy originates from world generation, world state, chunk loading, or entity synchronization.
+
+A matching coordinate alone does not guarantee identical terrain or world state across different Minecraft versions.
+
+---
+
+## 8.3 Minecraft Automatically Pauses When the Window Loses Focus
+
+<badge color="warning">Requires final dual-client verification</badge>
+
+**Symptoms**
+
+When switching to a browser or another application, one or both Minecraft clients automatically entered the ESC pause menu.
+
+This interfered with testing two clients simultaneously.
+
+**Investigation**
+
+Checked Minecraft's automatic pause behavior when the game window loses focus.
+
+Tested the relevant keyboard setting:
+
+```text
+F3 + P
+```
+
+Also inspected the individual client configurations:
+
+```text
+options.txt
+```
+
+**Remaining work**
+
+Verify that both clients continue running after focus changes.
+
+In particular, confirm that:
+
+- The world simulation continues.
+- The game thread continues processing scheduled tasks.
+- Player-state sampling continues.
+- DataBus messages continue to be transmitted.
+- Mirror entities continue to update.
+
+Disabling automatic pause is not by itself proof that every synchronization task remains active.
+
+---
+
+## 8.4 Fabric-to-NeoForge State Synchronization
+
+<badge color="success">Proof of concept verified</badge>
+
+**Implementation**
+
+The Fabric Agent:
+
+1. Locates the Fabric Minecraft instance.
+2. Discovers the local player.
+3. Extracts coordinates, rotation, and sprint state.
+4. Constructs a JSON `player_move` message.
+5. Sends it to the Rust DataBus.
+
+The DataBus routes the message to NeoForge.
+
+The NeoForge Agent receives and parses the message and updates the mirror entity through the Minecraft game thread.
+
+**Message example**
+
+```json
+{
+  "to": "neoforge",
+  "type": "player_move",
+  "x": 3.0,
+  "y": 64.0,
+  "z": 8.5,
+  "yaw": 90.0,
+  "pitch": 0.0,
+  "sprint": false
+}
+```
+
+**Verified capabilities**
+
+- Fabric player-state extraction.
+- TCP message transmission.
+- Rust DataBus routing.
+- NeoForge message reception.
+- NeoForge JSON parsing.
+- NeoForge mirror entity update.
+
+**Remaining work**
+
+The current implementation is a proof of concept. It requires more testing for movement smoothness, network latency, entity lifecycle, and version compatibility.
+
+---
+
+## 8.5 NeoForge-to-Fabric Synchronization
+
+<badge color="warning">In progress</badge>
+
+**Objective**
+
+Implement the reverse direction:
+
+```text
+NeoForge LocalPlayer
+        |
+        v
+NeoForge Java Agent
+        |
+        v
+Rust DataBus
+        |
+        v
+Fabric Java Agent
+```
+
+**Planned sender behavior**
+
+The NeoForge Agent should:
+
+1. Sample the local player on the Minecraft game thread.
+2. Read X, Y, Z, yaw, pitch, and sprint state.
+3. Send state changes immediately.
+4. Send a heartbeat approximately once per second.
+5. Preserve state consistency after TCP reconnection.
+
+**Known implementation considerations**
+
+- Game-state access must occur on the Minecraft game thread.
+- NeoForge reflection bindings must be independent of Fabric bindings.
+- The sender must not update its last-successful-state cache when the TCP writer is unavailable.
+- Reconnection should trigger a fresh state transmission.
+- The sender must avoid repeatedly logging the same reflection or TCP failure.
+
+**Remaining work**
+
+- Complete and verify the NeoForge sender.
+- Implement Fabric-side message reception.
+- Inject a remote mirror entity into Fabric.
+- Test simultaneous movement in both directions.
+- Prevent synchronization feedback loops.
+
+Until the Fabric receive path is implemented and verified, bidirectional player synchronization must not be considered complete.
+
+---
+
+# 9. ClassLoader Isolation and Mixin Compatibility
+
+<badge color="warning">Major unresolved research area</badge>
+
+## 9.1 `parent = null` Is Not a Complete Isolation Strategy
+
+**Problem**
+
+The original architecture considered using:
+
+```java
+new URLClassLoader(urls, null)
+```
+
+to isolate different loader environments.
+
+However, a completely isolated parentless ClassLoader cannot automatically access the Java platform classes and other shared runtime dependencies required by real loaders.
+
+**Challenges**
+
+Real Minecraft loaders depend on:
+
+- `java.lang.*`
+- `java.util.*`
+- Reflection APIs.
+- Java networking.
+- Native library interfaces.
+- Runtime services.
+- Shared platform interfaces.
+
+**Research direction**
+
+Investigate a controlled parent ClassLoader or hybrid delegation model.
+
+The objective is to isolate loader-specific classes without breaking access to required Java platform classes.
+
+---
+
+## 9.2 Mixin Conflicts Across Independent Loader Environments
+
+<badge color="warning">Not solved</badge>
+
+**Problem**
+
+Fabric and Forge/NeoForge use different Mixin integration and transformation pipelines.
+
+Running both environments in a shared JVM introduces questions about:
+
+- Transformation ordering.
+- Duplicate target transformations.
+- Class definition ownership.
+- Injection conflicts.
+- Static state shared across class loaders.
+- Transformation visibility between isolated environments.
+
+**Potential approaches**
+
+- Independent transformation environments.
+- Explicit transformation ownership.
+- Bytecode inspection and conflict detection.
+- Priority-based transformation rules.
+- Controlled compatibility interfaces.
+
+No general-purpose Mixin conflict solution has been implemented yet.
+
+---
+
+## 9.3 Shared Minecraft Classes and Native Runtime State
+
+<badge color="warning">Not solved</badge>
+
+**Problem**
+
+ClassLoader isolation is difficult when two environments depend on classes representing similar or identical Minecraft runtime concepts.
+
+Even if two ClassLoaders can load the same class name independently, the resulting Java types are not interchangeable.
+
+This creates problems for:
+
+- Entity references.
+- Minecraft client instances.
+- Static singleton fields.
+- Event objects.
+- Rendering state.
+- Native resources.
+- Shared game data.
+
+**Research direction**
+
+Keep loader-specific objects inside their own runtime boundaries and exchange serialized data through explicit interfaces.
+
+Avoid passing arbitrary Java objects directly between isolated environments.
+
+---
+
+# 10. Performance and Synchronization Challenges
+
+## 10.1 Different Minecraft Tick Rates
+
+<badge color="warning">Not fully investigated</badge>
+
+**Problem**
+
+Different Minecraft clients may not process game ticks at identical rates.
+
+Possible causes include:
+
+- Different frame rates.
+- Different CPU scheduling.
+- Different JVM garbage collection behavior.
+- Different world loading times.
+- Different client pause states.
+
+A simple position update is therefore not guaranteed to arrive at the same logical tick on both clients.
+
+**Future work**
+
+Investigate:
+
+- Timestamped messages.
+- Sequence numbers.
+- Interpolation.
+- Extrapolation.
+- Stale-state detection.
+- Bounded update queues.
+
+---
+
+## 10.2 Lockstep Synchronization and Double Stuttering
+
+<badge color="warning">Design concern</badge>
+
+**Problem**
+
+A strict lockstep architecture could make both clients wait for each other's game-state progress.
+
+This risks producing a double-stuttering problem:
+
+1. One client waits for a synchronization message.
+2. The other client is delayed by its own frame or tick processing.
+3. Both clients experience additional latency.
+4. The synchronization delay propagates between the two environments.
+
+**Design direction**
+
+The initial implementation should avoid making the Rust kernel a global game-tick authority.
+
+Instead, investigate asynchronous state replication with:
+
+- Local simulation.
+- Timestamped updates.
+- Bounded buffering.
+- Interpolation.
+- Explicit consistency rules.
+
+The DataBus should transport state rather than control every game tick.
+
+---
+
+## 10.3 No-Cheat and Server-Authoritative Interaction
+
+<badge color="warning">Future research</badge>
+
+**Problem**
+
+Some players and server environments impose strict no-cheat requirements.
+
+Directly injecting remote entities or modifying client-side state may not be acceptable in such environments.
+
+Player movement synchronization alone does not solve:
+
+- Server-side authority.
+- Collision validation.
+- Inventory consistency.
+- Attack registration.
+- Interaction ordering.
+- Anti-cheat compatibility.
+
+**Design direction**
+
+Prioritize version compatibility and entity-state replication before implementing left-click and right-click synchronization.
+
+Future interaction synchronization should distinguish between:
+
+- Client-side visual state.
+- Server-authoritative game actions.
+- Validated interaction events.
+- Replicated results.
+
+The project should not assume that client-side entity injection is equivalent to a legitimate server-side player.
+
+---
+
+# 11. Dependency Resolution and Cross-Platform Support
+
+## 11.1 Static Dependency Paths
+
+<badge color="warning">Partially implemented</badge>
+
+**Problem**
+
+Some experimental launch configurations still rely on manually inspected dependency paths or copied JAR files.
+
+This makes the launcher sensitive to:
+
+- Minecraft version changes.
+- Loader version changes.
+- Library updates.
+- Different installation layouts.
+
+**Current implementation**
+
+The Fabric dependency resolver reads Minecraft version metadata and applies platform rules.
+
+Some Forge and NeoForge configurations still require more specialized module-path handling.
+
+**Remaining work**
+
+Implement a unified dependency-resolution layer that understands:
+
+- Minecraft version manifests.
+- Fabric loader dependencies.
+- Forge and NeoForge installer metadata.
+- JPMS module dependencies.
+- Platform-specific native libraries.
+- Dependency checksums.
+
+---
+
+## 11.2 macOS-Specific Launch Behavior
+
+<badge color="warning">Partially handled</badge>
+
+**Problem**
+
+Some launch requirements are specific to macOS.
+
+Examples include:
+
+```text
+-XstartOnFirstThread
+```
+
+and the selection of ARM64 native libraries.
+
+**Current implementation**
+
+The launcher includes platform-specific dependency filtering and native library paths for the tested macOS environment.
+
+**Remaining work**
+
+Validate the same launch pipeline on:
+
+- macOS Intel.
+- macOS Apple Silicon.
+- Windows x86-64.
+- Linux x86-64.
+- Linux ARM64, if supported by the selected Minecraft and loader versions.
+
+---
+
+# 12. Summary of Current Problem Status
+
+| Area | Current status |
+|---|---|
+| Rust JNI integration | <badge color="success">Verified</badge> |
+| Basic URLClassLoader isolation | <badge color="success">Verified</badge> |
+| Fabric 1.21.4 startup | <badge color="success">Verified</badge> |
+| NeoForge 1.21.1 startup | <badge color="success">Verified</badge> |
+| Forge 1.21.4 startup | <badge color="success">Experimental success</badge> |
+| Forge 1.16.5 startup | <badge color="danger">Unresolved</badge> |
+| Rust TCP DataBus | <badge color="success">Verified</badge> |
+| DataBus connection startup race | <badge color="success">Resolved</badge> |
+| Named client registration and routing | <badge color="success">Verified</badge> |
+| Java Agent injection | <badge color="success">Verified</badge> |
+| Fabric player discovery | <badge color="success">Verified</badge> |
+| NeoForge player discovery | <badge color="success">Verified</badge> |
+| Fabric-to-NeoForge state transfer | <badge color="success">PoC verified</badge> |
+| NeoForge RemotePlayer injection | <badge color="success">PoC verified</badge> |
+| NeoForge-to-Fabric state transfer | <badge color="warning">In progress</badge> |
+| Bidirectional player mirroring | <badge color="warning">Not complete</badge> |
+| Cross-version world consistency | <badge color="warning">Under investigation</badge> |
+| Same-JVM real-loader isolation | <badge color="warning">Not solved</badge> |
+| General Mixin conflict resolution | <badge color="warning">Not solved</badge> |
+| True zero-copy DataBus | <badge color="warning">Not implemented</badge> |
+| General mod interoperability | <badge color="warning">Not implemented</badge> |
+| Cross-platform verification | <badge color="warning">Incomplete</badge> |
+
+---
+
+# 13. Recommended Development Priorities
+
+The following order minimizes the risk of expanding the architecture before the current prototype is stable.
+
+### Priority 1 — Complete Bidirectional Player Synchronization
+
+- [ ] Complete NeoForge player-state sender.
+- [ ] Implement Fabric-side receiver.
+- [ ] Add Fabric remote-player injection.
+- [ ] Verify both directions independently.
+- [ ] Test reconnect and state resynchronization.
+
+### Priority 2 — Improve Entity Lifecycle Management
+
+- [ ] Stable remote-player UUID.
+- [ ] Entity ID collision prevention.
+- [ ] Spawn and despawn handling.
+- [ ] Dimension-change handling.
+- [ ] Disconnect cleanup.
+
+### Priority 3 — Improve Synchronization Quality
+
+- [ ] Timestamped messages.
+- [ ] Sequence numbers.
+- [ ] Stale-state detection.
+- [ ] Interpolation.
+- [ ] Network latency measurement.
+- [ ] Tick-rate independence.
+
+### Priority 4 — Expand Cross-Version Compatibility
+
+- [ ] Verify method mappings dynamically.
+- [ ] Test identical Minecraft versions on both sides.
+- [ ] Test different world seeds.
+- [ ] Compare dimension and chunk state.
+- [ ] Test multiple loader versions.
+
+### Priority 5 — Return to the Original Microkernel Architecture
+
+- [ ] Develop a controlled ClassLoader delegation model.
+- [ ] Investigate real-loader isolation inside one JVM.
+- [ ] Define Mixin transformation boundaries.
+- [ ] Develop a stable shared data interface.
+- [ ] Investigate shared-memory transport.
+
+---
+
+## Final Note
+
+JVM Mod Combiner is an experimental systems project.
+
+A successful Minecraft launch, a successful TCP message transfer, and a successful remote-player injection are separate engineering milestones. None of them alone establishes complete cross-loader compatibility.
+
+The project deliberately records unsuccessful experiments and incomplete solutions because understanding the failure modes is essential to designing a stable runtime architecture.
+
+The immediate objective is to make the existing two-process prototype reliable before attempting more ambitious same-JVM isolation and general mod interoperability.

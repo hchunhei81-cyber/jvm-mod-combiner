@@ -1,220 +1,414 @@
 # JVM Mod Combiner
-> 由於考試臨近，這個項目將會暫停／擱置幾星期。
 
-> 一个用 Rust 写的微内核，试图让 Fabric 与 Forge/NeoForge 模组
-> **在同一个 JVM 里共存**，不依赖 Sinytra Connector。
+> **由于即将参加考试，本项目将暂停开发数周。**
+>
+> 考试结束后将继续推进 JVM Mod Combiner 的开发与实验。
 
-[English README](README.md)
+> 一个使用 Rust 和 Java 开发的跨 Loader 互操作研究项目。目标是通过隔离的运行环境和跨沙盒通信，让 Fabric 与 Forge/NeoForge 能够协同运行，而不依赖 Sinytra Connector。
 
-## 为什么要做这个
+[English README](README.md) · [技术问题清单](Problems.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-fusion/discussions)
 
-Minecraft 的模组生态是割裂的：**Fabric** 与 **Forge/NeoForge** 拥有互不兼容的
-加载器、Mixin 约定和事件系统。现有的跨加载器方案（尤其是 Sinytra Connector）
-通过在字节码层面把一个 ABI 翻译成另一个来让两者共存。这种做法天生脆弱：任何
-一方更新，翻译层都可能崩溃。
+---
 
-这个项目走另一条路：**不做翻译。把两个加载器各自隔离在独立的沙盒里，只让它
-们在数据层交汇。**
+## 项目背景
 
-## 架构
+Minecraft 的模组生态被多个 Mod Loader 分割。
 
-Rust 微内核
-（JVM 生命周期、沙盒编排、数据总线）
-|
-+----------+----------+
-| |
-+-----v-----+ +-----v-----+
-| 沙盒 A | | 沙盒 B |
-| Fabric | | Forge |
-| Loader | | Loader |
-| + Fabric | | + Forge |
-| 模组 | | 模组 |
-+-----------+ +-----------+
+Fabric 与 Forge/NeoForge 在以下方面存在差异：
 
-三个设计支柱：
+- Loader 初始化流程。
+- ClassLoader 和 Classpath 结构。
+- Mixin 集成机制。
+- 事件系统与生命周期管理。
+- 依赖解析机制。
 
-1. **微内核。** 融合层是唯一持有 JVM 的组件。它不依赖 Fabric，也不依赖 Forge。
-2. **运行时沙盒隔离。** 每个加载器运行在自己独立的 `URLClassLoader` 里，模组
-   类之间不共享父加载器。同名类、不同加载器、互不冲突。
-3. **零拷贝数据总线（规划中）。** 跨沙盒通信通过 Rust 持有的内存总线完成。
-   模组代码层完全不见面，只在最终的“数据层”交汇。
+现有跨 Loader 兼容方案，例如 [Sinytra Connector](https://github.com/Sinytra/Connector)，主要通过兼容层和转换机制，让不同生态中的模组能够协同工作。
 
-## 项目状态
+JVM Mod Combiner 探索另一条技术路线：
 
-**早期原型，还不能用来玩 Minecraft。**
+**不直接把一个 Loader 的内部运行环境转换成另一个 Loader 的环境，而是尝试隔离各自的运行环境，并通过数据接口进行通信。**
 
-已在 macOS + Temurin 21（arm64）上验证可用的部分：
+长期目标是降低不同 Loader 之间的直接依赖，使跨 Loader 互操作不必深度绑定某一个 Loader 的内部实现。
 
-- [x] Rust 进程可以通过 JNI 启动内嵌 JVM
-- [x] Rust 可以调用 Java 静态方法并读回返回值
-- [x] Rust 可以通过 `URLClassLoader` 动态加载外部 `.jar`
-- [x] 两个隔离的 `URLClassLoader` 实例可以加载同名类并产生不同行为
-- [x] **Rust JNI 成功启动 Minecraft 1.21.4 + Fabric Loader —— 主菜单成功渲染，
-      音效引擎初始化，纹理加载完成，游戏以正常帧率运行**
-- [x] **Rust 成功通过子进程启动 Minecraft 1.21.1 + NeoForge 21.1.191 —— 主菜单成功渲染，绕过了官方启动器限制与 ModLauncher 的 JPMS 模块化冲突**
-- [x] 从 `mc_libraries/` 动态组装类路径（253 个条目），通过
-      `fabric.gameJarPath` 和关闭类路径隔离让 Fabric 认出游戏
-- [x] **双沙盒并行启动成功**：在同一台机器上通过 Rust 子进程同时拉起 Fabric 1.21.4 与 NeoForge 1.21.1，互不干扰，均成功渲染主菜单。
-- [x] **零拷贝数据总线（IPC 原型）**：在 Rust 微内核中实现了基于 TCP 的消息总线，成功接收来自 Fabric 与 NeoForge 两个隔离沙盒的跨进程通讯。
-- [x] **跨沙盒消息路由**：Rust 总线按沙盒名路由 JSON 消息，Fabric 与 NeoForge 完成 `hello → ack` 双向闭环，并返回 `routed` 回执。
-- [x] **运行时字节码拦截（Instrumentation）**：Rust 通过 JNI `InitArgsBuilder` 动态注入 Java Agent。`ClassFileTransformer` 成功拦截了由 Fabric `KnotClassLoader` 加载的类（如 `net.minecraft.client.main.Main`），证明了系统具备无需依赖 Mixin 即可进行自动化打补丁的底层能力。
-- [x] **跨沙盒运行时状态同步（Proof of Concept）**：Fabric 沙盒通过反射绕过混淆提取玩家实时坐标，通过 Rust TCP 总线广播。NeoForge 沙盒成功接收并打印同步状态。这证明了跨物理隔离 JVM 进行实时数据层交汇的可行性。
-    Fabric 沙盒通过纯反射绕过混淆提取玩家实时坐标，通过 Rust TCP 总线广播。NeoForge 沙盒成功锁定 `Minecraft` 实例并解析同步数据，日志实时打印来自 Fabric 的坐标（如 `3.0, 4.5, 8.5`）。这证明了跨物理隔离 JVM 进行实时数据层交汇的可行性。
-- [x] **跨沙盒实时状态同步 (Data Layer Integration)**：Fabric 沙盒内通过底层反射绕过 1.21.4 运行时混淆（解析 `dA/dC/dG` 方法），提取真实 `LocalPlayer` 坐标。通过 Rust TCP 数据总线实时广播，NeoForge 沙盒成功接收并解析，实现了跨物理隔离 JVM 的实时游戏状态交汇。
-- [x] **跨沙盒实体级镜像同步（RemotePlayer Mirror）**：利用反射绕过 1.21.1/1.21.4 的运行时类隔离，在 NeoForge 的 `ClientLevel` 中动态注入一个镜像 `RemotePlayer`。Fabric 沙盒的玩家坐标与移动数据，经 Rust 总线毫秒级同步后，NeoForge 中的实体实时同步移动。
-- [x] **Rust 成功启动 Forge 1.21.4 (54.1.22)**：彻底攻破 ModLauncher JPMS 模块限制与 `securejarhandler` 依赖冲突，成功渲染 Forge 早期加载界面。
-![Rust 启动 Forge 1.21.4](image_forge.png)
+这目前仍然是一个实验性研究方向，并不是成熟的模组兼容替代方案。
 
+## 架构设计
 
-进行中：
+### 目标架构
 
-- [ ] 解决真实加载器的 `parent = null` 问题（它们需要 `java.lang.*` 等）
-- [ ] 零拷贝数据总线
-- [ ] 动态依赖解析（解析 version manifest，而不是全量复制 `libraries`）
-- [ ] 跨平台支持（Windows / Linux / macOS）
+```text
+                    Rust Microkernel
+              (JVM 生命周期 / 沙盒编排)
+                            |
+                   跨沙盒数据接口
+                            |
+               +------------+------------+
+               |                         |
+         +-----v------+            +-----v------+
+         | Sandbox A  |            | Sandbox B  |
+         | Fabric     |            | Forge /    |
+         | Loader     |            | NeoForge   |
+         | + Mods     |            | + Mods     |
+         +------------+            +------------+
+```
 
-## 概念验证与实机演示
+项目目前围绕三个设计原则展开。
 
-以下是微内核成功拉起双加载器并完成跨沙盒通信的视觉证明。
+### 1. Microkernel（微内核）
 
-### 1. Fabric Loader 启动 (MC 1.21.4)
-Rust 内嵌 JNI JVM 成功启动 Fabric，主菜单渲染完成，音效引擎与纹理加载正常。
+Rust 负责：
+
+- JVM 生命周期管理。
+- Loader 沙盒编排。
+- 依赖准备与 Classpath 构建。
+- 跨沙盒通信基础设施。
+
+尽可能避免让 Rust 内核直接依赖 Fabric 或 Forge/NeoForge 的内部实现。
+
+### 2. Runtime Isolation（运行时隔离）
+
+不同 Loader 应当拥有独立的类加载边界。
+
+目前已经验证：
+
+- 两个独立的 `URLClassLoader` 可以加载同名类。
+- 两个 ClassLoader 加载的类可以表现出不同的行为。
+
+但这不代表已经实现了两个真实 Minecraft Loader 在同一个 JVM 中完全隔离运行。
+
+目前真实 Loader 的双端并行启动采用**独立 JVM 进程**。
+
+### 3. Data-layer Interoperability（数据层互操作）
+
+不同沙盒之间不应直接依赖对方的 Loader 内部对象，而应通过结构化数据交换游戏状态。
+
+目前使用 Rust 实现基于 TCP 的 DataBus。
+
+共享内存与真正的 Zero-copy 数据传输仍然属于未来目标，并未完成。
+
+---
+
+## 项目进度
+
+<badge color="warning">早期原型 · 尚未达到统一可玩状态</badge>
+
+### 已验证的功能
+
+主要测试环境为 macOS + Apple Silicon + Temurin JDK 21。
+
+- [x] Rust 通过 JNI 启动嵌入式 JVM。
+- [x] Rust 调用 Java 静态方法并获取返回值。
+- [x] Rust 通过 `URLClassLoader` 动态加载外部 JAR。
+- [x] 两个独立 `URLClassLoader` 加载同名类，并产生不同的行为。
+- [x] Rust JNI 成功启动 Minecraft 1.21.4 + Fabric Loader，主菜单、纹理和音频系统正常初始化。
+- [x] Rust 通过独立 JVM 进程启动 Minecraft 1.21.1 + NeoForge 21.1.191。
+- [x] Rust 成功启动 Forge 1.21.4（54.1.22）并进入早期加载界面。
+- [x] 根据本地 Minecraft 安装信息动态组装依赖与 Classpath。
+- [x] 在当前测试配置下，通过 `fabric.gameJarPath` 让 Fabric 正确识别 Minecraft Game JAR。
+- [x] Fabric 1.21.4 与 NeoForge 1.21.1 可以在同一台机器上通过独立 JVM 进程同时运行。
+- [x] Rust TCP DataBus 已经实现。
+- [x] Fabric 与 NeoForge Java Agent 可以使用不同身份向 DataBus 注册。
+- [x] 已经验证 `hello` / `ack` JSON 消息的跨沙盒路由。
+- [x] Rust 可以通过 JVM 启动参数注入 Java Agent。
+- [x] Java Agent 的 `ClassFileTransformer` 成功观察到由 Fabric `KnotClassLoader` 加载的类。
+- [x] Fabric 可以通过反射获取本地玩家的坐标与移动状态。
+- [x] Fabric 玩家状态消息已经通过 Rust DataBus 发送到 NeoForge。
+- [x] NeoForge Java Agent 可以找到 `Minecraft` 单例、`ClientLevel` 和 `LocalPlayer`。
+- [x] 已经实现 NeoForge `RemotePlayer` 镜像注入的 PoC 路径。
+
+### 正在开发
+
+- [ ] NeoForge 本地玩家状态发送器。
+- [ ] Fabric 接收端及远程玩家镜像实现。
+- [ ] 双向玩家状态同步。
+- [ ] 更完善的玩家身份和实体生命周期管理。
+- [ ] 不同 Minecraft 版本的反射与映射解析。
+- [ ] 网络延迟、断线和状态一致性处理。
+
+### 尚未实现
+
+- [ ] 真正的 Zero-copy / Shared-memory DataBus。
+- [ ] 在同一个 JVM 中完整隔离运行真实 Fabric 与 Forge/NeoForge Loader。
+- [ ] 通用模组互操作。
+- [ ] 自动 Mixin 冲突解决。
+- [ ] 完整的跨 Loader 事件转换。
+- [ ] Windows 和 Linux 的生产级兼容性验证。
+
+**注意：** 当前的玩家同步只是概念验证。它并不代表已经实现完整的模组兼容，也不代表不同 Minecraft 版本之间拥有完全一致的游戏行为。
+
+---
+
+## PoC 与验证截图
+
+以下截图分别展示项目不同阶段的实验结果，并不代表整个项目已经达到生产可用状态。
+
+### 1. Fabric Loader 启动 — Minecraft 1.21.4
+
+Rust 通过 JNI 启动 Fabric，成功渲染 Minecraft 主菜单。
+
 ![Rust JNI 启动 Minecraft 1.21.4 + Fabric](image.png)
 
-### 2. NeoForge 启动 (MC 1.21.1)
-Rust 通过子进程成功启动 NeoForge，绕过了官方启动器限制与 ModLauncher 的 JPMS 模块化冲突。
+### 2. NeoForge 启动 — Minecraft 1.21.1
+
+Rust 通过独立 JVM 进程启动 NeoForge。
+
 ![Rust 启动 NeoForge](image2.png)
 
 ### 3. 双沙盒并行启动
-Fabric 1.21.4 与 NeoForge 1.21.1 在同一台机器上通过独立子进程同时运行，互不干扰。
-![双沙盒并行启动证明](image3.png)
 
-### 4. 零拷贝数据总线路由 (IPC)
-Rust 微内核成功接收来自两个沙盒的注册请求。日志显示 Fabric 与 NeoForge 之间完成了 `hello → ack` 的双向消息闭环路由，彻底摆脱了对共享 ClassLoader 的依赖。
-![跨沙盒 IPC 路由](image4.png)
+Fabric 1.21.4 与 NeoForge 1.21.1 在同一台机器上通过不同 JVM 进程并行运行。
 
-### 5. 运行时字节码拦截（Instrumentation）
-通过 JNI 动态注入 Java Agent，利用 Instrumentation 成功拦截特定 ClassLoader 加载的字节码。这不需要依赖 Minecraft 的 Mixin，也不需要编译期依赖混淆的 Jar。
+![Dual Sandbox Launch Proof](image3.png)
+
+### 4. DataBus 路由 — IPC 原型
+
+Rust 微内核接收两个沙盒的注册请求，并通过 TCP 路由层转发消息。
+
+![Cross-Sandbox IPC Routing](image4.png)
+
+### 5. Runtime Bytecode Instrumentation
+
+Rust 在 JVM 启动参数中注入 Java Agent。
+
+Java Agent 使用 `ClassFileTransformer` 观察 Fabric `KnotClassLoader` 加载的类。
+
+示例日志：
+
 ```text
 [BusAgent:fabric] premain
 [BusAgent:fabric] MC-CLIENT: net/minecraft/client/main/Main loader=KnotClassLoader
 [BusAgent:fabric] MC-CLIENT: net/minecraft/client/ClientBrandRetriever loader=KnotClassLoader
 ```
 
-### 6.跨沙盒运行时状态同步
-Fabric 沙盒通过反射绕过混淆提取玩家实时坐标
-![Fabric 沙盒通过反射绕过混淆提取玩家实时坐标](image5.png)
+### 6. Fabric 玩家状态提取
 
-### 7.跨沙盒实时状态同步
-NeoForge 沙盒成功接收并解析，实现了跨物理隔离 JVM 的实时游戏状态交汇
-![NeoForge 沙盒成功接收并解析，实现了跨物理隔离 JVM 的实时游戏状态交汇](image6.png)
+Fabric 沙盒通过反射获取本地玩家的实时状态，包括坐标和旋转信息。
 
-### 跨沙盒实体级镜像同步（RemotePlayer Mirror）
-利用反射绕过 1.21.1/1.21.4 的运行时类隔离，在 NeoForge 的 `ClientLevel` 中动态注入一个镜像 `RemotePlayer`。Fabric 沙盒的玩家坐标与移动数据，经 Rust 总线毫秒级同步后，NeoForge 中的实体实时同步移动。
-![跨沙盒实体级镜像同步](image7.png)
+![Fabric 玩家状态提取](image5.png)
 
-### Rust 成功启动 Forge 1.21.4 (54.1.22)
-彻底攻破 ModLauncher JPMS 模块限制与 `securejarhandler` 依赖冲突，成功渲染 Forge 早期加载界面。
+### 7. Fabric → NeoForge 状态同步
+
+Fabric 通过 Rust TCP DataBus 发送玩家状态。
+
+NeoForge 成功接收并解析同步消息。
+
+![NeoForge 接收玩家状态](image6.png)
+
+### 8. 跨沙盒实体镜像
+
+通过反射在 NeoForge 的 `ClientLevel` 中注入 PoC `RemotePlayer`。
+
+镜像实体可以根据 Fabric 发送的状态进行更新。
+
+![Cross-Sandbox Entity Mirroring](image7.png)
+
+> 不同 Minecraft 版本和世界种子可能产生不同的地形。玩家坐标一致并不代表世界生成结果相同。
+
+### 9. Forge 1.21.4 启动
+
+Rust 成功启动 Forge 1.21.4（54.1.22），并进入早期加载界面。
+
 ![Rust 启动 Forge 1.21.4](image8.png)
+
+---
 
 ## 快速开始
 
+### 环境要求
 
-### 依赖
+- Rust stable 工具链（1.75+）。
+- 推荐 JDK 21。
+- 本地 Minecraft 安装及对应 Loader 文件。
+- 当前主要验证环境为 macOS，Windows 和 Linux 尚需进一步测试。
 
-- Rust（stable，1.75+）
-- 一个 JDK。实测 Temurin 21；JDK 8+ 应该也行。
+### 克隆仓库
 
-### 编译与运行
 ```bash
 git clone https://github.com/hchunhei81-cyber/jvm-mod-fusion.git
 cd jvm-mod-fusion
 ```
 
-# 指向你的 JDK
-```bash
-export JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home
+### 配置 Java
 
+macOS + Temurin 21 示例：
+
+```bash
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+```
+
+### 编译与运行
+
+```bash
+cargo build
 cargo run
 ```
 
-如果一切正常，你会看到：
+默认模式运行基础 JVM 和 ClassLoader 隔离测试。
+
+预期输出：
+
 ```text
 === Rust JVM Fusion Kernel: Sandbox Isolation Test ===
 [Sandbox A] I am from Sandbox A!
 [Sandbox B] I am from Sandbox B!
 [OK] If you see A and B above, sandbox isolation is working!
 ```
-## 模式
-你可以尝试使用以下命令体验不同模式
-> 目前在试验阶段，崩溃可能常有发生
+
+---
+
+## 运行模式
+
+所有模式目前都处于实验阶段，可能出现崩溃或版本兼容问题。
 
 ### Fabric
+
 ```bash
 cargo run -- --mode fabric
 ```
-### Neoforge
-```bash
-cargo run -- --mode neoforge
-```
-### forge
+
+启动配置好的 Fabric 环境。
+
+### Forge
+
 ```bash
 cargo run -- --mode forge
 ```
-### fusion
->请注意此模式最常发生崩溃
->我们正在全力修复
+
+启动配置好的 Forge 环境。
+
+### NeoForge
+
 ```bash
-carhgo run -- --mode fusion
+cargo run -- --mode neoforge
 ```
-### 汇报问题
-如果遇到问题，欢迎来到issue 下的bug report 提交report，我们会尽力修复你遇到的错误。
 
-## 技术栈
+启动配置好的 NeoForge 环境。
 
-Rust —— 内核、JVM 编排
-jni crate（0.22.4） —— 与 JVM 的 FFI 桥
-Java / JVM —— 加载器和模组真正住的地方
+### Fusion
 
-## 为什么不用 Sinytra Connector
+```bash
+cargo run -- --mode fusion
+```
 
-Sinytra Connector 在字节码层面把 Fabric 模组翻译成 Forge 能运行的形式。它做得
-相当不错，但是：
+尝试并行启动 Fabric 与 NeoForge，并通过 Rust DataBus 建立跨沙盒通信。
 
-它天生脆弱：每次加载器更新都可能打破它。
-它必须深入勾进两个加载器，所以总是落后于上游。
-它不隔离两个加载器，它们共享同一个类空间。
-本项目尝试一个完全不同的赌注：把两个加载器当作两个独立的世界，只在渲染/
-数据层连接它们。
+> Fusion 模式目前不稳定。两个真实 Minecraft 环境使用独立 JVM 进程运行，尚未成为一个统一的可玩 Minecraft 客户端。
 
-它可能会失败。单是 Mixin 冲突问题就已经够硬核。但如果它成功，从设计上就不会
-因为加载器更新而崩溃。
+### DataBus 测试
 
-## 已知难点
+```bash
+cargo run -- --mode bus-test
+```
 
-- [x] **通过实现自动化 JAR 净化、精确的 MANIFEST 属性注入、正确的 `jopt-simple` 与 `securejarhandler` 依赖路径，以及严格的 JVM 虚拟机参数排序（将 `-D` 参数置于主类前方），成功解决了 ModLauncher 的初始化与 `NullPointerException` (NPE) 崩溃问题。**
-Forge 1.21+ 依赖 Java Module System（--module-path、BootstrapLauncher、
-securejarhandler），必须按官方安装器的形态精确组装。
-ModLauncher 10 要求 JAR manifest 元数据完整；任何重写 manifest 的行为都会
-静默破坏版本发现。
-两个加载器在同一个 JVM 内的 Mixin 冲突。
-真实加载器的 ClassLoader 层级问题（parent = null 在实践中不可行）。
+启动独立 TCP 路由服务：
 
-## 路线图
+```text
+127.0.0.1:25565
+```
 
-把真实的 Fabric Loader jar 加载进沙盒 A。
-把真实的 Forge Loader jar 加载进沙盒 B（需要混合父加载器）。
-处理 Mixin 冲突 —— 可能是 Rust 侧字节码合并，或者基于优先级的白名单。
-零拷贝数据总线，用于跨沙盒通信。
-跨平台（Windows / Linux / macOS）。
+---
 
-## 贡献
+## 已知问题
 
-目前是个人研究项目。如果它能走过原型阶段，会补上贡献指南。
+当前技术问题与调查记录请查看 [Problems.md](Problems.md)。
 
-## 许可证
+主要挑战包括：
 
-BSD 3-Clause，详见 [LICENCE](LICENCE)。
-> **给使用者的一个小请求**：
-> 如果你正在使用、测试或借鉴本项目，**强烈建议**你在 GitHub 的 [Discussions](https://github.com/hchunhei81-cyber/jvm-mod-fusion/discussions) 中的 **“Showcase / 运行反馈”** 分类下发一条帖子，并附上你的运行截图、操作系统和模组环境。
-> 这不仅能给项目带来极大的鼓励，也能帮助我收集不同环境下的报错信息（尤其是 Windows 和 Linux 下的奇难杂症），以便更好、更快地进行修复与迭代。
+- 真实 Loader 的 ClassLoader 隔离。
+- JPMS 与 ModLauncher 启动要求。
+- Mixin 兼容性和字节码转换顺序。
+- Minecraft 版本映射差异。
+- 玩家身份和实体生命周期同步。
+- 网络重连与状态一致性。
+
+---
+
+## 为什么不使用 Sinytra Connector？
+
+[Sinytra Connector](https://github.com/Sinytra/Connector) 是一个成熟的兼容性项目，目标是让 Fabric 模组能够在 Forge/NeoForge 环境中运行。
+
+JVM Mod Combiner 探索不同的架构：
+
+不直接转换一个 Loader 的内部环境，而是尝试隔离不同 Loader 的运行环境，并通过受控的数据接口连接它们。
+
+这种方案可能带来的优势：
+
+- 减少对 Loader 内部实现的直接依赖。
+- 独立管理不同 Loader 的生命周期。
+- 建立明确的通信边界。
+- 更灵活地实现游戏状态同步。
+
+但隔离也带来了新的挑战。跨 Loader 的实体同步、事件语义、世界状态、渲染和模组行为，远远比传输玩家坐标复杂。
+
+本项目研究的是这些问题，而不是宣称已经解决它们。
+
+---
+
+## 开发路线图
+
+### Phase 1 — Runtime Foundation
+
+- [x] Rust / JNI 集成。
+- [x] 基础 `URLClassLoader` 隔离。
+- [x] Fabric 启动。
+- [x] Forge / NeoForge 启动实验。
+
+### Phase 2 — Sandbox Communication
+
+- [x] Rust TCP DataBus。
+- [x] 客户端身份注册。
+- [x] JSON 消息路由。
+- [x] Java Agent 集成。
+
+### Phase 3 — Game-state Synchronization
+
+- [x] Fabric 玩家状态提取。
+- [x] Fabric → NeoForge 消息传递。
+- [x] NeoForge 玩家发现。
+- [x] NeoForge 远程玩家注入原型。
+- [ ] NeoForge 玩家状态发送器。
+- [ ] Fabric 接收端与镜像注入。
+- [ ] 双向状态同步。
+
+### Phase 4 — Interoperability
+
+- [ ] 玩家身份与生命周期协议。
+- [ ] 实体同步。
+- [ ] 物品栏与交互同步。
+- [ ] 事件与能力系统桥接。
+- [ ] Mixin 冲突解决策略。
+
+### Phase 5 — Architecture and Portability
+
+- [ ] Shared-memory / Zero-copy DataBus。
+- [ ] 同一 JVM 中的真实 Loader 隔离。
+- [ ] 动态依赖解析。
+- [ ] Windows / Linux 验证。
+- [ ] 性能和稳定性测试。
+
+---
+
+## 参与贡献
+
+目前这是一个个人研究项目。
+
+欢迎提交 Bug、测试结果和技术讨论。
+
+如果你正在测试本项目，欢迎在 [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-fusion/discussions) 的 **Showcase / Test Results** 分类发布测试结果。
+
+建议提供：
+
+- 操作系统和 CPU 架构。
+- JDK 发行版与版本。
+- Minecraft 版本。
+- Loader 名称及版本。
+- 相关模组列表。
+- 运行日志和截图。
+- 可复现问题的操作步骤。
+
+尤其欢迎 Windows 和 Linux 用户提供测试结果，以帮助后续跨平台开发。
+
+## License
+
+BSD 3-Clause。详见 [LICENSE](LICENSE)。
+

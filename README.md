@@ -1,154 +1,242 @@
 # JVM Mod Combiner
-> Due to the incoming exam,this project will be on hold for a few weeks.
 
-> A Rust-written microkernel that aims to let Fabric and Forge/NeoForge mods
-> **coexist inside one JVM**, without depending on Sinytra Connector.
+> **Development temporarily on hold for a few weeks due to upcoming exams.**
+>
+> JVM Mod Combiner is an experimental cross-loader interoperability project written in Rust and Java. Development will resume after the exam period.
 
-[中文 README](README.zh.md)
+> A Rust-based microkernel prototype exploring how Fabric and Forge/NeoForge environments can coexist through isolated runtime environments and cross-sandbox communication, without depending on Sinytra Connector.
+
+[中文文档](README.zh.md) · [Known Problems](Problems.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-fusion/discussions)
+
+---
 
 ## Why
 
-Minecraft's modding ecosystem is split: **Fabric** and **Forge/NeoForge** ship
-incompatible loaders, incompatible Mixin conventions, and incompatible event
-systems. Existing cross-loader solutions (notably Sinytra Connector) work by
-translating one ABI into the other at the bytecode level. That approach is
-inherently fragile: every upstream loader release can break the translation
-layer.
+Minecraft's modding ecosystem is divided between multiple mod loaders.
 
-This project takes a different route. **No translation. Isolate each loader in
-its own sandbox, and let them meet only at the data layer.**
+Fabric and Forge/NeoForge have different:
+- Loader initialization pipelines.
+- ClassLoader and classpath requirements.
+- Mixin integration conventions.
+- Event systems and lifecycle management.
+- Dependency resolution mechanisms.
+
+Existing cross-loader solutions, notably [Sinytra Connector](https://github.com/Sinytra/Connector), attempt to make mods from different ecosystems compatible through translation and compatibility layers.
+
+JVM Mod Combiner explores a different direction:
+
+**Instead of directly translating one loader's internal environment into another, isolate their runtime environments and connect them through a shared data interface.**
+
+The long-term objective is to reduce direct dependencies between loader implementations and make cross-loader interoperability less sensitive to internal loader changes.
+
+This is an experimental research direction, not yet a replacement for existing compatibility solutions.
 
 ## Architecture
 
-Rust Microkernel
-(JVM lifecycle, sandbox orchestration, data bus)
-|
-+--------------+--------------+
-| |
-+-----v-----+ +-----v-----+
-| Sandbox A | | Sandbox B |
-| Fabric | | Forge |
-| Loader | | Loader |
-| + mods | | + mods |
-+-----------+ +-----------+
+### Intended architecture
 
-Three design pillars:
+```text
+                  Rust Microkernel
+        (JVM lifecycle / sandbox orchestration)
+                           |
+              Cross-Sandbox Data Interface
+                           |
+              +------------+------------+
+              |                         |
+        +-----v------+            +-----v------+
+        | Sandbox A  |            | Sandbox B  |
+        | Fabric     |            | Forge /    |
+        | Loader     |            | NeoForge   |
+        | + Mods     |            | + Mods     |
+        +------------+            +------------+
+```
 
-1. **Microkernel.** The fusion layer is the only component that owns a JVM. It
-   depends on neither Fabric nor Forge.
-2. **Runtime sandbox isolation.** Each loader runs inside its own isolated
-   `URLClassLoader`. Mod classes never share a parent loader. Same-named classes
-   under different loaders do not collide.
-3. **Zero-copy data bus (planned).** Cross-sandbox communication goes through a
-   memory bus owned by Rust. Mod code on either side never meets; the two
-   sandboxes only intersect at the data layer.
+The architecture is based on three design principles:
 
-## Project status
+### 1. Microkernel
 
-**Early prototype. Not yet playable.**
+Rust is responsible for orchestration, JVM lifecycle management, dependency preparation, and communication infrastructure.
 
-Verified on macOS + Temurin 21 (arm64):
+Loader-specific implementation details should remain outside the kernel wherever possible.
 
-- [x] Rust process launches an embedded JVM via JNI
-- [x] Rust calls Java static methods and reads back return values
-- [x] Rust loads external `.jar` files dynamically through `URLClassLoader`
-- [x] Two isolated `URLClassLoader` instances load the same class name and
-      produce different behavior
-- [x] **Rust JNI boots Minecraft 1.21.4 + Fabric Loader — the main menu renders,
-      the sound engine initializes, textures load, and the game runs at a normal
-      frame rate**
-- [x] **Rust successfully boots Minecraft 1.21.1 + NeoForge 21.1.191 via
-      subprocess — the main menu renders, bypassing official launcher
-      restrictions and ModLauncher JPMS conflicts**
-- [x] Classpath is dynamically assembled from `mc_libraries/` (253 entries);
-      Fabric recognizes the game via `fabric.gameJarPath` and classpath isolation
-      being disabled
-- [x] **Dual-sandbox concurrent launch successful**: Successfully launched Fabric 1.21.4 and NeoForge 1.21.1 simultaneously via Rust subprocesses on the same machine. They run completely isolated from each other and both successfully rendered the main menu.
-- [x] **Zero-copy Data Bus (IPC Prototype)**: Implemented a TCP-based message bus in the Rust microkernel, successfully receiving inter-process messages from both Fabric and NeoForge sandboxes.
-- [x] **Cross-sandbox message routing (IPC Router)**: A named registration and JSON routing layer in the Rust bus; Fabric ↔ NeoForge `hello`/`ack` round-trip verified with `routed` receipts.
-- [x] **Runtime Bytecode Instrumentation**: Rust injects a Java Agent via JNI `InitArgsBuilder`. The `ClassFileTransformer` successfully intercepts classes loaded by Fabric's `KnotClassLoader` (e.g., `net.minecraft.client.main.Main`), proving the capability for future automated patching without Mixin dependencies.
-- [x] **Cross-Sandbox Runtime State Sync (Proof of Concept)**: The Fabric sandbox extracts the real-time player coordinates (bypassing obfuscation via reflection) and broadcasts them via the Rust TCP bus. The NeoForge sandbox receives and prints the synchronized state. This proves the viability of real-time data-layer convergence across isolated JVMs.
-The Fabric sandbox bypassed obfuscation to extract the player's real-time coordinates using pure reflection and broadcast them via the Rust TCP bus. The NeoForge sandbox successfully locked the `Minecraft` instance and parsed the synchronization data, with logs printing the coordinates from Fabric in real time (e.g., `3.0, 4.5, 8.5`). This demonstrates the feasibility of real-time data layer convergence across physically isolated JVMs.
-- [x] **Cross-Sandbox Real-time State Sync (Data Layer Integration)**: Bypassed runtime obfuscation inside the Fabric sandbox (resolving the `dA/dC/dG` methods) to extract real-time `LocalPlayer` coordinates. Broadcasted via the Rust TCP data bus, the NeoForge sandbox successfully received and parsed the data, proving real-time game-state integration across physically isolated JVMs.
-- [x] **Cross-Sandbox Entity Mirroring (RemotePlayer Injection)**: Bypassed runtime class isolation via reflection and dynamically injected a mirror `RemotePlayer` into NeoForge's `ClientLevel`. Real-time coordinate and movement data from the Fabric sandbox are synced through the Rust bus, allowing the mirrored entity in NeoForge to follow the player in real-time.
-- [x] **Rust successfully booted Forge 1.21.4 (54.1.22)**: Completely bypassed ModLauncher JPMS restrictions and `securejarhandler` dependency conflicts, successfully rendering the Forge early loading screen.
+### 2. Runtime isolation
 
+Different loader environments should have independent class-loading boundaries.
 
-In progress:
+The prototype has verified isolated `URLClassLoader` instances loading classes with identical names but producing different behavior.
 
-- [ ] Resolve the `parent = null` problem for real loaders (they need
-      `java.lang.*` and friends)
-- [ ] Zero-copy data bus
-- [ ] Dynamic dependency resolution (parse the version manifest instead of
-      copying the whole `libraries/` tree)
-- [ ] Cross-platform support (Windows / Linux / macOS)
+However, this does not yet mean that two real Minecraft loaders have been successfully isolated inside one JVM.
+
+The current real-loader dual-launch implementation uses separate JVM processes.
+
+### 3. Data-layer interoperability
+
+Different sandboxes should exchange structured game-state information rather than directly sharing loader internals.
+
+The current implementation uses a TCP-based Rust DataBus.
+
+A shared-memory or true zero-copy transport mechanism is a future objective, not a completed feature.
+
+---
+
+## Project Status
+
+<badge color="warning">Early prototype · Not yet playable as a unified environment</badge>
+
+### Verified capabilities
+
+Tested primarily on macOS with Apple Silicon and Temurin JDK 21.
+
+- [x] Rust launches an embedded JVM through JNI.
+- [x] Rust invokes Java static methods and reads their return values.
+- [x] Rust dynamically loads external JAR files through `URLClassLoader`.
+- [x] Two isolated `URLClassLoader` instances can load the same class name and produce different behavior.
+- [x] Rust JNI successfully launches Minecraft 1.21.4 with Fabric Loader. The main menu renders, textures load, and the sound engine initializes.
+- [x] Rust successfully launches NeoForge 21.1.191 with Minecraft 1.21.1 through a separate JVM process.
+- [x] Rust successfully launches Forge 1.21.4 (54.1.22) to its early loading screen.
+- [x] Minecraft libraries and classpaths can be assembled dynamically from local installation metadata and library files.
+- [x] Fabric recognizes the Minecraft game JAR through `fabric.gameJarPath` with the tested classpath configuration.
+- [x] Fabric 1.21.4 and NeoForge 1.21.1 can run concurrently in separate JVM processes on the same machine.
+- [x] A TCP-based DataBus is implemented in Rust.
+- [x] Fabric and NeoForge agents can register with the DataBus using separate identities.
+- [x] Cross-sandbox JSON message routing has been verified with `hello` / `ack` messages.
+- [x] Rust injects a Java Agent through JVM startup arguments.
+- [x] The Java Agent's `ClassFileTransformer` has intercepted classes loaded by Fabric's `KnotClassLoader`.
+- [x] Fabric can extract local-player coordinates and movement information through reflection.
+- [x] Fabric player-state messages have been routed through the Rust DataBus to NeoForge.
+- [x] NeoForge can discover its `Minecraft` singleton, `ClientLevel`, and `LocalPlayer` through the Java Agent.
+- [x] NeoForge has a proof-of-concept `RemotePlayer` injection path for mirroring Fabric player state.
+
+### Currently in progress
+
+- [ ] NeoForge local-player state sender.
+- [ ] Fabric-side receiver and remote-player mirror implementation.
+- [ ] Bidirectional player-state synchronization.
+- [ ] More robust player identity and entity lifecycle management.
+- [ ] Version-specific reflection and mapping resolution.
+- [ ] Better synchronization behavior under latency and packet loss.
+
+### Not yet implemented
+
+- [ ] True zero-copy or shared-memory DataBus.
+- [ ] Fully isolated real Fabric and Forge/NeoForge loaders inside one JVM.
+- [ ] General-purpose mod interoperability.
+- [ ] Automatic conflict resolution for Mixin configurations.
+- [ ] Complete cross-loader event translation.
+- [ ] Production-ready Windows and Linux support.
+
+**Important:** The current player synchronization implementation is a proof of concept. It does not establish complete mod compatibility or full gameplay equivalence between different Minecraft versions.
+
+---
 
 ## Proof of Concept & Verification
 
-Here is the visual proof of the microkernel booting both loaders and routing cross-sandbox messages.
+The following images document individual milestones. They are evidence of specific prototype capabilities, not proof that the entire system is production-ready.
 
-### 1. Fabric Loader Boot (MC 1.21.4)
-Rust's embedded JNI JVM successfully boots Fabric, rendering the main menu, with sound engine and textures fully initialized.
-![Rust JNI launches Minecraft 1.21.4 + Fabric](image.png)
+### 1. Fabric Loader Boot — Minecraft 1.21.4
 
-### 2. NeoForge Boot (MC 1.21.1)
-Rust successfully spawns NeoForge via subprocess, bypassing the official launcher restrictions and ModLauncher JPMS conflicts.
+Rust's embedded JNI JVM launches Fabric and renders the Minecraft main menu.
+
+![Rust JNI launches Minecraft 1.21.4 with Fabric](image.png)
+
+### 2. NeoForge Boot — Minecraft 1.21.1
+
+Rust launches NeoForge through a separate JVM process.
+
 ![Rust launches NeoForge](image2.png)
 
 ### 3. Dual-Sandbox Concurrent Launch
-Both Fabric 1.21.4 and NeoForge 1.21.1 running side-by-side in isolated subprocesses on the same machine. They do not interfere with each other.
+
+Fabric 1.21.4 and NeoForge 1.21.1 run concurrently in separate JVM processes on the same machine.
+
 ![Dual Sandbox Launch Proof](image3.png)
 
-### 4. Zero-Copy Data Bus Routing (IPC)
-The Rust microkernel receives registration requests from both sandboxes. The logs show a bidirectional `hello → ack` message loop successfully routed between Fabric and NeoForge, bypassing the need for a shared ClassLoader.
+### 4. DataBus Routing — IPC Prototype
+
+The Rust microkernel accepts registration requests from both sandbox agents.
+
+The TCP routing layer forwards messages between registered clients.
+
 ![Cross-Sandbox IPC Routing](image4.png)
 
-### 5.Runtime Bytecode Instrumentation
-Rust injects a Java Agent via JNI `InitArgsBuilder`. The `ClassFileTransformer` successfully intercepts classes loaded by Fabric's `KnotClassLoader` (e.g., `net.minecraft.client.main.Main`), proving the capability for future automated patching without Mixin dependencies.
+### 5. Runtime Bytecode Instrumentation
+
+The injected Java Agent uses `ClassFileTransformer` to observe classes loaded by Fabric's `KnotClassLoader`.
+
+Example diagnostic output:
+
 ```text
 [BusAgent:fabric] premain
 [BusAgent:fabric] MC-CLIENT: net/minecraft/client/main/Main loader=KnotClassLoader
 [BusAgent:fabric] MC-CLIENT: net/minecraft/client/ClientBrandRetriever loader=KnotClassLoader
 ```
 
-### 6.Cross-Sandbox Runtime State Sync (Proof of Concept)
-The Fabric sandbox extracts the real-time player coordinates.
-![The Fabric sandbox extracts the real-time player coordinates](image5.png)
+### 6. Fabric Player-State Extraction
 
-### 7.Cross-Sandbox Real-time State Sync (Data Layer Integration)
-Broadcasted via the Rust TCP data bus, the NeoForge sandbox successfully received and parsed the data, proving real-time game-state integration across physically isolated JVMs.
-![NeoForge sandbox successfully received and parsed the data](image6.png)
+The Fabric sandbox uses reflection to access the local player's runtime state, including coordinates and rotation.
 
-### 8.Cross-Sandbox Entity Mirroring (RemotePlayer Injection)
-passed runtime class isolation via reflection and dynamically injected a mirror `RemotePlayer` into NeoForge's `ClientLevel`. Real-time coordinate and movement data from the Fabric sandbox are synced through the Rust bus, allowing the mirrored entity in NeoForge to follow the player in real-time.
+![Fabric player-state extraction](image5.png)
 
-> Due to different seed and different version,the map generation is different but the coordinates is same(refer to the f3 console)
+### 7. Fabric-to-NeoForge State Synchronization
+
+Fabric sends player-state messages through the Rust TCP DataBus.
+
+NeoForge receives and parses the messages.
+
+![NeoForge receives synchronized player state](image6.png)
+
+### 8. Cross-Sandbox Entity Mirroring
+
+A proof-of-concept `RemotePlayer` is injected into NeoForge's `ClientLevel`.
+
+The mirror entity can be updated using state received from Fabric.
+
 ![Cross-Sandbox Entity Mirroring](image7.png)
 
-### Rust successfully booted Forge 1.21.4 (54.1.22)
- Completely bypassed ModLauncher JPMS restrictions and `securejarhandler` dependency conflicts, successfully rendering the Forge early loading screen.
+> Different Minecraft versions and world seeds can produce different terrain. Matching player coordinates do not imply identical world generation.
+
+### 9. Forge 1.21.4 Boot
+
+Rust successfully launches Forge 1.21.4 (54.1.22) to the early loading screen.
+
 ![Rust boots Forge 1.21.4](image8.png)
 
-## Quick start
+---
+
+## Quick Start
+
 ### Requirements
+
+- Rust stable toolchain (1.75+).
+- JDK 21 recommended.
+- A local Minecraft installation for the loader versions being tested.
+- macOS, Windows, or Linux may be used, but the current verification coverage is primarily macOS.
+
+### Clone
+
 ```bash
-- Rust (stable, 1.75+)
-- A JDK. Tested with Temurin 21; JDK 8+ should also work.
+git clone https://github.com/hchunhei81-cyber/jvm-mod-fusion.git
+cd jvm-mod-fusion
+```
+
+### Configure Java
+
+Example for macOS with Temurin 21:
+
+```bash
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
 ```
 
 ### Build and run
 
-git clone https://github.com/hchunhei81-cyber/jvm-mod-fusion.git
-cd jvm-mod-fusion
-
-# Point JAVA_HOME at your JDK
 ```bash
-export JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home
-
+cargo build
 cargo run
-
-If everything is wired correctly, you should see:
 ```
+
+The default mode runs the basic JVM and class-loader isolation prototype.
+
+Expected output resembles:
 
 ```text
 === Rust JVM Fusion Kernel: Sandbox Isolation Test ===
@@ -157,79 +245,161 @@ If everything is wired correctly, you should see:
 [OK] If you see A and B above, sandbox isolation is working!
 ```
 
+---
 
-## Modes
-To try different modes,you can try these commands:
-> Modes are currently in testing,crashes may occur
+## Runtime Modes
+
+All modes are experimental. Runtime crashes and version-specific failures are possible.
 
 ### Fabric
+
 ```bash
 cargo run -- --mode fabric
 ```
+
+Launches the configured Fabric environment.
+
 ### Forge
+
 ```bash
 cargo run -- --mode forge
 ```
+
+Launches the configured Forge environment.
+
+### NeoForge
+
+```bash
+cargo run -- --mode neoforge
+```
+
+Launches the configured NeoForge environment.
+
 ### Fusion
-> Please aware that fusion mode may be unstable and crashes may always happen
-> We are currently fix that
 
 ```bash
 cargo run -- --mode fusion
 ```
 
-### Report problems
-If you have experienced issue,we are welcome you to go to issue and submit a bug report,we will do our best to fix it.
+Attempts to launch the configured Fabric and NeoForge environments concurrently and connect them through the Rust DataBus.
 
-## Tech stack
+> Fusion mode is unstable. The two real Minecraft environments currently run in separate JVM processes. This mode is not yet a playable unified Minecraft client.
 
-Rust — kernel, JVM orchestration
-jni crate (0.22.4) — FFI bridge to the JVM
-Java / JVM — where loaders and mods actually live
+### DataBus test
 
-## Why not Sinytra Connector
+```bash
+cargo run -- --mode bus-test
+```
 
-Sinytra Connector translates Fabric mods into something Forge can run at the
-bytecode level. It does that surprisingly well, but:
+Starts the standalone TCP routing service on:
 
-It is fragile by construction: every loader update can break it.
-It has to hook deeply into both loaders, so it always lags upstream.
-It does not isolate the two loaders; they share one class space.
-This project makes a different bet: treat the two loaders as two separate
-worlds, and connect them only at the render/data layer.
+```text
+127.0.0.1:25565
+```
 
-It may fail. The Mixin conflict problem alone is hard. But if it works, it does
-not break when a loader updates, by design.
+---
 
-## Known challenges
+## Known Problems
 
-- [x] **Successfully resolved ModLauncher initialization and `NullPointerException` (NPE) issues by implementing automated JAR sanitization, exact MANIFEST attribute injection, proper `jopt-simple` and `securejarhandler` dependency paths, and strict JVM VM options ordering (placing `-D` arguments before the main class).**
-Forge 1.21+ relies on the Java Module System (--module-path,
-BootstrapLauncher, securejarhandler), which must be assembled to match the
-official installer exactly.
-ModLauncher 10 requires well-formed JAR manifest metadata; anything that
-rewrites manifests silently breaks version discovery.
-Mixin conflicts across two loaders in one JVM.
-ClassLoader hierarchy for real loaders (parent = null is not viable in
-practice).
+See [Problems.md](Problems.md) for the current technical issue list and investigation notes.
+
+Some major challenges include:
+
+- Real-loader ClassLoader isolation.
+- JPMS and ModLauncher bootstrap requirements.
+- Mixin compatibility and transformation ordering.
+- Version-specific Minecraft mappings.
+- Player identity and entity lifecycle synchronization.
+- Network reconnection and state consistency.
+
+---
+
+## Why Not Sinytra Connector?
+
+[Sinytra Connector](https://github.com/Sinytra/Connector) is an established compatibility project that aims to run Fabric mods in a Forge/NeoForge environment.
+
+JVM Mod Combiner investigates a different architecture.
+
+Rather than translating one loader's environment into another, it aims to isolate the environments and expose a controlled data interface between them.
+
+Potential advantages of this approach include:
+
+- Reduced direct coupling between loader internals.
+- Independent loader lifecycle management.
+- Explicit communication boundaries.
+- More controlled state synchronization.
+
+However, isolation introduces its own challenges. Cross-loader entity synchronization, event semantics, world state, rendering, and mod behavior are significantly more complex than transferring player coordinates.
+
+This project is research into those challenges, not a claim that they have already been solved.
+
+---
 
 ## Roadmap
 
-Load a real Fabric Loader jar into Sandbox A.
-Load a real Forge Loader jar into Sandbox B (requires a hybrid parent loader).
-Resolve Mixin conflicts — either bytecode merging on the Rust side, or a
-priority-based allowlist.
-Zero-copy data bus for cross-sandbox communication.
-Cross-platform (Windows / Linux / macOS).
+### Phase 1 — Runtime foundation
+
+- [x] Rust/JNI integration.
+- [x] Basic `URLClassLoader` isolation.
+- [x] Fabric startup.
+- [x] Forge/NeoForge startup experiments.
+
+### Phase 2 — Sandbox communication
+
+- [x] Rust TCP DataBus.
+- [x] Named client registration.
+- [x] JSON message routing.
+- [x] Java Agent integration.
+
+### Phase 3 — Game-state synchronization
+
+- [x] Fabric player-state extraction.
+- [x] Fabric-to-NeoForge message delivery.
+- [x] NeoForge player discovery.
+- [x] NeoForge remote-player injection prototype.
+- [ ] NeoForge player-state sender.
+- [ ] Fabric receiver and mirror injection.
+- [ ] Bidirectional synchronization.
+
+### Phase 4 — Interoperability
+
+- [ ] Player identity and lifecycle protocol.
+- [ ] Entity synchronization.
+- [ ] Inventory and interaction synchronization.
+- [ ] Event and capability bridging.
+- [ ] Mixin conflict strategy.
+
+### Phase 5 — Architecture and portability
+
+- [ ] Shared-memory or zero-copy DataBus.
+- [ ] Real-loader isolation in one JVM.
+- [ ] Dynamic dependency resolution.
+- [ ] Windows and Linux verification.
+- [ ] Performance and stability testing.
+
+---
 
 ## Contributing
 
-Currently a personal research project. Contribution guidelines will be added if
-it reaches a usable prototype stage.
+This is currently a personal research project.
+
+Bug reports, test results, and technical discussions are welcome.
+
+If you are testing the project, please consider posting in [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-fusion/discussions), preferably under **Showcase / Test Results**.
+
+Useful information includes:
+
+- Operating system and CPU architecture.
+- JDK vendor and version.
+- Minecraft version.
+- Loader and loader version.
+- Relevant mod list.
+- Runtime logs and screenshots.
+- Steps required to reproduce the problem.
+
+Reports from Windows and Linux users are especially useful for future cross-platform work.
 
 ## License
 
-BSD 3-Clause. See [LICENCE](LICENCE).
->  **A small request for users**:
-> If you are using, testing, or learning from this project, **we highly encourage** you to drop a post in the **[Discussions](https://github.com/hchunhei81-cyber/jvm-mod-fusion/discussions)** tab under the **"Showcase / Test Results"** category, and attach your runtime screenshots, OS info, and mod environment.
-> This gives the project a huge boost of motivation, and helps me collect bug reports from various environments (especially weird issues on Windows and Linux) so I can fix and iterate faster.
+BSD 3-Clause. See [LICENSE](LICENSE).
+

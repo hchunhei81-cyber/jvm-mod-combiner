@@ -145,19 +145,19 @@ The following images document individual milestones. They are evidence of specif
 
 Rust's embedded JNI JVM launches Fabric and renders the Minecraft main menu.
 
-![Rust JNI launches Minecraft 1.21.4 with Fabric](image.png)
+![Rust JNI launches Minecraft 1.21.4 with Fabric](photos/image.png)
 
 ### 2. NeoForge Boot — Minecraft 1.21.1
 
 Rust launches NeoForge through a separate JVM process.
 
-![Rust launches NeoForge](image2.png)
+![Rust launches NeoForge](photos/image2.png)
 
 ### 3. Dual-Sandbox Concurrent Launch
 
 Fabric 1.21.4 and NeoForge 1.21.1 run concurrently in separate JVM processes on the same machine.
 
-![Dual Sandbox Launch Proof](image3.png)
+![Dual Sandbox Launch Proof](photos/image3.png)
 
 ### 4. DataBus Routing — IPC Prototype
 
@@ -165,7 +165,7 @@ The Rust microkernel accepts registration requests from both sandbox agents.
 
 The TCP routing layer forwards messages between registered clients.
 
-![Cross-Sandbox IPC Routing](image4.png)
+![Cross-Sandbox IPC Routing](photos/image4.png)
 
 ### 5. Runtime Bytecode Instrumentation
 
@@ -183,7 +183,7 @@ Example diagnostic output:
 
 The Fabric sandbox uses reflection to access the local player's runtime state, including coordinates and rotation.
 
-![Fabric player-state extraction](image5.png)
+![Fabric player-state extraction](photos/image5.png)
 
 ### 7. Fabric-to-NeoForge State Synchronization
 
@@ -191,7 +191,7 @@ Fabric sends player-state messages through the Rust TCP DataBus.
 
 NeoForge receives and parses the messages.
 
-![NeoForge receives synchronized player state](image6.png)
+![NeoForge receives synchronized player state](photos/image6.png)
 
 ### 8. Cross-Sandbox Entity Mirroring
 
@@ -199,7 +199,7 @@ A proof-of-concept `RemotePlayer` is injected into NeoForge's `ClientLevel`.
 
 The mirror entity can be updated using state received from Fabric.
 
-![Cross-Sandbox Entity Mirroring](image7.png)
+![Cross-Sandbox Entity Mirroring](photos/image7.png)
 
 > Different Minecraft versions and world seeds can produce different terrain. Matching player coordinates do not imply identical world generation.
 
@@ -207,7 +207,7 @@ The mirror entity can be updated using state received from Fabric.
 
 Rust successfully launches Forge 1.21.4 (54.1.22) to the early loading screen.
 
-![Rust boots Forge 1.21.4](image8.png)
+![Rust boots Forge 1.21.4](photos/image8.png)
 
 ---
 

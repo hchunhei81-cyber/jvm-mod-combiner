@@ -146,25 +146,25 @@ Rust 负责：
 
 Rust 通过 JNI 启动 Fabric，成功渲染 Minecraft 主菜单。
 
-![Rust JNI 启动 Minecraft 1.21.4 + Fabric](image.png)
+![Rust JNI 启动 Minecraft 1.21.4 + Fabric](photos/image.png)
 
 ### 2. NeoForge 启动 — Minecraft 1.21.1
 
 Rust 通过独立 JVM 进程启动 NeoForge。
 
-![Rust 启动 NeoForge](image2.png)
+![Rust 启动 NeoForge](photos/image2.png)
 
 ### 3. 双沙盒并行启动
 
 Fabric 1.21.4 与 NeoForge 1.21.1 在同一台机器上通过不同 JVM 进程并行运行。
 
-![Dual Sandbox Launch Proof](image3.png)
+![Dual Sandbox Launch Proof](photos/image3.png)
 
 ### 4. DataBus 路由 — IPC 原型
 
 Rust 微内核接收两个沙盒的注册请求，并通过 TCP 路由层转发消息。
 
-![Cross-Sandbox IPC Routing](image4.png)
+![Cross-Sandbox IPC Routing](photos/image4.png)
 
 ### 5. Runtime Bytecode Instrumentation
 
@@ -184,7 +184,7 @@ Java Agent 使用 `ClassFileTransformer` 观察 Fabric `KnotClassLoader` 加载�
 
 Fabric 沙盒通过反射获取本地玩家的实时状态，包括坐标和旋转信息。
 
-![Fabric 玩家状态提取](image5.png)
+![Fabric 玩家状态提取](photos/image5.png)
 
 ### 7. Fabric → NeoForge 状态同步
 
@@ -192,7 +192,7 @@ Fabric 通过 Rust TCP DataBus 发送玩家状态。
 
 NeoForge 成功接收并解析同步消息。
 
-![NeoForge 接收玩家状态](image6.png)
+![NeoForge 接收玩家状态](photos/image6.png)
 
 ### 8. 跨沙盒实体镜像
 
@@ -200,7 +200,7 @@ NeoForge 成功接收并解析同步消息。
 
 镜像实体可以根据 Fabric 发送的状态进行更新。
 
-![Cross-Sandbox Entity Mirroring](image7.png)
+![Cross-Sandbox Entity Mirroring](photos/image7.png)
 
 > 不同 Minecraft 版本和世界种子可能产生不同的地形。玩家坐标一致并不代表世界生成结果相同。
 
@@ -208,7 +208,7 @@ NeoForge 成功接收并解析同步消息。
 
 Rust 成功启动 Forge 1.21.4（54.1.22），并进入早期加载界面。
 
-![Rust 启动 Forge 1.21.4](image8.png)
+![Rust 启动 Forge 1.21.4](photos/image8.png)
 
 ---
 

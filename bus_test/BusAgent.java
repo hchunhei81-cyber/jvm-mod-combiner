@@ -31,6 +31,7 @@ public class BusAgent {
 
     static Method getXMethod, getYMethod, getZMethod;
     static Method getYRotMethod, getXRotMethod, isSprintingMethod;
+    static volatile long lastFabricBindAttemptAt = 0L;
 
     // NeoForge
     static volatile Object nfMcInstance = null;
@@ -214,16 +215,20 @@ public class BusAgent {
                         continue;
                     }
 
-                    fabricMcInstance = instance;
+                    // Fabric runtime uses Intermediary field names.
+                    // MinecraftClient.field_1724 is the local player.
+                    Field playerField = instance.getClass().getField("field_1724");
 
-                    // Minecraft 1.21.4: flk.t is the local player.
-                    fabricPlayerField = instance.getClass().getField("t");
-
-                    // Minecraft inherits execute(Runnable) from bra.
-                    fabricExecuteMethod = instance.getClass().getMethod(
+                    // execute(Runnable) is inherited from ThreadExecutor.
+                    Method executeMethod = instance.getClass().getMethod(
                         "execute",
                         Runnable.class
                     );
+
+                    // Publish the instance only after all lookups succeed.
+                    fabricPlayerField = playerField;
+                    fabricExecuteMethod = executeMethod;
+                    fabricMcInstance = instance;
 
                     System.out.println(
                         "[BusAgent:fabric][INIT] SUCCESS: " +
@@ -956,9 +961,15 @@ public class BusAgent {
 
     
     static boolean bindMethods(Class<?> clazz) {
-        if (fabricBindingState != FabricBindingState.UNINITIALIZED) {
-            return fabricBindingState == FabricBindingState.READY;
+        if (fabricBindingState == FabricBindingState.READY) {
+            return true;
         }
+
+        long now = System.currentTimeMillis();
+        if (now - lastFabricBindAttemptAt < 3000L) {
+            return false;
+        }
+        lastFabricBindAttemptAt = now;
 
         System.out.println(
             "[BusAgent:fabric] binding Minecraft 1.21.4 methods: " +
@@ -968,12 +979,13 @@ public class BusAgent {
         try {
             // Resolve every method into local variables first.
             // Do not publish a partially initialized binding.
-            Method x = clazz.getMethod("dA");
-            Method y = clazz.getMethod("dC");
-            Method z = clazz.getMethod("dG");
-            Method yaw = clazz.getMethod("dL");
-            Method pitch = clazz.getMethod("dN");
-            Method sprint = clazz.getMethod("cj");
+            // Fabric 1.21.4 Intermediary names, declared on Entity.
+            Method x = clazz.getMethod("method_23317");
+            Method y = clazz.getMethod("method_23318");
+            Method z = clazz.getMethod("method_23321");
+            Method yaw = clazz.getMethod("method_36454");
+            Method pitch = clazz.getMethod("method_36455");
+            Method sprint = clazz.getMethod("method_5624");
 
             // Commit only after all six lookups succeed.
             getXMethod = x;
@@ -984,6 +996,7 @@ public class BusAgent {
             isSprintingMethod = sprint;
 
             fabricBindingState = FabricBindingState.READY;
+            fabricSampleErrorPrinted = false;
 
             System.out.println(
                 "[BusAgent:fabric] binding result X=" + nameOf(x) +
@@ -1001,17 +1014,18 @@ public class BusAgent {
             return true;
 
         } catch (NoSuchMethodException | SecurityException e) {
-            fabricBindingState = FabricBindingState.FAILED;
+            // Keep the binding retryable; the monitor retries at most
+            // once every three seconds.
+            fabricBindingState = FabricBindingState.UNINITIALIZED;
 
-            System.err.println(
-                "[BusAgent:fabric][ERROR] 1.21.4 method binding failed; " +
-                "binding permanently disabled"
-            );
-            e.printStackTrace(System.err);
-
-            System.err.println(
-                "[BusAgent:fabric] method binding state: FAILED"
-            );
+            if (!fabricSampleErrorPrinted) {
+                System.err.println(
+                    "[BusAgent:fabric][ERROR] 1.21.4 method binding failed; " +
+                    "will retry in 3 seconds"
+                );
+                e.printStackTrace(System.err);
+                fabricSampleErrorPrinted = true;
+            }
 
             return false;
         }

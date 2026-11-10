@@ -46,43 +46,168 @@ fn find_local(rel_path: &str, search_dirs: &[PathBuf]) -> Option<PathBuf> {
     None
 }
 
-fn resolve_classpath(json_path: &Path, search_dirs: &[PathBuf]) -> Vec<PathBuf> {
+fn resolve_classpath_recursive(
+    json_path: &Path,
+    search_dirs: &[PathBuf],
+    visited: &mut Vec<PathBuf>,
+    total: &mut usize,
+    selected_coordinates: &mut Vec<String>,
+) -> Vec<PathBuf> {
+    let identity = json_path
+        .canonicalize()
+        .unwrap_or_else(|_| json_path.to_path_buf());
+
+    if visited.contains(&identity) {
+        eprintln!(
+            "[Rust] WARNING: version inheritance cycle detected at {}",
+            json_path.display()
+        );
+        return Vec::new();
+    }
+
+    visited.push(identity);
+
     let json_str = std::fs::read_to_string(json_path).expect("Failed to read version JSON");
     let json: Value = serde_json::from_str(&json_str).expect("Failed to parse version JSON");
-    let empty: Vec<Value> = Vec::new();
-    let libraries = json["libraries"].as_array().unwrap_or(&empty);
+
     let mut classpath: Vec<PathBuf> = Vec::new();
-    let mut total = 0usize;
-    for lib in libraries {
-        if !rules_allow(lib) {
-            continue;
-        }
-        total += 1;
-        if let Some(art) = lib.pointer("/downloads/artifact") {
-            if let Some(path) = art.get("path").and_then(|v| v.as_str()) {
-                if let Some(found) = find_local(path, search_dirs) {
-                    classpath.push(found);
+
+    // Resolve this version before its parents.
+    // A child version's Maven dependency takes precedence over its parent.
+    if let Some(libraries) = json["libraries"].as_array() {
+        for lib in libraries {
+            if !rules_allow(lib) {
+                continue;
+            }
+
+            *total += 1;
+
+            let coordinate = lib.get("name").and_then(Value::as_str).and_then(|name| {
+                let parts: Vec<&str> = name.split(':').collect();
+
+                if parts.len() >= 3 {
+                    let classifier = parts
+                        .get(3)
+                        .map(|value| value.split('@').next().unwrap_or(value));
+
+                    Some(match classifier {
+                        Some(classifier) => {
+                            format!("{}:{}:{}", parts[0], parts[1], classifier)
+                        }
+                        None => format!("{}:{}", parts[0], parts[1]),
+                    })
+                } else {
+                    None
+                }
+            });
+
+            if let Some(ref key) = coordinate {
+                if selected_coordinates.contains(key) {
+                    eprintln!(
+                        "[Rust] Skipping inherited dependency overridden by child: {}",
+                        key
+                    );
+                    continue;
                 }
             }
-        }
-        if let Some(classifiers) = lib.pointer("/downloads/classifiers") {
-            for key in ["natives-macos-arm64", "natives-macos"] {
-                if let Some(c) = classifiers.get(key) {
-                    if let Some(path) = c.get("path").and_then(|v| v.as_str()) {
-                        if let Some(found) = find_local(path, search_dirs) {
+
+            let before = classpath.len();
+
+            if let Some(art) = lib.pointer("/downloads/artifact") {
+                if let Some(path) = art.get("path").and_then(Value::as_str) {
+                    if let Some(found) = find_local(path, search_dirs) {
+                        if !classpath.contains(&found) {
                             classpath.push(found);
                         }
                     }
                 }
             }
+
+            if let Some(classifiers) = lib.pointer("/downloads/classifiers") {
+                for key in ["natives-macos-arm64", "natives-macos"] {
+                    if let Some(c) = classifiers.get(key) {
+                        if let Some(path) = c.get("path").and_then(Value::as_str) {
+                            if let Some(found) = find_local(path, search_dirs) {
+                                if !classpath.contains(&found) {
+                                    classpath.push(found);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Only claim the Maven coordinate when at least one artifact
+            // was actually resolved. This permits a parent fallback if the
+            // child dependency is unavailable locally.
+            if classpath.len() > before {
+                if let Some(key) = coordinate {
+                    if !selected_coordinates.contains(&key) {
+                        selected_coordinates.push(key);
+                    }
+                }
+            }
         }
     }
+
+    if let Some(parent_id) = json["inheritsFrom"].as_str() {
+        let parent_json = json_path
+            .parent()
+            .and_then(|version_dir| version_dir.parent())
+            .map(|versions_dir| {
+                versions_dir
+                    .join(parent_id)
+                    .join(format!("{parent_id}.json"))
+            });
+
+        if let Some(parent_json) = parent_json {
+            if parent_json.is_file() {
+                let inherited = resolve_classpath_recursive(
+                    &parent_json,
+                    search_dirs,
+                    visited,
+                    total,
+                    selected_coordinates,
+                );
+
+                for path in inherited {
+                    if !classpath.contains(&path) {
+                        classpath.push(path);
+                    }
+                }
+            } else {
+                eprintln!(
+                    "[Rust] WARNING: inherited version JSON not found: {}",
+                    parent_json.display()
+                );
+            }
+        }
+    }
+
+    visited.pop();
+    classpath
+}
+
+fn resolve_classpath(json_path: &Path, search_dirs: &[PathBuf]) -> Vec<PathBuf> {
+    let mut visited: Vec<PathBuf> = Vec::new();
+    let mut total = 0usize;
+    let mut selected_coordinates: Vec<String> = Vec::new();
+
+    let classpath = resolve_classpath_recursive(
+        json_path,
+        search_dirs,
+        &mut visited,
+        &mut total,
+        &mut selected_coordinates,
+    );
+
     println!(
-        "[Rust] Resolved {}/{} libraries from {}",
+        "[Rust] Resolved {}/{} libraries across version inheritance from {}",
         classpath.len(),
         total,
         json_path.display()
     );
+
     classpath
 }
 
@@ -239,25 +364,15 @@ fn build_classpath(is_forge: bool, sandbox_dir: &Path) -> (Vec<PathBuf>, Vec<Pat
         }
         legacy_cp.push(sandbox_dir.join("minecraft-client.jar"));
     } else {
-        for name in [
-            "fabric-loader.jar",
-            "asm-9.6.jar",
-            "asm-tree-9.6.jar",
-            "asm-analysis-9.6.jar",
-            "asm-commons-9.6.jar",
-            "asm-util-9.6.jar",
-            "sponge-mixin.jar",
-        ] {
-            let p = sandbox_dir.join(name);
-            legacy_cp.push(p.clone());
-            bootstrap_cp.push(p);
-        }
+        // Fabric: resolve vanilla + Fabric dependencies from the merged
+        // Mojang-style profile. Do not inject obsolete flat ASM/Mixin JARs.
         let v_json = sandbox_dir.join("1.21.4.json");
         let dirs = vec![
             sandbox_dir.to_path_buf(),
             sandbox_dir.join("mc_libraries"),
             mc_root.join("libraries"),
         ];
+
         for p in resolve_classpath(&v_json, &dirs) {
             if !legacy_cp.contains(&p) {
                 legacy_cp.push(p.clone());
@@ -266,9 +381,15 @@ fn build_classpath(is_forge: bool, sandbox_dir: &Path) -> (Vec<PathBuf>, Vec<Pat
                 bootstrap_cp.push(p);
             }
         }
+
         let mc_jar = sandbox_dir.join("minecraft-client.jar");
-        legacy_cp.push(mc_jar.clone());
-        bootstrap_cp.push(mc_jar);
+
+        if !legacy_cp.contains(&mc_jar) {
+            legacy_cp.push(mc_jar.clone());
+        }
+        if !bootstrap_cp.contains(&mc_jar) {
+            bootstrap_cp.push(mc_jar);
+        }
     }
 
     (bootstrap_cp, legacy_cp)
@@ -387,6 +508,44 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     let mc_root = PathBuf::from(env::var("HOME").expect("HOME is not set"))
         .join("Library/Application Support/minecraft");
     let libs = mc_root.join("libraries");
+
+    // Forge 1.21.4 inherits the asset index from vanilla 1.21.4.
+    let vanilla_json_path = mc_root.join("versions/1.21.4/1.21.4.json");
+    let vanilla_json_text = std::fs::read_to_string(&vanilla_json_path).unwrap_or_else(|e| {
+        panic!(
+            "[forge] 无法读取 Vanilla JSON {}: {}",
+            vanilla_json_path.display(),
+            e
+        )
+    });
+
+    let vanilla_json: Value = serde_json::from_str(&vanilla_json_text)
+        .unwrap_or_else(|e| panic!("[forge] Vanilla JSON 解析失败: {}", e));
+
+    let asset_index = vanilla_json
+        .pointer("/assetIndex/id")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("[forge] Vanilla JSON 缺少 assetIndex.id"))
+        .to_owned();
+
+    let assets_dir = mc_root.join("assets");
+    if !assets_dir.is_dir() {
+        panic!(
+            "[forge] Minecraft assets 目录不存在: {}",
+            assets_dir.display()
+        );
+    }
+
+    let asset_index_file = assets_dir
+        .join("indexes")
+        .join(format!("{}.json", asset_index));
+
+    if !asset_index_file.is_file() {
+        panic!("[forge] 资源索引文件不存在: {}", asset_index_file.display());
+    }
+
+    eprintln!("[forge] assetsDir: {}", assets_dir.display());
+    eprintln!("[forge] assetIndex: {}", asset_index);
 
     // Forge 1.21.4: resolve dependencies from its version JSON only.
     // Never recursively scan the user's entire Minecraft libraries directory.
@@ -608,8 +767,8 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
             libs.join("net/minecraftforge/fmlloader/1.21.4-54.1.22/fmlloader-1.21.4-54.1.22.jar"),
             libs.join("net/minecraftforge/bootstrap/2.1.8/bootstrap-2.1.8.jar"),
             libs.join("net/minecraftforge/bootstrap-api/2.1.8/bootstrap-api-2.1.8.jar"),
-            sandbox_dir.join("mc_libraries/logging-1.7.12.jar"),
-            sandbox_dir.join("mc_libraries/slf4j-api-2.0.17.jar"),
+            libs.join("com/mojang/logging/1.2.7/logging-1.2.7.jar"),
+            libs.join("org/slf4j/slf4j-api/2.0.17/slf4j-api-2.0.17.jar"),
             libs.join("net/minecraftforge/unsafe/0.9.2/unsafe-0.9.2.jar"),
             libs.join("org/ow2/asm/asm/9.9.1/asm-9.9.1.jar"),
             libs.join("org/ow2/asm/asm-tree/9.9.1/asm-tree-9.9.1.jar"),
@@ -669,6 +828,7 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
             "org/ow2/asm/asm-util/9.9.1/asm-util-9.9.1.jar",
             "org/apache/logging/log4j/log4j-core/2.25.2/log4j-core-2.25.2.jar",
             "org/apache/logging/log4j/log4j-api/2.25.2/log4j-api-2.25.2.jar",
+            "org/slf4j/slf4j-api/2.0.17/slf4j-api-2.0.17.jar",
             "net/minecrell/terminalconsoleappender/1.2.0/terminalconsoleappender-1.2.0.jar",
             "org/jline/jline-terminal/3.25.1/jline-terminal-3.25.1.jar",
             "org/jline/jline-reader/3.25.1/jline-reader-3.25.1.jar",
@@ -727,6 +887,9 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
 
     let mut cmd = std::process::Command::new(&java);
 
+    // Agent 通过明确的 JVM 参数注入，避免 JAVA_TOOL_OPTIONS 重复注入。
+    cmd.env_remove("JAVA_TOOL_OPTIONS");
+
     // Critical: Bootstrap 2.1.8 scans `java.class.path` to build its runtime
     // module layer. Pass the full legacy JAR list as the actual JVM classpath;
     // setting only -DlegacyClassPath does not make those JARs visible to that scan.
@@ -780,9 +943,28 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     }
 
     // Avoid discovering Bootstrap API a second time from java.class.path.
+    // ASM 9.9.1 is supplied explicitly through --module-path.
+    // Do not let sandbox ASM 9.10.1 enter Bootstrap's runtime module discovery.
+    for p in real_cp
+        .iter()
+        .filter(|p| p.contains("mc_libraries/org/ow2/asm/"))
+    {
+        eprintln!("[forge] 排除沙盒 ASM，避免 JPMS 模块冲突: {}", p);
+    }
+
+    // Fabric Loader registers Mixin service providers that require
+    // FabricLauncherBase initialization. They must never enter Forge's classpath.
+    for p in real_cp.iter().filter(|p| p.contains("/net/fabricmc/")) {
+        eprintln!("[forge] 排除 Fabric 专属依赖: {}", p);
+    }
+
     real_cp.retain(|p| {
         !p.contains("bootstrap-api")
             && !p.contains("jopt-simple/6.0-alpha-3/")
+            && !p.contains("mc_libraries/org/ow2/asm/")
+            // Fabric Loader and Fabric-specific services are incompatible
+            // with the standalone Forge ModLauncher environment.
+            && !p.contains("/net/fabricmc/")
             // Avoid loading the old automatic module named "failureaccess".
             // Sandbox copies can introduce additional automatic modules.
             && !(p.contains("/sandbox/mc_libraries/")
@@ -973,22 +1155,52 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
         .arg("-Dfml.mcpVersion=20241203.143248")
         .arg("-Dfml.forgeGroup=net.minecraftforge")
         .arg("-Dfml.ignoreInvalidMinecraftCertificates=true")
-        .arg("-Dfml.ignorePatchDiscrepancies=true")
-        .arg("net.minecraftforge.bootstrap.ForgeBootstrap")
-        .arg("--launchTarget").arg("forge_client")
-        .arg("--fml.forgeVersion").arg("54.1.22")
-        .arg("--fml.mcVersion").arg("1.21.4")
-        .arg("--fml.mcpVersion").arg("20241203.143248")
-        .arg("--fml.forgeGroup").arg("net.minecraftforge")
-        .arg("--gameDir").arg(sandbox_dir.to_string_lossy().to_string())
-        .arg("--assetsDir").arg(sandbox_dir.join("assets").to_string_lossy().to_string())
-        .arg("--assetIndex").arg("17")
-        .arg("--version").arg("1.21.4")
-        .arg("--username").arg("Dev")
-        .arg("--uuid").arg("00000000000000000000000000000000")
-        .arg("--accessToken").arg("0")
-        .arg("--userType").arg("legacy")
-        .arg("--versionType").arg("release");
+        .arg("-Dfml.ignorePatchDiscrepancies=true");
+
+    // Java Agent：先验证 Forge 能注册到 DataBus，再实现 Forge 实体采样。
+    let project_root = env::current_dir().expect("[forge] 无法获取项目目录");
+    let agent_jar = project_root.join("bus_test/bus-agent.jar");
+
+    if agent_jar.is_file() {
+        let agent_arg = format!("-javaagent:{}=Forge-Sandbox", agent_jar.display());
+        cmd.arg(agent_arg);
+        eprintln!(
+            "[forge] Java Agent 已加入 JVM 参数: {}",
+            agent_jar.display()
+        );
+    } else {
+        eprintln!("[forge] WARNING: Agent JAR 不存在: {}", agent_jar.display());
+    }
+
+    cmd.arg("net.minecraftforge.bootstrap.ForgeBootstrap")
+        .arg("--launchTarget")
+        .arg("forge_client")
+        .arg("--fml.forgeVersion")
+        .arg("54.1.22")
+        .arg("--fml.mcVersion")
+        .arg("1.21.4")
+        .arg("--fml.mcpVersion")
+        .arg("20241203.143248")
+        .arg("--fml.forgeGroup")
+        .arg("net.minecraftforge")
+        .arg("--gameDir")
+        .arg(sandbox_dir.to_string_lossy().to_string())
+        .arg("--assetsDir")
+        .arg(assets_dir.to_string_lossy().to_string())
+        .arg("--assetIndex")
+        .arg(&asset_index)
+        .arg("--version")
+        .arg("1.21.4")
+        .arg("--username")
+        .arg("Dev")
+        .arg("--uuid")
+        .arg("00000000000000000000000000000000")
+        .arg("--accessToken")
+        .arg("0")
+        .arg("--userType")
+        .arg("legacy")
+        .arg("--versionType")
+        .arg("release");
 
     // ZIP diagnostic: print every archive passed to the JVM.
     eprintln!("\n========== ZIP DIAGNOSTIC BEGIN ==========");
@@ -1474,7 +1686,10 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
 fn start_data_bus() -> std::io::Result<()> {
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Write};
-    use std::sync::{atomic::{AtomicU64, Ordering}, Arc, Mutex};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    };
 
     // Each registration is tied to one specific TCP connection.
     struct PeerRegistration {
@@ -1507,8 +1722,7 @@ fn start_data_bus() -> std::io::Result<()> {
             let next_connection_id = next_connection_id.clone();
 
             thread::spawn(move || {
-                let connection_id =
-                    next_connection_id.fetch_add(1, Ordering::Relaxed);
+                let connection_id = next_connection_id.fetch_add(1, Ordering::Relaxed);
 
                 let peer = stream
                     .peer_addr()
@@ -1607,17 +1821,13 @@ fn start_data_bus() -> std::io::Result<()> {
 
                     let fabric_only_message = matches!(
                         message_type,
-                        "player_move" |
-                        "monster_spawn" |
-                        "monster_update" |
-                        "monster_remove"
+                        "player_move" | "monster_spawn" | "monster_update" | "monster_remove"
                     );
 
                     if fabric_only_message && from != "fabric" {
                         println!(
                             "[DataBus][REJECT] '{}' attempted to publish {}",
-                            from,
-                            message_type
+                            from, message_type
                         );
 
                         let rejection = serde_json::json!({
@@ -1688,22 +1898,14 @@ fn start_data_bus() -> std::io::Result<()> {
 
                     let is_current_connection = reg
                         .get(&name)
-                        .map(|registration| {
-                            registration.connection_id == connection_id
-                        })
+                        .map(|registration| registration.connection_id == connection_id)
                         .unwrap_or(false);
 
                     if is_current_connection {
                         reg.remove(&name);
-                        println!(
-                            "[DataBus] '{}' 断开，已清理当前注册项",
-                            name
-                        );
+                        println!("[DataBus] '{}' 断开，已清理当前注册项", name);
                     } else {
-                        println!(
-                            "[DataBus] '{}' 旧连接断开，保留新连接注册项",
-                            name
-                        );
+                        println!("[DataBus] '{}' 旧连接断开，保留新连接注册项", name);
                     }
                 }
                 drop(tx);
@@ -1781,6 +1983,10 @@ fn main() {
 
     // Forge: launch as a subprocess with proper -p / --add-modules
     if is_forge {
+        if env::var_os("JVM_COMBINER_BUS_EXTERNAL").is_none() {
+            start_data_bus().expect("[DataBus] Forge 无法监听 127.0.0.1:25565");
+        }
+
         launch_forge_subprocess(&sandbox_dir);
         return;
     }

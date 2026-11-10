@@ -29,7 +29,7 @@ final class MonsterSync {
     private static Method getTypeMethod;
     private static Method getRegistryKeyMethod;
     private static Object entityTypeRegistry;
-    private static Method getUuidMethod;
+    private static Field uuidField;
     private static Method getXMethod;
     private static Method getYMethod;
     private static Method getZMethod;
@@ -109,7 +109,7 @@ final class MonsterSync {
                     continue;
                 }
 
-                UUID uuid = (UUID) getUuidMethod.invoke(entity);
+                UUID uuid = (UUID) uuidField.get(entity);
 
                 if (uuid == null) {
                     continue;
@@ -248,42 +248,77 @@ final class MonsterSync {
 
         ClassLoader loader = minecraft.getClass().getClassLoader();
 
-        levelField = minecraft.getClass().getField("s");
+        // MinecraftClient.world
+        levelField = minecraft.getClass().getField("field_1687");
 
-        Class<?> clientLevelClass = loader.loadClass("gga");
+        // ClientWorld entity iteration
+        Class<?> clientLevelClass =
+            loader.loadClass("net.minecraft.class_638");
+
         entitiesForRenderingMethod =
-            clientLevelClass.getMethod("d");
+            clientLevelClass.getMethod("method_18112");
 
-        monsterClass = loader.loadClass("clz");
+        // Hostile mob hierarchy
+        monsterClass =
+            loader.loadClass("net.minecraft.class_1588");
 
-        Class<?> entityClass = loader.loadClass("bum");
-        Class<?> livingEntityClass = loader.loadClass("bvi");
+        Class<?> entityClass =
+            loader.loadClass("net.minecraft.class_1297");
 
-        getTypeMethod = entityClass.getMethod("aq");
-        getUuidMethod = entityClass.getMethod("cG");
-        getXMethod = entityClass.getMethod("dA");
-        getYMethod = entityClass.getMethod("dC");
-        getZMethod = entityClass.getMethod("dG");
-        getYawMethod = entityClass.getMethod("dL");
-        getPitchMethod = entityClass.getMethod("dN");
-        isAliveMethod = entityClass.getMethod("bL");
-        isRemovedMethod = entityClass.getMethod("dQ");
+        Class<?> livingEntityClass =
+            loader.loadClass("net.minecraft.class_1309");
 
-        Class<?> entityTypeClass = loader.loadClass("but");
-        Class<?> builtInRegistriesClass = loader.loadClass("mb");
-        Class<?> registryClass = loader.loadClass("jm");
+        // Entity UUID is a field, not the old cG() method.
+        uuidField = entityClass.getDeclaredField("field_6021");
+        uuidField.setAccessible(true);
+
+        getTypeMethod =
+            entityClass.getMethod("method_5864");
+
+        getXMethod =
+            entityClass.getMethod("method_23317");
+
+        getYMethod =
+            entityClass.getMethod("method_23318");
+
+        getZMethod =
+            entityClass.getMethod("method_23321");
+
+        getYawMethod =
+            entityClass.getMethod("method_36454");
+
+        getPitchMethod =
+            entityClass.getMethod("method_36455");
+
+        isAliveMethod =
+            entityClass.getMethod("method_5805");
+
+        isRemovedMethod =
+            entityClass.getMethod("method_31481");
+
+        // BuiltInRegistries.ENTITY_TYPE
+        Class<?> builtInRegistriesClass =
+            loader.loadClass("net.minecraft.class_7923");
 
         entityTypeRegistry = builtInRegistriesClass
-            .getField("f")
+            .getField("field_41177")
             .get(null);
 
+        // Registry.getKey(Object)
+        Class<?> registryClass =
+            loader.loadClass("net.minecraft.class_2378");
+
         getRegistryKeyMethod = registryClass.getMethod(
-            "b",
+            "method_10221",
             Object.class
         );
 
-        getHealthMethod = livingEntityClass.getMethod("eD");
-        getMaxHealthMethod = livingEntityClass.getMethod("eS");
+        // LivingEntity health methods
+        getHealthMethod =
+            livingEntityClass.getMethod("method_6032");
+
+        getMaxHealthMethod =
+            livingEntityClass.getMethod("method_6063");
 
         initialized = true;
 
@@ -291,6 +326,8 @@ final class MonsterSync {
             "[MonsterSync][INIT] SUCCESS: " +
             "level=" + levelField.getName() +
             ", iterator=" + entitiesForRenderingMethod.getName() +
+            ", uuid=" + uuidField.getName() +
+            ", registry=" + registryClass.getName() +
             ", hostileBase=" + monsterClass.getName()
         );
     }

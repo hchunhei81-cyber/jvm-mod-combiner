@@ -1,6 +1,5 @@
 # JVM Mod Combiner
 
-> 考试结束后将继续推进 JVM Mod Combiner 的开发与实验。
 
 > 一个使用 Rust 和 Java 开发的跨 Loader 互操作研究项目。目标是通过隔离的运行环境和跨沙盒通信，让 Fabric 与 Forge/NeoForge 能够协同运行，而不依赖 Sinytra Connector。
 

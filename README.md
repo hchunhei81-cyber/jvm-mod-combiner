@@ -1,6 +1,6 @@
 # JVM Mod Combiner
 
-> JVM Mod Combiner is an experimental cross-loader interoperability project written in Rust and Java. Development will resume after the exam period.
+> JVM Mod Combiner is an experimental cross-loader interoperability project written in Rust and Java, focused on reliable one-way player-state synchronization between isolated Fabric and NeoForge environments.
 
 > A Rust-based microkernel prototype exploring how Fabric and Forge/NeoForge environments can coexist through isolated runtime environments and cross-sandbox communication, without depending on Sinytra Connector.
 

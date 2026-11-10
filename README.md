@@ -6,7 +6,7 @@
 
 > A Rust-based microkernel prototype exploring how Fabric and Forge/NeoForge environments can coexist through isolated runtime environments and cross-sandbox communication, without depending on Sinytra Connector.
 
-[中文文档](README.zh.md) · [Known Problems](problems.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-combiner/discussions)
+[中文文档](README.zh.md) · [Known Problems](problems.md) · [stuff later may face](solve.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-combiner/discussions) · [TODO](TODO.md)
 
 ---
 

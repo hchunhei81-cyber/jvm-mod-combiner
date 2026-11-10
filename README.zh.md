@@ -3,7 +3,7 @@
 
 > 一个使用 Rust 和 Java 开发的跨 Loader 互操作研究项目。目标是通过隔离的运行环境和跨沙盒通信，让 Fabric 与 Forge/NeoForge 能够协同运行，而不依赖 Sinytra Connector。
 
-[English README](README.md) · [技术问题清单](Problems.zh.md) · [将来的困难](solve.zh.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-combiner/discussions) · [要做的](TODO.zh.md.)
+[English README](README.md) · [项目进度时间线](docs/progress.html) · [技术问题清单](Problems.zh.md) · [将来的困难](solve.zh.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-combiner/discussions) · [待办路线图](TODO.zh.md)
 
 ---
 
@@ -98,7 +98,7 @@ Rust 负责：
 - [x] Rust 通过 `URLClassLoader` 动态加载外部 JAR。
 - [x] 两个独立 `URLClassLoader` 加载同名类，并产生不同的行为。
 - [x] Rust JNI 成功启动 Minecraft 1.21.4 + Fabric Loader，主菜单、纹理和音频系统正常初始化。
-- [x] Rust 通过独立 JVM 进程启动 Minecraft 1.21.1 + NeoForge 21.1.191。
+- [x] Rust 曾通过独立 JVM 进程成功启动 NeoForge 21.1.191 / Minecraft 1.21.1。当前启动器源码目标为 NeoForge 21.4.161 / Minecraft 1.21.4；新目标仍需单独验证。
 - [x] Rust 成功启动 Forge 1.21.4（54.1.22）并进入早期加载界面。
 - [x] 根据本地 Minecraft 安装信息动态组装依赖与 Classpath。
 - [x] 在当前测试配置下，通过 `fabric.gameJarPath` 让 Fabric 正确识别 Minecraft Game JAR。
@@ -112,15 +112,23 @@ Rust 负责：
 - [x] Fabric 玩家状态消息已经通过 Rust DataBus 发送到 NeoForge。
 - [x] NeoForge Java Agent 可以找到 `Minecraft` 单例、`ClientLevel` 和 `LocalPlayer`。
 - [x] 已经实现 NeoForge `RemotePlayer` 镜像注入的 PoC 路径。
+- [x] Fabric 心跳超时后的初始镜像移除已通过运行时验证。
+- [x] Fabric 重新进入世界后的初始镜像重建已通过运行时验证。
+- [x] Rust DataBus 源码会拒绝非 Fabric 注册客户端发布受保护的玩家和怪物状态消息。
 
 ### 正在开发
 
-- [ ] NeoForge 本地玩家状态发送器。
-- [ ] Fabric 接收端及远程玩家镜像实现。
-- [ ] 双向玩家状态同步。
+- [ ] 重新构建并打包仅接收端 Java Agent。
+- [ ] 运行时验证 Rust DataBus 的非 Fabric 状态消息拒绝逻辑及发送端连接保持。
+- [ ] 限制或认证客户端注册名；当前 DataBus 信任首条 `register` 消息中由客户端提供的名称。
 - [ ] 更完善的玩家身份和实体生命周期管理。
-- [ ] 不同 Minecraft 版本的反射与映射解析。
-- [ ] 网络延迟、断线和状态一致性处理。
+- [ ] 增加协议版本、模式校验、序列号和过期状态拒绝。
+- [ ] 验证断开、重连和世界切换恢复。
+- [ ] 改善高延迟和丢包条件下的同步。
+- [ ] 重新打包并运行时测试当前工作区中的敌对生物接收、镜像及 ACK/重试实现。
+- [ ] 实现可靠的敌对生物移除消息，并验证重连和世界切换恢复。
+
+**当前源码说明：** Java 源码位于 [`bus_test/`](bus_test/)。当前工作区已包含 Fabric 怪物采样、NeoForge 生成/更新镜像处理，以及基于序列号的 ACK/重试实现。这些 Java 修改尚未进入已提交的 `main` 历史，也未经过运行时验证；可靠的怪物移除尚未实现。
 
 ### 尚未实现
 
@@ -363,9 +371,17 @@ JVM Mod Combiner 探索不同的架构：
 - [x] Fabric → NeoForge 消息传递。
 - [x] NeoForge 玩家发现。
 - [x] NeoForge 远程玩家注入原型。
-- [ ] NeoForge 玩家状态发送器。
-- [ ] Fabric 接收端与镜像注入。
-- [ ] 双向状态同步。
+- [x] Rust 源码拒绝非 Fabric 注册客户端发布受保护的玩家和怪物状态消息。
+- [ ] 重新构建并打包仅接收端 Java Agent。
+- [ ] 运行时验证拒绝策略，并确认被拒绝的消息不会断开客户端。
+- [ ] 限制或认证由客户端自行声明的注册身份。
+- [ ] 验证 DataBus 断开和重连生命周期。
+- [ ] 改进实体身份、生命周期和过期状态处理。
+- [ ] 添加插值与同步质量控制。
+- [ ] 重新构建并运行时验证当前源码中的 NeoForge 怪物接收、镜像和 ACK/重试。
+- [ ] 实现并验证可靠的怪物移除事件。
+
+同步模型有意采用非对称设计：Fabric 发布权威玩家状态，NeoForge 接收状态并维护远程镜像。未来可以支持明确定义的反向请求、诊断和交互消息，但不得形成第二条权威 `player_move` 状态流。
 
 ### Phase 4 — Interoperability
 
@@ -408,4 +424,3 @@ JVM Mod Combiner 探索不同的架构：
 ## License
 
 BSD 3-Clause。详见 [LICENSE](LICENSE)。
-

@@ -4,7 +4,7 @@
 
 > A Rust-based microkernel prototype exploring how Fabric and Forge/NeoForge environments can coexist through isolated runtime environments and cross-sandbox communication, without depending on Sinytra Connector.
 
-[中文文档](README.zh.md) · [Known Problems](problems.md) · [stuff later may face](solve.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-combiner/discussions) · [TODO](TODO.md)
+[中文文档](README.zh.md) · [Progress timeline](docs/progress.html) · [Known Problems](problems.md) · [Future challenges](solve.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-combiner/discussions) · [TODO](TODO.md)
 
 ---
 
@@ -106,6 +106,7 @@ Tested primarily on macOS with Apple Silicon and Temurin JDK 21.
 - [x] NeoForge has a proof-of-concept `RemotePlayer` injection path for mirroring Fabric player state.
 - [x] Initial mirror removal after Fabric heartbeat timeout has been verified at runtime.
 - [x] Initial mirror recreation after Fabric re-enters a world has been verified at runtime.
+- [x] Rust DataBus source rejects non-Fabric registered clients publishing protected player and monster state messages.
 
 ### Currently in progress
 
@@ -116,7 +117,8 @@ Tested primarily on macOS with Apple Silicon and Temurin JDK 21.
 - [ ] Add protocol versioning, schema validation, sequence numbers, and stale-state rejection.
 - [ ] Verify disconnect, reconnect, and world-transition recovery.
 - [ ] Improve synchronization behavior under latency and packet loss.
-- [ ] Complete the hostile-mob synchronization path: receiver handling, removals, and runtime verification.
+- [ ] Rebuild and runtime-test the current working-tree hostile-mob receiver, mirror, and ACK/retry implementation.
+- [ ] Implement reliable hostile-mob removal messages and verify reconnect/world-transition recovery.
 
 **Current authority model:** Fabric is the sole authoritative source of player
 movement state. NeoForge receives Fabric state and maintains a remote-player
@@ -132,9 +134,10 @@ self-asserted by the connecting client, so the name is a routing identity, not
 an authenticated process identity. The listener binds to loopback.
 
 The Java sources currently live in [`bus_test/`](bus_test/), not a
-`bus-agent/` directory. `MonsterSync` samples hostile Fabric mobs and can send
-initial/change messages from that source. NeoForge-side monster receive,
-creation, removal, and end-to-end verification are not implemented.
+`bus-agent/` directory. Current working-tree Java sources include Fabric mob
+sampling, NeoForge spawn/update mirror handling, and sequence-based ACK/retry.
+These Java edits are not yet in the checked-in `main` history and are not
+runtime-verified. Reliable monster removal is not implemented.
 
 ### Not yet implemented
 
@@ -381,13 +384,14 @@ This project is research into those challenges, not a claim that they have alrea
 - [x] Initial mirror removal after Fabric heartbeat timeout.
 - [x] Initial mirror recreation after Fabric world reload.
 - [x] Rust-side source policy rejects player and monster state messages from non-Fabric registered clients.
+- [x] Current working-tree Java sources include a NeoForge hostile-mob mirror and sequence-based ACK/retry path; runtime verification is pending.
 - [ ] Rebuild and package the receiver-only Java Agent.
 - [ ] Verify policy rejection at runtime and confirm rejected messages do not disconnect clients.
 - [ ] Restrict or authenticate the client-supplied registration identity.
 - [ ] Verify DataBus disconnect and reconnect lifecycle behavior.
 - [ ] Improve entity identity, lifecycle, and stale-state handling.
 - [ ] Add interpolation and synchronization quality controls.
-- [ ] Complete and verify NeoForge hostile-mob receive/mirror handling and removal events.
+- [ ] Rebuild/runtime-test the current NeoForge hostile-mob receiver and ACK/retry path; implement reliable removal events.
 
 The synchronization model is intentionally asymmetric: Fabric generates
 authoritative player state, while NeoForge receives that state and maintains

@@ -1494,20 +1494,22 @@ Future reverse-direction messages may include explicitly defined interaction req
 
 The historical bidirectional design is retained for architectural context.
 
-## 8.6 Hostile-Mob Synchronization Is Source-Only
+## 8.6 Hostile-Mob Synchronization Is an Unverified Working-Tree Prototype
 
-<badge color="warning">Fabric sampling prototype; no end-to-end mirror</badge>
+<badge color="warning">Java source implementation added; build/runtime verification pending</badge>
 
-`bus_test/MonsterSync.java` runs from the Fabric monitor on the client thread. It samples visible, living hostile `Monster` entities at a maximum of 5 Hz, tracks them by UUID, and emits `monster_spawn` for newly observed mobs and `monster_update` when position, rotation, type, or health changes. The Rust DataBus permits those protected message types only from the registered `fabric` name.
+The current working-tree `bus_test/MonsterSync.java` runs from the Fabric monitor on the client thread. It samples visible, living hostile `Monster` entities at a maximum of 5 Hz, tracks them by UUID, and emits `monster_spawn` for newly observed mobs and `monster_update` when position, rotation, type, or health changes. Pending states carry sequence numbers, are retried with backoff, and are confirmed by a `monster_ack`. The Rust DataBus permits protected monster-state messages only from the registered `fabric` name.
 
-The current Java receive loop handles `player_move` only. It does not parse monster messages, create NeoForge entities, or publish `monster_remove`. Mobs missing from the Fabric render iteration are logged but deliberately not treated as removed, since absence from that iteration is not proof of despawn.
+The current working-tree `BusAgent.java` also parses `monster_spawn` and `monster_update` on NeoForge, creates or updates local entity mirrors, clears those mirrors when it observes a world change, and sends an ACK after applying a message. The Fabric side accepts those ACKs. This is an implementation in the uncommitted working tree, not proof that the packaged Agent or live clients run it successfully. The checked-in `main` history does not yet include these Java changes.
+
+No `monster_remove` message is published yet. Mobs missing from the Fabric render iteration are deliberately not treated as removed, since absence from that iteration is not proof of despawn. The current Java Agent JAR must be rebuilt from source, and end-to-end behavior—including retries, ACKs, world transitions, and reconnect recovery—still needs runtime testing.
 
 **Remaining work**
 
+- Rebuild/package the current Java Agent source and verify the packaged classes match it.
 - Define reliable despawn and world-change semantics.
 - Publish removal events without inferring despawn from render-list absence.
-- Add NeoForge parsing, entity creation/update, and cleanup.
-- Test ordering, reconnect snapshots, and end-to-end behavior before calling this synchronized.
+- Runtime-test entity creation/update, ACK/retry ordering, reconnect snapshots, and cleanup before calling this synchronized.
 
 # 9. ClassLoader Isolation and Mixin Compatibility
 
@@ -1790,8 +1792,9 @@ Validate the same launch pipeline on:
 | NeoForge player discovery | <badge color="success">Verified</badge> |
 | Fabric-to-NeoForge state transfer | <badge color="success">PoC verified</badge> |
 | NeoForge RemotePlayer injection | <badge color="success">PoC verified</badge> |
-| Fabric hostile-mob sampling and outbound spawn/update messages | <badge color="warning">Source prototype; end-to-end verification pending</badge> |
-| NeoForge hostile-mob receive/mirroring | <badge color="warning">Not implemented</badge> |
+| Fabric hostile-mob sampling, spawn/update, and ACK/retry | <badge color="warning">Implemented in current working-tree source; runtime verification pending</badge> |
+| NeoForge hostile-mob receive/mirroring | <badge color="warning">Implemented in current working-tree source; runtime verification pending</badge> |
+| Hostile-mob ACK/retry delivery | <badge color="warning">Implemented in current working-tree source; runtime verification pending</badge> |
 | Bidirectional player mirroring | <badge color="warning">Not a current goal</badge> |
 | Cross-version world consistency | <badge color="warning">Under investigation</badge> |
 | Same-JVM real-loader isolation | <badge color="warning">Not solved</badge> |
@@ -1824,9 +1827,9 @@ The following order minimizes the risk of expanding the architecture before the 
 ### Priority 2 — Complete the Hostile-Mob Synchronization Prototype
 
 - [x] Sample hostile Fabric mobs and emit initial/change messages from Java source.
+- [x] Add current working-tree NeoForge spawn/update receive, entity-mirror, world-change cleanup, and ACK/retry source.
 - [ ] Implement and test removal detection and `monster_remove` publication.
-- [ ] Implement NeoForge receive, entity lifecycle, and world cleanup.
-- [ ] Verify the end-to-end path before describing mob synchronization as a feature.
+- [ ] Rebuild/package the Java Agent and runtime-test the end-to-end path before describing mob synchronization as a feature.
 
 ### Priority 3 — Improve Entity Lifecycle Management
 
@@ -1870,7 +1873,7 @@ The intended implementation order is:
 3. Runtime-test protected-message rejection, no forwarding, and sender continuity.
 4. Verify Fabric-to-NeoForge player-state delivery with the packaged Agent.
 5. Test heartbeat timeout, mirror removal, reconnect, and fresh-state recovery.
-6. Complete NeoForge hostile-mob receive, removal, and world cleanup.
+6. Rebuild/runtime-test the NeoForge hostile-mob receiver and ACK/retry path; implement reliable removal.
 7. Improve entity lifecycle handling and failure recovery.
 8. Add protocol versioning, timestamps, sequence numbers, and session generations.
 9. Expand entity and gameplay synchronization features.
@@ -1878,11 +1881,11 @@ The intended implementation order is:
 
 ## Current Development Focus
 
-The current focus is validating the Rust source-level one-way state policy at runtime, constraining registration identity, and stabilizing the packaged Java Agent and player-mirror lifecycle.
+The current focus is validating the Rust source-level one-way state policy at runtime, constraining registration identity, and rebuilding/testing the working-tree Java Agent changes for player and hostile-mob mirror lifecycle.
 
 **Next milestone:**
 
-Rebuild/package the Java Agent and verify reliable Fabric-to-NeoForge synchronization while testing that unauthorized state messages are rejected without forwarding or disconnecting the sender.
+Rebuild/package the Java Agent and verify reliable Fabric-to-NeoForge player and hostile-mob synchronization while testing that unauthorized state messages are rejected without forwarding or disconnecting the sender.
 ---
 
 ## Final Note

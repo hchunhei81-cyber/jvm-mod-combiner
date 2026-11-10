@@ -6,7 +6,7 @@
 >
 > 部分问题已经解决，部分问题仅通过临时方案绕过，另一些问题仍在调查中。每个章节都会区分已验证的结果与尚未确认的解释。
 
-**项目状态：** 实验性原型。Fabric、Forge 和 NeoForge 的启动实验已取得重要进展，但尚未实现完整的跨 Loader 互操作。
+**项目状态：** 实验性原型。Fabric、Forge 和 NeoForge 的启动实验已取得重要进展，但尚未实现完整的跨 Loader 互操作。当前工作区的 Java Agent 还新增了敌对生物镜像和 ACK/重试源码；这些改动尚未打包并运行时验证，也尚未进入 `main` 分支历史。
 
 ---
 
@@ -1441,7 +1441,8 @@ Fabric Java Agent
 - NeoForge 预期作为仅接收端客户端运行。
 - 旧的 `sampleNeoForgePlayer()` 和 `sendNeoForgePlayer()` 方法仍保留在 Java 源码中，但除非其他代码路径调用，否则不会执行。
 - 修改过的 Java 源码尚未重新构建并打包到正式的 `bus-agent.jar` 中。
-- Rust DataBus 尚未强制执行单向发送方授权规则。
+- Rust DataBus 源码已按连接注册名拒绝非 Fabric 发布的 `player_move`、`monster_spawn`、`monster_update` 和 `monster_remove`，并返回 `state_authority_violation`；运行时仍待验证。
+- 注册名由连接客户端自行声明，不构成真实进程身份认证。
 
 ### 当前架构策略
 
@@ -1453,15 +1454,31 @@ NeoForge 接收 Fabric 的 `player_move` 消息并更新远程玩家镜像。Neo
 
 **剩余工作**
 
-- 重新构建并打包更新后的 Java Agent。
-- 验证 NeoForge 不再发布本地玩家移动状态。
-- 根据已注册的 TCP 连接身份，在 Rust 端添加授权控制。
-- 在路由前拒绝来自 NeoForge 的 `player_move` 消息。
-- 验证获准的反向消息类型仍受支持。
+- 重新构建并打包 Java Agent。
+- 运行时验证授权拒绝、不转发、连接保持以及正常 Fabric 状态传输。
+- 限制或认证客户端自报的注册名，并验证重连和镜像恢复。
 
 保留历史上的双向设计，是为了提供架构背景。
 
 ---
+
+## 8.6 敌对生物镜像：当前工作区实现待验证
+
+<badge color="warning">源码已实现部分链路 · 打包和运行时验证待完成</badge>
+
+当前工作区 `bus_test/MonsterSync.java` 在 Fabric 客户端线程按 UUID 采样可见且存活的敌对 `Monster`，并发送 `monster_spawn` 和变化后的 `monster_update`。待确认状态包含序列号，未收到 ACK 时会按退避间隔重试。
+
+当前工作区 `bus_test/BusAgent.java` 已增加 NeoForge 对 `monster_spawn` / `monster_update` 的解析、实体创建/更新、检测到世界变化时清理怪物镜像，以及应用状态后发送 `monster_ack`。Fabric Agent 接收 ACK 并确认对应序列。
+
+这部分是尚未提交到 `main` 的工作区源码，不代表打包 JAR 或真实客户端运行成功。`monster_remove` 仍未实现；生物不在采样/渲染列表中不能单独作为已移除的证据。
+
+**剩余工作**
+
+- 从当前 Java 源码重新构建 Agent，并确认 JAR 与源码一致。
+- 在 Fabric/NeoForge 客户端运行时验证怪物生成/更新、镜像应用、ACK/重试和世界切换清理。
+- 验证断开、重连和新状态恢复。
+- 定义可靠的生物移除语义并发布、应用 `monster_remove`。
+- 在完成端到端测试前，不要把怪物同步描述为已完成。
 
 # 9. ClassLoader 隔离和 Mixin 兼容性
 
@@ -1737,12 +1754,17 @@ Fabric 依赖解析器会读取 Minecraft 版本元数据并应用平台规则�
 | Rust TCP DataBus | <badge color="success">已验证</badge> |
 | DataBus 连接启动竞态 | <badge color="success">已解决</badge> |
 | 具名客户端注册和路由 | <badge color="success">已验证</badge> |
+| 源码级单向状态消息拒绝 | <badge color="warning">已实现；运行时验证待完成</badge> |
+| DataBus 注册身份认证 | <badge color="warning">未实现；注册名由客户端自报</badge> |
 | Java Agent 注入 | <badge color="success">已验证</badge> |
 | Fabric 玩家发现 | <badge color="success">已验证</badge> |
 | NeoForge 玩家发现 | <badge color="success">已验证</badge> |
 | Fabric 到 NeoForge 的状态传输 | <badge color="success">概念验证已通过</badge> |
 | NeoForge RemotePlayer 注入 | <badge color="success">概念验证已通过</badge> |
-| NeoForge 到 Fabric 的状态传输 | <badge color="warning">进行中</badge> |
+| NeoForge 到 Fabric 的权威玩家状态传输 | <badge color="warning">不属于当前架构目标</badge> |
+| Fabric 敌对生物采样及生成/更新 | <badge color="warning">当前工作区源码已实现；端到端验证待完成</badge> |
+| NeoForge 怪物镜像及 ACK/重试 | <badge color="warning">当前工作区源码已实现；运行时验证待完成</badge> |
+| 怪物移除事件 | <badge color="warning">尚未实现</badge> |
 | 双向玩家镜像 | <badge color="warning">尚未完成</badge> |
 | 跨版本世界一致性 | <badge color="warning">调查中</badge> |
 | 同一 JVM 中的真实 Loader 隔离 | <badge color="warning">尚未解决</badge> |
@@ -1763,12 +1785,12 @@ Fabric 依赖解析器会读取 Minecraft 版本元数据并应用平台规则�
 
 - [x] 将 Fabric 确立为唯一权威玩家状态来源。
 - [x] 从已编辑的监视器源码中移除活动的 NeoForge 玩家状态采样调用。
+- [x] 在 Rust DataBus 源码中拒绝非 Fabric 的玩家/怪物状态消息，且不转发被拒绝消息。
 - [ ] 重新构建并打包更新后的 Java Agent。
-- [ ] 在 Rust DataBus 中使用已注册连接的身份强制执行发送方授权。
-- [ ] 拒绝来自已注册 NeoForge 连接的 `player_move` 消息。
+- [ ] 限制或认证由客户端自行声明的 DataBus 注册名。
+- [ ] 运行时验证未经授权消息拒绝、不转发及发送端连接保持。
 - [ ] 保留明确授权的反向消息类型。
 - [ ] 验证 Fabric 到 NeoForge 的玩家状态传递。
-- [ ] 验证被拒绝的 NeoForge `player_move` 消息不会断开客户端。
 - [ ] 测试重新连接行为和新状态传输。
 - [ ] 添加协议版本控制、序列号、时间戳和会话代次。
 - [ ] 拒绝过时或不属于当前会话的玩家状态更新。
@@ -1781,7 +1803,17 @@ Fabric 依赖解析器会读取 Minecraft 版本元数据并应用平台规则�
 - [ ] 维度切换处理。
 - [ ] 断开连接时的清理。
 
-### 优先级 3 — 提高同步质量
+### 优先级 3 — 完成敌对生物同步原型
+
+- [x] Fabric 按 UUID 采样敌对生物，并从当前 Java 源码发送生成/更新消息。
+- [x] 当前工作区 Java 源码加入 NeoForge 生成/更新接收、实体镜像和 ACK/重试。
+- [ ] 重新构建并打包 Agent，运行时验证完整的生成/更新和 ACK/重试链路。
+- [ ] 实现并验证可靠的 `monster_remove` 发布和接收。
+- [ ] 测试世界切换、断开和重连恢复。
+
+当前 Java 改动尚未进入 `main` 历史；怪物同步尚未完成端到端验证。
+
+### 优先级 4 — 提高同步质量
 
 - [ ] 带时间戳的消息。
 - [ ] 序列号。
@@ -1790,7 +1822,7 @@ Fabric 依赖解析器会读取 Minecraft 版本元数据并应用平台规则�
 - [ ] 网络延迟测量。
 - [ ] 不依赖 Tick 速率。
 
-### 优先级 4 — 扩大跨版本兼容性
+### 优先级 5 — 扩大跨版本兼容性
 
 - [ ] 动态验证方法映射。
 - [ ] 测试双方使用相同 Minecraft 版本的情况。
@@ -1798,7 +1830,7 @@ Fabric 依赖解析器会读取 Minecraft 版本元数据并应用平台规则�
 - [ ] 比较维度和区块状态。
 - [ ] 测试多个 Loader 版本。
 
-### 优先级 5 — 回归原始微内核架构
+### 优先级 6 — 回归原始微内核架构
 
 - [ ] 开发受控的 ClassLoader 委派模型。
 - [ ] 研究在同一 JVM 内隔离真实 Loader。
@@ -1810,24 +1842,23 @@ Fabric 依赖解析器会读取 Minecraft 版本元数据并应用平台规则�
 
 计划的实现顺序如下：
 
-1. 重新构建并打包仅接收端 Java Agent。
-2. 在 Rust DataBus 中实现发送方授权。
-3. 验证 Fabric 到 NeoForge 的玩家状态传递。
-4. 验证 NeoForge 的 `player_move` 消息会被拒绝，同时明确允许的反向消息仍可使用。
-5. 验证被拒绝的消息不会导致 NeoForge 客户端断开。
-6. 测试心跳超时、镜像移除和镜像重建。
-7. 改进实体生命周期处理和故障恢复。
-8. 添加协议版本控制、时间戳、序列号和会话代次。
-9. 扩展实体与游戏玩法同步功能。
-10. 继续重构启动器并测试跨版本兼容性。
+1. 重新构建并打包当前 Java Agent 源码。
+2. 限制自报的 DataBus 注册名，运行时验证状态消息拒绝、不转发和连接保持。
+3. 使用打包后的 Agent 验证 Fabric 到 NeoForge 的玩家状态传递和重连恢复。
+4. 运行时验证当前工作区的怪物镜像及 ACK/重试链路。
+5. 实现并测试可靠的 `monster_remove` 事件。
+6. 改进实体生命周期处理和故障恢复。
+7. 添加协议版本控制、时间戳、序列号和会话代次。
+8. 扩展实体与游戏玩法同步功能。
+9. 继续重构启动器并测试跨版本兼容性。
 
 ## 当前开发重点
 
-当前重点是强制并稳定单向玩家状态权威架构。
+当前重点是运行时验证单向玩家状态权威策略，并重新打包/测试当前工作区的怪物镜像和 ACK/重试实现。
 
 **下一个里程碑：**
 
-完成仅接收端 Java Agent 的重新构建，在 Rust DataBus 中强制执行发送方授权，并验证可靠的 Fabric 到 NeoForge 同步，同时正确拒绝未经授权的反向玩家状态消息。
+重新构建 Java Agent；验证 Rust DataBus 状态消息拒绝、不转发和连接保持；运行时测试玩家与怪物消息传输、ACK/重试、重连恢复，并实现可靠的怪物移除事件。
 
 ---
 

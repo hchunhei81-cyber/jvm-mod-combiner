@@ -110,16 +110,18 @@ The current check uses the name attached to the TCP connection during registrati
 
 ### 8. Hostile-Mob Synchronization Prototype
 
-The Java source in `bus_test/MonsterSync.java` samples visible/alive hostile `Monster` entities on the Fabric client thread at a maximum of 5 Hz. It tracks mobs by UUID and emits `monster_spawn` for first observations and `monster_update` when sampled state changes. The DataBus source currently authorizes these message types from Fabric only.
+The current `bus_test/` working-tree source samples visible/alive hostile `Monster` entities on the Fabric client thread at a maximum of 5 Hz. It tracks mobs by UUID and emits `monster_spawn` for first observations and `monster_update` when sampled state changes. The Rust DataBus source authorizes these message types from Fabric only. The current Java source also has a NeoForge `monster_spawn`/`monster_update` receiver, mirror creation/update, world-change cleanup, and a sequence-based ACK/retry path. These Java changes are not yet runtime-verified and are not part of the checked-in `main` history.
 
 - [x] Discover and sample hostile Fabric mobs by UUID.
 - [x] Capture registry type, position, rotation, health, and max health.
 - [x] Emit Fabric-side spawn and changed-state JSON messages.
+- [x] Add current working-tree source for NeoForge spawn/update handling and monster mirrors.
+- [x] Add current working-tree source for ACK-based monster state confirmation and retry.
 - [ ] Add reliable mob removal detection and `monster_remove` publication.
-- [ ] Add NeoForge message parsing, entity creation/update, and cleanup.
-- [ ] Verify end-to-end behavior, world transitions, and reconnect recovery.
+- [ ] Rebuild and package the current Java Agent source.
+- [ ] Runtime-test the end-to-end path, ACK/retry behavior, world transitions, and reconnect recovery.
 
-The current source does not constitute end-to-end monster synchronization. Mobs absent from the render iteration are deliberately not treated as removed, and the current NeoForge BusAgent receive loop handles `player_move` only.
+The working-tree source is an end-to-end implementation draft, not a verified feature. Mobs absent from the render iteration are deliberately not treated as removed, and no `monster_remove` message is published yet.
 
 ### 9. Refactor the Rust Launcher
 
@@ -262,7 +264,7 @@ The intended implementation order is:
 4. Verify Fabric-to-NeoForge player-state delivery with the packaged Agent.
 5. Test heartbeat timeout, mirror removal, reconnect, and fresh-state recovery.
 6. Stabilize entity identity, lifecycle management, and failure recovery.
-7. Complete the NeoForge hostile-mob receiver and removal flow.
+7. Rebuild/runtime-test the NeoForge hostile-mob receiver and implement reliable removal.
 8. Add protocol versioning, timestamps, sequence numbers, and session generations.
 9. Expand synchronization to additional entities and basic gameplay state.
 10. Refactor dependency resolution and NeoForge launch orchestration.
@@ -293,8 +295,8 @@ Rust launcher, Fabric and NeoForge startup, Java Agent injection, TCP DataBus, a
 
 <badge color="warning">Next milestone</badge>
 
-Rebuild/package the Java Agent, constrain the self-asserted DataBus registration identity, and runtime-test one-way sender authorization and reliable Fabric-to-NeoForge player-state synchronization.
+Rebuild/package the current Java Agent sources, constrain the self-asserted DataBus registration identity, and runtime-test one-way sender authorization plus the new hostile-mob mirror/ACK path.
 
-The next milestone also includes testing unauthorized reverse `player_move` rejection, reconnect behavior, and RemotePlayer lifecycle recovery. The DataBus policy exists in source, but it is not a substitute for authenticating local clients or for runtime verification.
+The next milestone also includes testing unauthorized reverse `player_move` rejection, reconnect behavior, and RemotePlayer lifecycle recovery. The DataBus policy exists in Rust source, but it is not a substitute for authenticating local clients or for runtime verification. The current Java Agent additions are working-tree changes; they are not yet recorded in `main`.
 
 > The immediate objective is not to make every Fabric mod work with every NeoForge mod. It is to build a reliable, measurable foundation on which broader interoperability can be developed.

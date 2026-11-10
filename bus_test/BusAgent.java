@@ -64,15 +64,51 @@ public class BusAgent {
 
     public static void premain(String agentArgs, Instrumentation instrumentation) {
         inst = instrumentation;
-        myName = agentArgs != null ? agentArgs.toLowerCase().replace("-sandbox", "") : "unknown";
-        System.out.println("[BusAgent:" + myName + "] premain");
 
-        Thread t = new Thread(BusAgent::runBus);
-        t.setDaemon(true);
-        t.start();
+        String loaderProperty = System.getProperty("jvmcombiner.loader");
+        myName = LoaderDetector.resolve(loaderProperty, agentArgs);
+
+        System.out.println(
+            "[BusAgent:" + myName + "] premain" +
+            " | property=" + loaderProperty +
+            " | agentArgs=" + agentArgs
+        );
+
+        if (myName.equals("unknown")) {
+            System.err.println(
+                "[BusAgent][ERROR] Unknown Loader identity; " +
+                "DataBus and Loader monitors will not start."
+            );
+            return;
+        }
+
+        if (loaderProperty != null && !loaderProperty.isBlank()) {
+            String legacyName = LoaderDetector.normalize(agentArgs);
+            String propertyName = LoaderDetector.normalize(loaderProperty);
+
+            if (!legacyName.equals("unknown") &&
+                !legacyName.equals(propertyName)) {
+                System.err.println(
+                    "[BusAgent][WARN] Loader identity mismatch: " +
+                    "property=" + propertyName +
+                    ", agentArgs=" + legacyName +
+                    ". System property takes precedence."
+                );
+            }
+        }
+
+        Thread busThread = new Thread(
+            BusAgent::runBus,
+            "BusAgent-DataBus"
+        );
+        busThread.setDaemon(true);
+        busThread.start();
 
         if (myName.equals("fabric")) {
-            Thread monitor = new Thread(BusAgent::monitorFabricPlayer);
+            Thread monitor = new Thread(
+                BusAgent::monitorFabricPlayer,
+                "BusAgent-Fabric-Monitor"
+            );
             monitor.setDaemon(true);
             monitor.start();
         } else if (myName.equals("neoforge")) {
@@ -82,11 +118,20 @@ public class BusAgent {
             );
             monitor.setDaemon(true);
             monitor.start();
+        } else if (myName.equals("forge")) {
+            System.out.println(
+                "[BusAgent:forge] Registration-only mode; " +
+                "no Forge player adapter is active."
+            );
         }
     }
 
     static void runBus() {
-        String peer = myName.equals("fabric") ? "neoforge" : "fabric";
+        String peer = switch (myName) {
+            case "fabric" -> "neoforge";
+            case "neoforge" -> "fabric";
+            default -> "";
+        };
 
         while (!Thread.currentThread().isInterrupted()) {
             try (Socket socket = new Socket()) {
@@ -155,7 +200,7 @@ public class BusAgent {
 
                         String source = matcher.group(1);
 
-                        if (!peer.equals(source)) {
+                        if (peer.isEmpty() || !peer.equals(source)) {
                             continue;
                         }
 

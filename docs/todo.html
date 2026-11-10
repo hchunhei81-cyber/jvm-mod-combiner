@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#090d14" />
+    <meta
+      name="description"
+      content="JVM Mod Combiner development progress and upcoming engineering milestones."
+    />
+    <title>Development TODO — JVM Mod Combiner</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body data-page="todo">
+    <a class="skip-link" href="#main-content" data-i18n="skip">Skip to main content</a>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <div class="grid-bg"></div>
+
+    <header class="nav" id="pageNav">
+      <a class="brand" href="index.html">
+        <span class="brand-mark">&lt;/&gt;</span>
+        <span>JVM <b>Mod</b> Combiner</span>
+      </a>
+      <nav class="nav-links" aria-label="Documentation" data-i18n-aria="docs">
+        <a href="index.html" data-i18n="overview">Overview</a>
+        <a href="problems.html" data-i18n="problems">Problems &amp; solutions</a>
+        <a href="todo.html" aria-current="page" data-i18n="todo">TODO</a>
+        <a
+          href="https://github.com/hchunhei81-cyber/jvm-mod-combiner"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-i18n="github">GitHub ↗</a
+        >
+      </nav>
+      <div class="nav-tools">
+        <select id="pageLanguage" aria-label="Language" data-i18n-aria="languageLabel">
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
+        <button class="icon-button" id="pageTheme" type="button" aria-label="Toggle theme" data-i18n-aria="themeLabel">LIGHT</button>
+        <button class="menu-toggle" id="pageMenu" type="button" aria-label="Open menu" aria-expanded="false" data-i18n-aria="menuLabel">
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+    </header>
+
+    <main id="main-content">
+      <section class="section doc-page">
+        <div class="section-heading">
+          <p class="overline" data-i18n="eyebrow">DEVELOPMENT TRACKER</p>
+          <h1 data-i18n="pageTitle">Progress &amp; TODO</h1>
+          <p data-i18n="pageIntro">
+            Completed work and the next implementation steps, summarized from
+            the project roadmap.
+          </p>
+        </div>
+
+        <div class="doc-callout">
+          <strong data-i18n="statusLabel">Current status:</strong> <span data-i18n="statusText">The startup, Agent, DataBus, and
+          initial player-mirror foundation is verified as a prototype. The Rust
+          source already rejects protected player/monster state messages from
+          non-Fabric registrations. Next: package the Java Agent and runtime-test
+          the rejection path, registration identity, and reconnect behavior.</span>
+        </div>
+
+        <section class="doc-group" aria-labelledby="done-title">
+          <span class="doc-status done" data-i18n="doneStatus">Completed / verified</span>
+          <h3 id="done-title" data-i18n="doneTitle">Prototype foundation</h3>
+          <p data-i18n="doneIntro">Verified achievements recorded in the project roadmap.</p>
+          <ul class="doc-checks">
+            <li><input type="checkbox" checked disabled /><span data-i18n="done1">Rust/JNI launch and Java invocation</span></li>
+            <li><input type="checkbox" checked disabled /><span data-i18n="done2">Fabric 1.21.4 and NeoForge 1.21.1 tested in isolated JVMs</span></li>
+            <li><input type="checkbox" checked disabled /><span data-i18n="done3">Forge 1.21.4 experimental early-loading startup</span></li>
+            <li><input type="checkbox" checked disabled /><span data-i18n="done4">Java Agent initialization and runtime class observation</span></li>
+            <li><input type="checkbox" checked disabled /><span data-i18n="done5">TCP DataBus registration and JSON routing</span></li>
+            <li><input type="checkbox" checked disabled /><span data-i18n="done6">Fabric player-state publishing and NeoForge RemotePlayer mirror proof of concept</span></li>
+            <li><input type="checkbox" checked disabled /><span data-i18n="done7">Initial timeout cleanup and mirror recreation runtime verification</span></li>
+          </ul>
+        </section>
+
+        <section class="doc-group" aria-labelledby="next-title">
+          <span class="doc-status open" data-i18n="authorityStatus">Implemented in source · verify</span>
+          <h3 id="next-title" data-i18n="authorityTitle">Validate one-way state authority</h3>
+          <p data-i18n="authorityIntro">
+            Fabric remains the sole authoritative publisher for player and
+            monster state. The DataBus checks the name attached during client
+            registration, rejects protected types from other names, and keeps
+            the connection open. Registration names are currently self-asserted,
+            not authenticated.
+          </p>
+          <ul class="doc-checks">
+            <li><input type="checkbox" checked disabled /><span data-i18n="authority1">Rust source rejects non-Fabric player_move and monster-state messages</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="authority2">Validate allowed registration names and address client impersonation</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="authority3">Rebuild/package Java Agent sources from bus_test/</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="authority4">Runtime-test rejection, no forwarding, and sender connection continuity</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="authority5">Verify Fabric delivery using the packaged Agent</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="authority6">Test reconnect and fresh authoritative state transmission</span></li>
+          </ul>
+        </section>
+
+        <section class="doc-group" aria-labelledby="mob-title">
+          <span class="doc-status open" data-i18n="mobStatus">Early source prototype</span>
+          <h3 id="mob-title" data-i18n="mobTitle">Complete hostile-mob synchronization</h3>
+          <p data-i18n="mobIntro">
+            <code>bus_test/MonsterSync.java</code> samples hostile Fabric mobs
+            on the game thread at up to 5 Hz and emits initial/change messages.
+            No NeoForge monster receiver is currently implemented.
+          </p>
+          <ul class="doc-checks">
+            <li><input type="checkbox" checked disabled /><span data-i18n="mob1">Fabric-side mob discovery and state sampling by UUID</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="mob2">Detect and publish mob removals</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="mob3">Parse and apply monster messages in NeoForge</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="mob4">Test mirror lifecycle, world transitions, and reconnects</span></li>
+          </ul>
+        </section>
+
+        <section class="doc-group" aria-labelledby="later-title">
+          <span class="doc-status" data-i18n="laterStatus">Following priorities</span>
+          <h3 id="later-title" data-i18n="laterTitle">Stabilize, then expand</h3>
+          <ul class="doc-checks">
+            <li><input type="checkbox" disabled /><span data-i18n="later1">Stable remote-player identity, collision-safe IDs, and duplicate prevention</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="later2">World/dimension changes, disconnect cleanup, and mirror recovery</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="later3">Versioned protocol, message validation, sequence numbers, and stale-state rejection</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="later4">Heartbeat, reconnect resynchronization, rate limits, and message-size limits</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="later5">Refactor launcher dependency resolution and child-process management</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="later6">Expand beyond player coordinates through incremental entity/state adapters</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="later7">Investigate Mixin compatibility, cross-platform support, and advanced mod integrations</span></li>
+          </ul>
+        </section>
+
+        <div class="doc-callout">
+          <strong data-i18n="scopeLabel">Scope guard:</strong> <span data-i18n="scopeText">A successful loader launch or visual
+          entity mirror does not mean arbitrary mods, inventories, combat,
+          worlds, or game logic are synchronized.</span>
+        </div>
+
+        <div class="doc-sources">
+          <a href="../TODO.md" data-i18n="roadmapLink">Full development roadmap (TODO.md)</a>
+          <a href="../src/main.rs" data-i18n="rustLink">Rust DataBus source</a>
+          <a href="../bus_test/BusAgent.java" data-i18n="agentLink">Java Agent source</a>
+          <a href="../bus_test/MonsterSync.java" data-i18n="mobLink">MonsterSync source</a>
+          <a href="problems.html" data-i18n="problemsLink">Problems &amp; solutions →</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <a class="brand" href="index.html">
+        <span class="brand-mark">&lt;/&gt;</span>
+        <span>JVM <b>Mod</b> Combiner</span>
+      </a>
+      <p data-i18n="footerText">Experimental research project · Rust × JVM · Minecraft 1.21.4</p>
+      <a href="problems.html" data-i18n="footerLink">Problems &amp; solutions →</a>
+    </footer>
+    <script src="pages.js"></script>
+  </body>
+</html>

@@ -90,7 +90,7 @@ Tested primarily on macOS with Apple Silicon and Temurin JDK 21.
 - [x] Rust dynamically loads external JAR files through `URLClassLoader`.
 - [x] Two isolated `URLClassLoader` instances can load the same class name and produce different behavior.
 - [x] Rust JNI successfully launches Minecraft 1.21.4 with Fabric Loader. The main menu renders, textures load, and the sound engine initializes.
-- [x] Rust successfully launches NeoForge 21.1.191 with Minecraft 1.21.1 through a separate JVM process.
+- [x] A previous NeoForge 21.1.191 / Minecraft 1.21.1 configuration was successfully launched through a separate JVM process. The current launcher source targets NeoForge 21.4.161 / Minecraft 1.21.4; verify that newer target separately.
 - [x] Rust successfully launches Forge 1.21.4 (54.1.22) to its early loading screen.
 - [x] Minecraft libraries and classpaths can be assembled dynamically from local installation metadata and library files.
 - [x] Fabric recognizes the Minecraft game JAR through `fabric.gameJarPath` with the tested classpath configuration.
@@ -110,17 +110,31 @@ Tested primarily on macOS with Apple Silicon and Temurin JDK 21.
 ### Currently in progress
 
 - [ ] Rebuild and package the Java Agent with the receiver-only NeoForge behavior.
-- [ ] Enforce the one-way player-state authority policy in the Rust DataBus.
-- [ ] Reject NeoForge-originated authoritative `player_move` messages.
+- [ ] Runtime-test the Rust DataBus rejection of non-Fabric authoritative state messages and confirm the sender remains connected.
+- [ ] Restrict or authenticate client registration names; the current local DataBus trusts the name supplied in the first `register` message.
 - [ ] Improve remote-player identity and entity lifecycle management.
-- [ ] Add protocol validation, sequence numbers, and stale-state rejection.
+- [ ] Add protocol versioning, schema validation, sequence numbers, and stale-state rejection.
 - [ ] Verify disconnect, reconnect, and world-transition recovery.
 - [ ] Improve synchronization behavior under latency and packet loss.
+- [ ] Complete the hostile-mob synchronization path: receiver handling, removals, and runtime verification.
 
 **Current authority model:** Fabric is the sole authoritative source of player
 movement state. NeoForge receives Fabric state and maintains a remote-player
 mirror. Reverse-direction requests or diagnostics may be supported in the
 future, but NeoForge must not publish authoritative `player_move` state.
+
+The Rust DataBus source enforces this policy for `player_move`,
+`monster_spawn`, `monster_update`, and `monster_remove`: non-Fabric registered
+clients receive a `state_authority_violation` response, and the message is not
+routed. This is source-level behavior; runtime rejection and connection
+continuity still need explicit verification. Registration is currently
+self-asserted by the connecting client, so the name is a routing identity, not
+an authenticated process identity. The listener binds to loopback.
+
+The Java sources currently live in [`bus_test/`](bus_test/), not a
+`bus-agent/` directory. `MonsterSync` samples hostile Fabric mobs and can send
+initial/change messages from that source. NeoForge-side monster receive,
+creation, removal, and end-to-end verification are not implemented.
 
 ### Not yet implemented
 
@@ -213,7 +227,7 @@ Rust successfully launches Forge 1.21.4 (54.1.22) to the early loading screen.
 
 ### Requirements
 
-- Rust stable toolchain (1.75+).
+- Rust stable toolchain (1.85+; the project uses Rust edition 2024).
 - JDK 21 recommended.
 - A local Minecraft installation for the loader versions being tested.
 - macOS, Windows, or Linux may be used, but the current verification coverage is primarily macOS.
@@ -366,12 +380,14 @@ This project is research into those challenges, not a claim that they have alrea
 - [x] Initial Fabric-to-NeoForge position and rotation updates.
 - [x] Initial mirror removal after Fabric heartbeat timeout.
 - [x] Initial mirror recreation after Fabric world reload.
+- [x] Rust-side source policy rejects player and monster state messages from non-Fabric registered clients.
 - [ ] Rebuild and package the receiver-only Java Agent.
-- [ ] Enforce one-way player-state authority in the Rust DataBus.
-- [ ] Reject NeoForge-originated authoritative `player_move` messages.
+- [ ] Verify policy rejection at runtime and confirm rejected messages do not disconnect clients.
+- [ ] Restrict or authenticate the client-supplied registration identity.
 - [ ] Verify DataBus disconnect and reconnect lifecycle behavior.
 - [ ] Improve entity identity, lifecycle, and stale-state handling.
 - [ ] Add interpolation and synchronization quality controls.
+- [ ] Complete and verify NeoForge hostile-mob receive/mirror handling and removal events.
 
 The synchronization model is intentionally asymmetric: Fabric generates
 authoritative player state, while NeoForge receives that state and maintains
@@ -419,4 +435,3 @@ Reports from Windows and Linux users are especially useful for future cross-plat
 ## License
 
 BSD 3-Clause. See [LICENSE](LICENSE).
-

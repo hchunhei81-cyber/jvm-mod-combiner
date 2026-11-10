@@ -21,6 +21,7 @@
   - Bypassed official launcher restrictions and resolved the major BootstrapLauncher initialization issues.
   - Main menu rendered successfully.
   - Verified that installed mods can be detected.
+  - This is the documented verification result; the current Rust launcher source is configured for NeoForge 21.4.161 / Minecraft 1.21.4 and needs separate verification.
 
 - [x] **Forge 1.21.4 Experimental Boot**
   - Successfully reached the Forge early loading screen during experiments.
@@ -48,9 +49,14 @@
 - [x] Bind the listener synchronously before starting the accept thread.
 - [x] Register clients using sandbox identities (`fabric` and `neoforge`).
 - [x] Route JSON messages according to their destination.
+- [x] Require registration as the first message on each connection.
+- [x] Attach the registered connection name as the routed `from` value instead of trusting a payload field.
+- [x] Reject non-Fabric `player_move`, `monster_spawn`, `monster_update`, and `monster_remove` messages without routing them.
 - [x] Verify Fabric ↔ NeoForge message routing with `hello` / `ack` messages.
 - [x] Support independently launched sandboxes without starting duplicate DataBus listeners.
 - [x] Verify that both Java Agents can connect to the Rust DataBus.
+
+**Security boundary:** The DataBus binds to `127.0.0.1`, but a connecting local client currently chooses its own registration name. The name is tied to that TCP connection after registration, but it is not authenticated as a trusted process identity. Add registration validation/authentication before treating this policy as a security boundary.
 
 ### 5. Cross-Sandbox Player State Synchronization
 
@@ -77,17 +83,19 @@ Fabric is the sole authoritative player-state publisher. NeoForge operates as a 
 **Goal:** Enforce Fabric as the sole authoritative player-state publisher and keep NeoForge receiver-only.
 
 - [x] Establish Fabric as the sole authoritative player-state source.
-- [x] Remove the active `sampleNeoForgePlayer(player)` call from the edited NeoForge monitor source.
+- [x] Keep NeoForge's current monitor receive-only for `player_move`.
+- [x] Enforce a Rust-side source policy for player and monster state message types.
+- [x] Return `state_authority_violation` to a non-Fabric sender without closing its connection.
 - [ ] Rebuild and package the updated Java Agent.
-- [ ] Enforce sender authorization in the Rust DataBus using registered TCP connection identity.
-- [ ] Reject `player_move` messages originating from the registered NeoForge connection.
-- [ ] Preserve explicitly authorized reverse-direction message types, such as interaction requests and diagnostics.
-- [ ] Verify Fabric-to-NeoForge player-state delivery using the rebuilt Agent.
-- [ ] Verify that rejected NeoForge `player_move` messages do not disconnect the client.
+- [ ] Add an allowlist for valid registration names and authenticate or otherwise constrain them.
+- [ ] Runtime-test rejection of NeoForge `player_move` and other protected state types.
+- [ ] Verify rejected messages do not disconnect the sender and do not reach any recipient.
+- [ ] Verify normal Fabric-to-NeoForge player-state delivery with the packaged Agent.
 - [ ] Test reconnection and fresh player-state transmission.
 - [ ] Add protocol versioning, timestamps, sequence numbers, and session generations.
 - [ ] Reject stale or out-of-session player-state updates.
-- [ ] Verify that unauthorized messages cannot bypass the sender authorization policy.
+
+The current check uses the name attached to the TCP connection during registration. Registration itself is not authenticated; any local client that can connect can currently claim a name. Do not describe this as strong process authentication.
 
 ### 7. Stabilize Remote Player Mirroring
 
@@ -100,7 +108,20 @@ Fabric is the sole authoritative player-state publisher. NeoForge operates as a 
 - [ ] Handle missing chunks and unloaded entity regions.
 - [ ] Verify entity lifecycle behavior during world reloads.
 
-### 8. Refactor the Rust Launcher
+### 8. Hostile-Mob Synchronization Prototype
+
+The Java source in `bus_test/MonsterSync.java` samples visible/alive hostile `Monster` entities on the Fabric client thread at a maximum of 5 Hz. It tracks mobs by UUID and emits `monster_spawn` for first observations and `monster_update` when sampled state changes. The DataBus source currently authorizes these message types from Fabric only.
+
+- [x] Discover and sample hostile Fabric mobs by UUID.
+- [x] Capture registry type, position, rotation, health, and max health.
+- [x] Emit Fabric-side spawn and changed-state JSON messages.
+- [ ] Add reliable mob removal detection and `monster_remove` publication.
+- [ ] Add NeoForge message parsing, entity creation/update, and cleanup.
+- [ ] Verify end-to-end behavior, world transitions, and reconnect recovery.
+
+The current source does not constitute end-to-end monster synchronization. Mobs absent from the render iteration are deliberately not treated as removed, and the current NeoForge BusAgent receive loop handles `player_move` only.
+
+### 9. Refactor the Rust Launcher
 
 - [ ] Rewrite remaining Python-based launcher operations in Rust.
   - Version metadata parsing.
@@ -132,7 +153,7 @@ Fabric is the sole authoritative player-state publisher. NeoForge operates as a 
 
 ## 🔵 Medium Priority
 
-### 9. DataBus Protocol Evolution
+### 10. DataBus Protocol Evolution
 
 The TCP DataBus is already implemented. The next step is to evolve it from a basic JSON router into a reliable synchronization transport.
 
@@ -146,7 +167,7 @@ The TCP DataBus is already implemented. The next step is to evolve it from a bas
 - [ ] Add heartbeat timeout detection.
 - [ ] Add structured diagnostics and traffic statistics.
 
-### 10. Synchronize More Than Player Coordinates
+### 11. Synchronize More Than Player Coordinates
 
 **Goal:** Move from player mirroring toward shared gameplay state.
 
@@ -161,7 +182,7 @@ The TCP DataBus is already implemented. The next step is to evolve it from a bas
 
 **Important:** These features must be introduced incrementally. Synchronizing an entity's visual state does not automatically synchronize its AI, physics, inventory, or mod-specific behavior.
 
-### 11. Mixin and Runtime Compatibility
+### 12. Mixin and Runtime Compatibility
 
 - [ ] Investigate conflicts caused by different Mixin environments.
 - [ ] Establish clear ownership of classes modified by multiple loaders.
@@ -172,7 +193,7 @@ The TCP DataBus is already implemented. The next step is to evolve it from a bas
 
 **Design constraint:** Do not assume that two independently transformed versions of the same Minecraft class can be safely merged. Transformation order, injection points, target method signatures, and loader lifecycle must be considered.
 
-### 12. Dependency Resolution
+### 13. Dependency Resolution
 
 - [ ] Implement a complete Minecraft version manifest parser.
 - [ ] Resolve dependencies from the version JSON instead of copying the entire `libraries/` directory.
@@ -186,7 +207,7 @@ The TCP DataBus is already implemented. The next step is to evolve it from a bas
 
 ## 🟣 Low Priority / Long-Term Research
 
-### 13. Cross-Platform Support
+### 14. Cross-Platform Support
 
 - [ ] **macOS**
   - Continue validating Apple Silicon.
@@ -205,7 +226,7 @@ The TCP DataBus is already implemented. The next step is to evolve it from a bas
 
 - [ ] Standardize path handling and JVM argument generation across platforms.
 
-### 14. Rendering and Window Integration
+### 15. Rendering and Window Integration
 
 - [ ] Investigate whether two Minecraft windows can be managed as one user-facing experience.
 - [ ] Research native window embedding and overlay approaches.
@@ -214,7 +235,7 @@ The TCP DataBus is already implemented. The next step is to evolve it from a bas
 
 **Priority:** Reliable gameplay synchronization comes before cross-process GPU sharing.
 
-### 15. Advanced Mod Compatibility
+### 16. Advanced Mod Compatibility
 
 - [ ] Investigate Fabric API and NeoForge API interoperability.
 - [ ] Design a cross-loader capability abstraction.
@@ -223,7 +244,7 @@ The TCP DataBus is already implemented. The next step is to evolve it from a bas
 - [ ] Explore GUI request forwarding for remote sandbox objects.
 - [ ] Evaluate native-library interoperability limitations.
 
-### 16. Legacy Version Support
+### 17. Legacy Version Support
 
 - [ ] Re-evaluate Forge 1.16.5 support.
 - [ ] Test the dependencies extracted from the Windows virtual machine.
@@ -235,13 +256,13 @@ The TCP DataBus is already implemented. The next step is to evolve it from a bas
 
 The intended implementation order is:
 
-1. Rebuild and package the receiver-only Java Agent.
-2. Implement Rust DataBus sender authorization using registered connection identity.
-3. Verify Fabric-to-NeoForge player-state delivery.
-4. Verify NeoForge `player_move` rejection while preserving explicitly authorized reverse-direction messages.
-5. Verify rejected messages do not disconnect the NeoForge client.
-6. Test heartbeat timeout, mirror removal, and mirror recreation.
-7. Stabilize entity identity, lifecycle management, and failure recovery.
+1. Rebuild and package the current Java Agent source from `bus_test/`.
+2. Add registration-name validation/authentication to the loopback DataBus.
+3. Runtime-test protected-message rejection, sender continuity, and no-forwarding behavior.
+4. Verify Fabric-to-NeoForge player-state delivery with the packaged Agent.
+5. Test heartbeat timeout, mirror removal, reconnect, and fresh-state recovery.
+6. Stabilize entity identity, lifecycle management, and failure recovery.
+7. Complete the NeoForge hostile-mob receiver and removal flow.
 8. Add protocol versioning, timestamps, sequence numbers, and session generations.
 9. Expand synchronization to additional entities and basic gameplay state.
 10. Refactor dependency resolution and NeoForge launch orchestration.
@@ -268,12 +289,12 @@ The project will follow these principles during development:
 
 <badge color="success">Verified foundation</badge>
 
-Rust launcher, Fabric and NeoForge startup, Java Agent injection, TCP DataBus, and the initial Fabric-to-NeoForge player-mirroring pipeline.
+Rust launcher, Fabric and NeoForge startup, Java Agent injection, TCP DataBus, and the initial Fabric-to-NeoForge player-mirroring pipeline. Rust source now rejects protected player/monster state messages from non-Fabric registered clients.
 
 <badge color="warning">Next milestone</badge>
 
-Rebuild the receiver-only Java Agent, enforce one-way sender authorization in the Rust DataBus, and verify reliable Fabric-to-NeoForge player-state synchronization.
+Rebuild/package the Java Agent, constrain the self-asserted DataBus registration identity, and runtime-test one-way sender authorization and reliable Fabric-to-NeoForge player-state synchronization.
 
-The next milestone also includes testing unauthorized reverse `player_move` rejection, reconnect behavior, and RemotePlayer lifecycle recovery.
+The next milestone also includes testing unauthorized reverse `player_move` rejection, reconnect behavior, and RemotePlayer lifecycle recovery. The DataBus policy exists in source, but it is not a substitute for authenticating local clients or for runtime verification.
 
 > The immediate objective is not to make every Fabric mod work with every NeoForge mod. It is to build a reliable, measurable foundation on which broader interoperability can be developed.

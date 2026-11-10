@@ -8,6 +8,8 @@
       navArchitecture: "架构",
       navDemo: "终端",
       navRoadmap: "进度",
+      navProblems: "问题与方案",
+      navTodo: "待办",
       navStart: "快速开始",
       navGithub: "GitHub ↗",
       viewSource: "在 GitHub 上查看 ↗",
@@ -41,7 +43,7 @@
       featureCount: "{visible} / {total} 项功能",
       verified: "已验证启动",
       agentVerified: "初始化已验证",
-      inProgress: "开发中",
+      nextMilestone: "下一里程碑",
       routingVerified: "基础路由已验证",
       playerStateVerified: "状态读取与发布已验证",
       pocNeedsStability: "概念验证完成 · 持续稳定中",
@@ -52,12 +54,12 @@
       f2Title: "Java Agent",
       f2Desc: "使用 premain 和 Instrumentation 探索运行时类结构及诊断能力。",
       f3Title: "Fabric 玩家状态读取",
-      f3Desc: "已通过反射读取本地玩家的位置和旋转角度，并将状态发布到 Rust DataBus。",
+      f3Desc: "通过反射读取玩家状态并发布到 Rust DataBus；bus_test 中还包含敌对生物采样及初始/变化消息的早期原型。",
       f4Title: "Rust TCP DataBus",
-      f4Desc: "客户端注册、JSON 消息路由和玩家状态传输已验证；发送方授权与协议健壮性仍待完善。",
+      f4Desc: "Rust 源码按注册连接名限制玩家及怪物状态消息仅由 Fabric 发布；注册名仍由客户端自报，且拒绝行为待运行时验证。",
       f5Title: "双端实体镜像",
       f5Desc:
-        "Fabric 到 NeoForge 的 RemotePlayer 镜像已完成概念验证；实体身份、重连和世界切换恢复仍需稳定化。",
+        "Fabric 到 NeoForge 的 RemotePlayer 镜像已完成概念验证；实体身份、重连和世界切换恢复仍需稳定化。怪物接收端尚未实现。",
       f6Title: "运行时结构诊断",
       f6Desc: "输出 Minecraft 实例字段、类型和值，辅助分析混淆环境。",
       architectureTitle: "系统架构",
@@ -69,9 +71,9 @@
       detailAgent:
         "通过 premain 进入目标 JVM，注册 Agent 并启动诊断或监控任务。",
       detailGame:
-        "Fabric 玩家状态提取和单向镜像概念验证已通过；发送方权威策略及实体生命周期仍需完善。",
+        "Fabric 玩家状态提取和单向镜像概念验证已通过；Rust 源码已有单向发布策略，但注册名验证、运行时测试及实体生命周期仍需完善。",
       detailBus:
-        "Rust TCP DataBus 已验证客户端注册、JSON 路由和玩家状态传输。发送方授权、协议校验与恢复行为仍在完善。",
+        "Rust TCP DataBus 已实现连接注册和 JSON 路由，并在源码中拒绝非 Fabric 的玩家/怪物状态消息。注册名由客户端自报；认证、运行时测试和协议校验仍待完成。",
       detailNote: "架构图描述的是目标系统分层，不代表所有链路都已经完成。",
       demoTitle: "原型验证流程回放",
       demoDesc:
@@ -92,7 +94,8 @@
       r3Title: "DataBus 与玩家镜像概念验证",
       r3Desc: "验证 Rust TCP 消息路由、Fabric 玩家状态发布和 NeoForge RemotePlayer 镜像。",
       r4Title: "单向状态权威与发送方授权",
-      r4Desc: "重打包 receiver-only Agent，在 Rust DataBus 拒绝 NeoForge 发布权威 player_move，并验证客户端不断连。",
+      r4Desc: "Rust 源码已有玩家/怪物状态发送方策略；重打包 Agent、约束自报注册名，并运行时验证拒绝不转发且连接不断开。",
+      r4Status: "源码已实现 · 待验证",
       r5Title: "同步稳定性与启动器重构",
       r5Desc: "完善实体生命周期、重连和协议校验，并继续重构 Rust 启动器与依赖处理。",
       completed: "已完成",
@@ -114,6 +117,8 @@
       navArchitecture: "Architecture",
       navDemo: "Terminal",
       navRoadmap: "Roadmap",
+      navProblems: "Problems & solutions",
+      navTodo: "TODO",
       navStart: "Get started",
       navGithub: "GitHub ↗",
       viewSource: "View on GitHub ↗",
@@ -154,7 +159,7 @@
       featureCount: "{visible} / {total} features",
       verified: "Launch verified",
       agentVerified: "Initialization verified",
-      inProgress: "In progress",
+      nextMilestone: "Next milestone",
       routingVerified: "Basic routing verified",
       playerStateVerified: "State extraction and publishing verified",
       pocNeedsStability: "PoC verified · Stabilization ongoing",
@@ -168,13 +173,13 @@
         "Uses premain and Instrumentation to inspect runtime class structures and provide diagnostics.",
       f3Title: "Fabric player-state extraction",
       f3Desc:
-        "Reflection reads the local player's position and rotation and publishes state to the Rust DataBus.",
+        "Reflection reads player state and publishes it to the Rust DataBus; bus_test also contains an early hostile-mob sampling and spawn/update publisher prototype.",
       f4Title: "Rust TCP DataBus",
       f4Desc:
-        "Client registration, JSON routing, and player-state transport are verified; sender authorization and protocol hardening remain.",
+        "Rust source restricts player and monster state messages to the registered Fabric name; registration is self-asserted and rejection still needs runtime verification.",
       f5Title: "Cross-instance entity mirror",
       f5Desc:
-        "The Fabric-to-NeoForge RemotePlayer mirror is a verified proof of concept; identity, reconnection, and world-transition recovery still need work.",
+        "The Fabric-to-NeoForge RemotePlayer mirror is a verified proof of concept; identity, reconnection, and world-transition recovery still need work. A NeoForge monster receiver is not implemented.",
       f6Title: "Runtime diagnostics",
       f6Desc:
         "Inspects Minecraft instance fields, types, and values to help analyze obfuscated environments.",
@@ -189,9 +194,9 @@
       detailAgent:
         "Enters the target JVM through premain, registers the agent, and starts diagnostic or monitoring tasks.",
       detailGame:
-        "Fabric player-state extraction and a one-way mirroring proof of concept are verified; sender authority and entity lifecycle still need work.",
+        "Fabric player-state extraction and a one-way mirroring proof of concept are verified. The Rust source has a one-way publisher policy; registration validation, runtime tests, and entity lifecycle still need work.",
       detailBus:
-        "The Rust TCP DataBus has verified client registration, JSON routing, and player-state transport. Sender authorization, protocol validation, and recovery are still being improved.",
+        "The Rust TCP DataBus implements client registration, JSON routing, and source-level filtering of protected state messages. Names are self-asserted; authentication, runtime verification, and protocol validation remain.",
       detailNote:
         "This diagram describes the target architecture; it does not imply that every component is complete.",
       demoTitle: "Prototype verification replay",
@@ -218,7 +223,8 @@
         "Verified Rust TCP routing, Fabric player-state publishing, and a NeoForge RemotePlayer mirror.",
       r4Title: "One-way authority and sender authorization",
       r4Desc:
-        "Repackage the receiver-only Agent, reject authoritative player_move messages from NeoForge, and verify rejection does not disconnect the client.",
+        "The Rust source has a player/monster state sender policy. Repackage the Agent, constrain self-asserted registration names, and runtime-test rejection, no forwarding, and connection continuity.",
+      r4Status: "Implemented in source · verify",
       r5Title: "Synchronization stability and launcher refactoring",
       r5Desc:
         "Improve entity lifecycle, reconnection, and protocol validation, then continue refactoring Rust launch and dependency handling.",
@@ -375,7 +381,8 @@
     ["[Fabric] Player state routed to NeoForge", "ok"],
     ["[NeoForge] RemotePlayer mirror updated", "ok"],
     ["[Verified] Initial timeout removal and mirror recreation", "ok"],
-    ["[Next] Sender authorization and lifecycle hardening", "warn"],
+    ["[Rust source] Protected state types restricted to Fabric registration", "ok"],
+    ["[Next] Runtime policy tests and registration validation", "warn"],
   ];
   const replay = document.getElementById("replay");
   const replayHint = document.getElementById("replayHint");

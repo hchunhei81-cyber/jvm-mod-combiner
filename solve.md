@@ -526,6 +526,14 @@ For the initial policy:
 A rejected message must not be routed to any recipient. The rejection should
 be observable through a structured error or diagnostic log.
 
+The current Rust source implements this policy for `player_move`,
+`monster_spawn`, `monster_update`, and `monster_remove`, returning a
+`state_authority_violation` response to non-Fabric registered names before
+routing. This is connection-scoped source filtering, not authenticated process
+identity: the client supplies its registration name. Validate or authenticate
+registration before relying on the name as a security boundary, and runtime-test
+rejection, no-forwarding, and connection continuity.
+
 **3. Message Classification**
 
 Separate messages into categories:
@@ -608,22 +616,21 @@ the protocol.
       in the prototype.
 - [x] The NeoForge monitor no longer actively samples its local player for
       authoritative movement transmission in the edited Java source.
+- [x] Rust DataBus source rejects non-Fabric registered clients publishing
+      `player_move` or monster state messages.
 - [ ] Rebuild and package the Java Agent containing the receiver-only change.
-- [ ] Add Rust-side sender authorization for message types.
-- [ ] Reject `player_move` from the registered `neoforge` connection.
-- [ ] Preserve explicitly permitted reverse-direction message types.
-- [ ] Verify that Fabric `player_move` continues to reach NeoForge.
-- [ ] Verify that NeoForge `player_move` is rejected and never routed.
-- [ ] Verify that rejection does not disconnect either sandbox.
+- [ ] Validate or authenticate registration names; current names are supplied
+      by the connecting client and are not authenticated process identities.
+- [ ] Runtime-test that unauthorized state messages are rejected, never
+      routed, and do not disconnect the sending client.
+- [ ] Verify that Fabric `player_move` continues to reach NeoForge using the
+      packaged Agent.
 - [ ] Verify reconnect and fresh-state recovery.
 - [ ] Verify that both clients remain responsive during synchronization.
 
-The immediate implementation task is to rebuild the Java Agent and verify that
-the NeoForge monitor is receiver-only at runtime.
-
-The next task is to enforce the same policy at the Rust DataBus boundary.
-The Rust layer is the final authority for message routing and must reject
-unauthorized state publication even if a Java Agent is misconfigured.
+The Rust source now enforces the one-way state policy at the DataBus boundary.
+The immediate task is to package the Java Agent, constrain the self-asserted
+registration identity, and verify rejection and normal delivery at runtime.
 
 ### Phase 2 — Establish a Versioned Synchronization Protocol
 

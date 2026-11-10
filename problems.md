@@ -218,6 +218,8 @@ The fix must ensure that the correct Netty JAR, rather than an arbitrary version
 
 # 2. NeoForge 1.21.1 Startup Problems — ModLauncher 11
 
+This section records the earlier NeoForge 1.21.1 investigation. The current Rust launcher source is configured for NeoForge 21.4.161 / Minecraft 1.21.4; that newer configuration is a separate verification target.
+
 ## 2.1 `ModLauncher null starting` and NullPointerException
 
 <badge color="success">Resolved / bypassed</badge>
@@ -1007,9 +1009,41 @@ The Java Agent also synchronizes its writes around the shared `PrintWriter`.
 
 Connection replacement and shutdown behavior should continue to be tested under concurrent reconnect conditions.
 
----
+## 6.5 One-Way State Authorization and Registration Identity
+
+<badge color="warning">Policy implemented in Rust source; runtime verification pending</badge>
+
+**Requirement**
+
+Fabric is the sole publisher of authoritative `player_move` and monster-state messages. A NeoForge client must not publish these message types, and a rejected message must not be forwarded or disconnect the sender.
+
+**Current implementation**
+
+`start_data_bus()` in `src/main.rs` assigns a connection ID, requires registration as the first message, and derives the routed `from` value from the registered connection name rather than a message's payload. Before forwarding, it rejects non-`fabric` messages of type:
+
+```text
+player_move
+monster_spawn
+monster_update
+monster_remove
+```
+
+The sender receives a `state_authority_violation` JSON response, and the handler continues reading that connection. This behavior is implemented in source; an end-to-end runtime test is still needed to verify rejection, no forwarding, and continued client connectivity.
+
+**Important limitation**
+
+The DataBus binds to `127.0.0.1`, but registration names are currently self-asserted. The server does not authenticate the connecting process or restrict names to a fixed allowlist. Therefore, the registered name is a connection-scoped routing identity, not proof that the process is Fabric or NeoForge. A local client can claim a name, and a later registration can replace the active route for that name.
+
+**Next steps**
+
+- Add validation for allowed registration names and decide how local client identity should be trusted.
+- Test unauthorized sends from a registered NeoForge client and assert that the connection remains usable.
+- Test that protected messages are never delivered to another peer.
+- Preserve only explicitly defined reverse-direction message types.
 
 # 7. Java Agent and Runtime Instrumentation Problems
+
+Java sources currently reside in `bus_test/`; there is no `bus-agent/` source directory in the repository.
 
 ## 7.1 Java Agent Injection and Class Transformation
 
@@ -1436,11 +1470,11 @@ Different Minecraft versions, independent game loops, and different world states
 The current prototype does not need two authoritative player-state publishers.
 
 ### Current implementation status
-- The active call to sampleNeoForgePlayer(player) has been removed from the edited NeoForge monitor source.
+- The NeoForge Agent monitor currently consumes `player_move` and does not sample/publish its local player state.
 - NeoForge is intended to operate as a receiver-only client.
-- The old sampleNeoForgePlayer() and sendNeoForgePlayer() methods remain in the Java source but are inactive unless called by another code path.
-- The edited Java source has not yet been rebuilt and packaged into the formal bus-agent.jar.
-- Rust DataBus does not yet enforce the one-way sender authorization rule.
+- The Rust DataBus source now rejects non-Fabric registered clients attempting to publish `player_move` or monster state messages.
+- This source-level rejection has not yet been documented as runtime-tested; verify that rejected sends are not routed and do not close the client connection.
+- Registration names remain self-asserted; the one-way policy trusts the first `register` message and is not process authentication.
 
 ### Current architecture policy
 
@@ -1452,13 +1486,28 @@ Future reverse-direction messages may include explicitly defined interaction req
 
 **Remaining work**
 
-- Rebuild and package the updated Java Agent.
+- Rebuild and package the current Java Agent source from `bus_test/`.
 - Verify that NeoForge no longer publishes local-player movement state.
-- Add Rust-side authorization based on the registered TCP connection identity.
-- Reject NeoForge-originated `player_move` messages before routing.
+- Runtime-test Rust-side rejection based on the registered TCP connection name.
+- Add registration-name validation/authentication and prevent unauthorized route replacement.
 - Verify that permitted reverse-direction message types remain supported.
 
 The historical bidirectional design is retained for architectural context.
+
+## 8.6 Hostile-Mob Synchronization Is Source-Only
+
+<badge color="warning">Fabric sampling prototype; no end-to-end mirror</badge>
+
+`bus_test/MonsterSync.java` runs from the Fabric monitor on the client thread. It samples visible, living hostile `Monster` entities at a maximum of 5 Hz, tracks them by UUID, and emits `monster_spawn` for newly observed mobs and `monster_update` when position, rotation, type, or health changes. The Rust DataBus permits those protected message types only from the registered `fabric` name.
+
+The current Java receive loop handles `player_move` only. It does not parse monster messages, create NeoForge entities, or publish `monster_remove`. Mobs missing from the Fabric render iteration are logged but deliberately not treated as removed, since absence from that iteration is not proof of despawn.
+
+**Remaining work**
+
+- Define reliable despawn and world-change semantics.
+- Publish removal events without inferring despawn from render-list absence.
+- Add NeoForge parsing, entity creation/update, and cleanup.
+- Test ordering, reconnect snapshots, and end-to-end behavior before calling this synchronized.
 
 # 9. ClassLoader Isolation and Mixin Compatibility
 
@@ -1734,13 +1783,16 @@ Validate the same launch pipeline on:
 | Rust TCP DataBus | <badge color="success">Verified</badge> |
 | DataBus connection startup race | <badge color="success">Resolved</badge> |
 | Named client registration and routing | <badge color="success">Verified</badge> |
+| Source-level one-way state message rejection | <badge color="warning">Implemented; runtime test pending</badge> |
+| Authenticated sandbox registration | <badge color="warning">Not implemented</badge> |
 | Java Agent injection | <badge color="success">Verified</badge> |
 | Fabric player discovery | <badge color="success">Verified</badge> |
 | NeoForge player discovery | <badge color="success">Verified</badge> |
 | Fabric-to-NeoForge state transfer | <badge color="success">PoC verified</badge> |
 | NeoForge RemotePlayer injection | <badge color="success">PoC verified</badge> |
-| NeoForge-to-Fabric state transfer | <badge color="warning">In progress</badge> |
-| Bidirectional player mirroring | <badge color="warning">Not complete</badge> |
+| Fabric hostile-mob sampling and outbound spawn/update messages | <badge color="warning">Source prototype; end-to-end verification pending</badge> |
+| NeoForge hostile-mob receive/mirroring | <badge color="warning">Not implemented</badge> |
+| Bidirectional player mirroring | <badge color="warning">Not a current goal</badge> |
 | Cross-version world consistency | <badge color="warning">Under investigation</badge> |
 | Same-JVM real-loader isolation | <badge color="warning">Not solved</badge> |
 | General Mixin conflict resolution | <badge color="warning">Not solved</badge> |
@@ -1760,17 +1812,23 @@ The following order minimizes the risk of expanding the architecture before the 
 
 - [x] Establish Fabric as the sole authoritative player-state source.
 - [x] Remove the active NeoForge player-state sampling call from the edited monitor source.
-- [ ] Rebuild and package the updated Java Agent.
-- [ ] Enforce sender authorization in the Rust DataBus using registered connection identity.
-- [ ] Reject `player_move` messages originating from the registered NeoForge connection.
-- [ ] Preserve explicitly authorized reverse-direction message types.
-- [ ] Verify Fabric-to-NeoForge player-state delivery.
-- [ ] Verify that rejected NeoForge `player_move` messages do not disconnect the client.
+- [x] Implement source-level rejection of protected player/monster state message types from non-Fabric registrations.
+- [ ] Rebuild and package the current Java Agent source from `bus_test/`.
+- [ ] Validate or authenticate DataBus registration names; current names are client-supplied.
+- [ ] Runtime-test that rejected state messages are not routed and do not disconnect the sender.
+- [ ] Verify Fabric-to-NeoForge player-state delivery with the packaged Agent.
 - [ ] Test reconnect behavior and fresh state transmission.
 - [ ] Add protocol versioning, sequence numbers, timestamps, and session generations.
 - [ ] Reject stale or out-of-session player-state updates.
 
-### Priority 2 — Improve Entity Lifecycle Management
+### Priority 2 — Complete the Hostile-Mob Synchronization Prototype
+
+- [x] Sample hostile Fabric mobs and emit initial/change messages from Java source.
+- [ ] Implement and test removal detection and `monster_remove` publication.
+- [ ] Implement NeoForge receive, entity lifecycle, and world cleanup.
+- [ ] Verify the end-to-end path before describing mob synchronization as a feature.
+
+### Priority 3 — Improve Entity Lifecycle Management
 
 - [ ] Stable remote-player UUID.
 - [ ] Entity ID collision prevention.
@@ -1778,7 +1836,7 @@ The following order minimizes the risk of expanding the architecture before the 
 - [ ] Dimension-change handling.
 - [ ] Disconnect cleanup.
 
-### Priority 3 — Improve Synchronization Quality
+### Priority 4 — Improve Synchronization Quality
 
 - [ ] Timestamped messages.
 - [ ] Sequence numbers.
@@ -1787,7 +1845,7 @@ The following order minimizes the risk of expanding the architecture before the 
 - [ ] Network latency measurement.
 - [ ] Tick-rate independence.
 
-### Priority 4 — Expand Cross-Version Compatibility
+### Priority 5 — Expand Cross-Version Compatibility
 
 - [ ] Verify method mappings dynamically.
 - [ ] Test identical Minecraft versions on both sides.
@@ -1795,7 +1853,7 @@ The following order minimizes the risk of expanding the architecture before the 
 - [ ] Compare dimension and chunk state.
 - [ ] Test multiple loader versions.
 
-### Priority 5 — Return to the Original Microkernel Architecture
+### Priority 6 — Return to the Original Microkernel Architecture
 
 - [ ] Develop a controlled ClassLoader delegation model.
 - [ ] Investigate real-loader isolation inside one JVM.
@@ -1807,12 +1865,12 @@ The following order minimizes the risk of expanding the architecture before the 
 
 The intended implementation order is:
 
-1. Rebuild and package the receiver-only Java Agent.
-2. Implement Rust DataBus sender authorization.
-3. Verify Fabric-to-NeoForge player-state delivery.
-4. Verify NeoForge `player_move` rejection while preserving explicitly allowed reverse-direction messages.
-5. Verify that rejected messages do not disconnect the NeoForge client.
-6. Test heartbeat timeout, mirror removal, and mirror recreation.
+1. Rebuild and package the current Java Agent from `bus_test/`.
+2. Constrain the self-asserted DataBus registration identity.
+3. Runtime-test protected-message rejection, no forwarding, and sender continuity.
+4. Verify Fabric-to-NeoForge player-state delivery with the packaged Agent.
+5. Test heartbeat timeout, mirror removal, reconnect, and fresh-state recovery.
+6. Complete NeoForge hostile-mob receive, removal, and world cleanup.
 7. Improve entity lifecycle handling and failure recovery.
 8. Add protocol versioning, timestamps, sequence numbers, and session generations.
 9. Expand entity and gameplay synchronization features.
@@ -1820,11 +1878,11 @@ The intended implementation order is:
 
 ## Current Development Focus
 
-The current focus is enforcing and stabilizing the one-way player-state authority architecture.
+The current focus is validating the Rust source-level one-way state policy at runtime, constraining registration identity, and stabilizing the packaged Java Agent and player-mirror lifecycle.
 
 **Next milestone:**
 
-Complete the receiver-only Java Agent rebuild, enforce sender authorization in the Rust DataBus, and verify reliable Fabric-to-NeoForge synchronization with correct rejection of unauthorized reverse player-state messages.
+Rebuild/package the Java Agent and verify reliable Fabric-to-NeoForge synchronization while testing that unauthorized state messages are rejected without forwarding or disconnecting the sender.
 ---
 
 ## Final Note

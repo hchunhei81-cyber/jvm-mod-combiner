@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#090d14" />
+    <meta
+      name="description"
+      content="Verified problems, implemented workarounds, and open engineering challenges in JVM Mod Combiner."
+    />
+    <title>Problems & Solutions — JVM Mod Combiner</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body data-page="problems">
+    <a class="skip-link" href="#main-content" data-i18n="skip">Skip to main content</a>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <div class="grid-bg"></div>
+
+    <header class="nav" id="pageNav">
+      <a class="brand" href="index.html">
+        <span class="brand-mark">&lt;/&gt;</span>
+        <span>JVM <b>Mod</b> Combiner</span>
+      </a>
+      <nav class="nav-links" aria-label="Documentation" data-i18n-aria="docs">
+        <a href="index.html" data-i18n="overview">Overview</a>
+        <a href="problems.html" aria-current="page" data-i18n="problems">Problems &amp; solutions</a>
+        <a href="todo.html" data-i18n="todo">TODO</a>
+        <a
+          href="https://github.com/hchunhei81-cyber/jvm-mod-combiner"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-i18n="github">GitHub ↗</a
+        >
+      </nav>
+      <div class="nav-tools">
+        <select id="pageLanguage" aria-label="Language" data-i18n-aria="languageLabel">
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
+        <button class="icon-button" id="pageTheme" type="button" aria-label="Toggle theme" data-i18n-aria="themeLabel">LIGHT</button>
+        <button class="menu-toggle" id="pageMenu" type="button" aria-label="Open menu" aria-expanded="false" data-i18n-aria="menuLabel">
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+    </header>
+
+    <main id="main-content">
+      <section class="section doc-page">
+        <div class="section-heading">
+          <p class="overline" data-i18n="eyebrow">ENGINEERING NOTES</p>
+          <h1 data-i18n="pageTitle">Problems &amp; solutions</h1>
+          <p data-i18n="pageIntro">
+            A current, high-level view of what has been verified, what has a
+            workaround, and what still needs implementation.
+          </p>
+        </div>
+
+        <div class="doc-callout">
+          <strong data-i18n="prototypeLabel">Prototype status:</strong> <span data-i18n="prototypeStatus">Fabric and NeoForge startup,
+          DataBus routing, and one-way player mirroring have reached verified
+          prototype milestones. They do not establish general mod compatibility
+          or complete gameplay synchronization.</span>
+        </div>
+
+        <div class="doc-grid">
+          <article class="doc-card">
+            <span class="doc-status done" data-i18n="p1Status">Verified foundation</span>
+            <h3 data-i18n="p1Title">Starting isolated loader environments</h3>
+            <p data-i18n="p1Text">
+              The Rust launcher has started Fabric 1.21.4 and NeoForge 1.21.1
+              in tested configurations. Forge 1.21.4 has reached experimental
+              startup, but full gameplay stability is a separate target. The
+              current Rust NeoForge launch configuration targets NeoForge
+              21.4.161 / Minecraft 1.21.4; verify that configuration separately
+              from the previously documented 1.21.1 run.
+            </p>
+            <p data-i18n="p1Approach">
+              <strong>Approach:</strong> Build loader-specific launch paths and
+              resolve dependencies for each runtime instead of treating every
+              loader as one interchangeable classpath.
+            </p>
+          </article>
+
+          <article class="doc-card">
+            <span class="doc-status open" data-i18n="p2Status">Partly resolved</span>
+            <h3 data-i18n="p2Title">Dependency and classpath mismatches</h3>
+            <p data-i18n="p2Text">
+              Missing ASM/Mixin classes, game-provider discovery, LWJGL
+              natives, and several tested launch-path issues have been
+              addressed. A missing Netty class still requires verification
+              against the exact runtime dependency graph.
+            </p>
+            <p data-i18n="p2Next">
+              <strong>Next:</strong> Complete manifest-based resolution,
+              platform filtering, native handling, checksums, and conflict
+              detection. Avoid broad library-directory scans.
+            </p>
+          </article>
+
+          <article class="doc-card">
+            <span class="doc-status done" data-i18n="p3Status">Verified prototype</span>
+            <h3 data-i18n="p3Title">DataBus startup and basic routing</h3>
+            <p data-i18n="p3Text">
+              The Rust TCP DataBus registers named clients and routes JSON
+              messages. Binding the listener synchronously before starting
+              the accept thread resolved the observed startup race.
+            </p>
+            <p data-i18n="p3Limit">
+              <strong>Limit:</strong> Basic routing does not yet enforce a
+              fully versioned, validated protocol. The Rust source now rejects
+              protected player and monster state types from non-Fabric
+              registrations, but runtime tests remain open. Registration
+              names are self-asserted and are not authenticated identities.
+            </p>
+          </article>
+
+          <article class="doc-card">
+            <span class="doc-status open" data-i18n="p4Status">Source implemented · verify</span>
+            <h3 data-i18n="p4Title">One-way state policy and trusted identity</h3>
+            <p data-i18n="p4Text">
+              Fabric is the sole publisher for protected player/monster state
+              types. Rust checks the connection's registered name and returns
+              <code>state_authority_violation</code> without routing the
+              rejected message or closing the connection.
+            </p>
+            <p data-i18n="p4Remaining">
+              <strong>Remaining:</strong> Runtime-test the behavior and
+              constrain registration. The first message's registration name
+              is client-supplied, so it is a routing label—not authenticated
+              proof of which process connected. Rebuild/package the Java Agent
+              from <code>bus_test/</code>.
+            </p>
+          </article>
+
+          <article class="doc-card">
+            <span class="doc-status open" data-i18n="p5Status">Early source prototype</span>
+            <h3 data-i18n="p5Title">Hostile-mob synchronization</h3>
+            <p data-i18n="p5Text">
+              <code>bus_test/MonsterSync.java</code> samples visible, living
+              hostile Fabric mobs by UUID on the game thread and emits
+              <code>monster_spawn</code> and changed-state
+              <code>monster_update</code> messages.
+            </p>
+            <p data-i18n="p5Incomplete">
+              <strong>Incomplete:</strong> Missing-from-render iteration is not
+              treated as removal; <code>monster_remove</code> is not published,
+              and the NeoForge Agent currently handles only
+              <code>player_move</code>. No end-to-end monster mirror is
+              implemented.
+            </p>
+          </article>
+
+          <article class="doc-card">
+            <span class="doc-status open" data-i18n="p6Status">Stability work remains</span>
+            <h3 data-i18n="p6Title">Mirror identity and recovery</h3>
+            <p data-i18n="p6Text">
+              RemotePlayer mirroring is a proof of concept. Initial timeout
+              cleanup and mirror recreation have been observed, but stable
+              identity, duplicate prevention, world changes, and reconnection
+              recovery still need systematic testing.
+            </p>
+            <p data-i18n="p6Direction">
+              <strong>Solution direction:</strong> Add stable UUID mapping,
+              explicit lifecycle events, fresh-state recovery, and smoothing
+              while keeping each game's tick loop independent.
+            </p>
+          </article>
+
+          <article class="doc-card">
+            <span class="doc-status research" data-i18n="p7Status">Long-term design</span>
+            <h3 data-i18n="p7Title">Cross-loader behavior and compatibility</h3>
+            <p data-i18n="p7Text">
+              Matching coordinates does not make different versions,
+              registries, mod APIs, or game logic equivalent. Arbitrary
+              bytecode merging and native-code interception are not reliable
+              universal solutions.
+            </p>
+            <p data-i18n="p7Direction">
+              <strong>Solution direction:</strong> Define a normalized,
+              versioned state protocol; use loader-specific adapters and
+              explicit compatibility integrations; keep unsupported objects
+              as visual proxies where appropriate.
+            </p>
+          </article>
+
+          <article class="doc-card">
+            <span class="doc-status open" data-i18n="p8Status">Unresolved</span>
+            <h3 data-i18n="p8Title">Legacy Forge 1.16.5 startup</h3>
+            <p data-i18n="p8Text">
+              The native macOS installer path encountered a hash mismatch,
+              and the older FML/ModLauncher launch pipeline was not brought to
+              a working client state. Substituting newer launch components
+              proved unreliable.
+            </p>
+            <p data-i18n="p8Stance">
+              <strong>Current stance:</strong> Keep this as a separate,
+              version-specific investigation; document it as unsupported if
+              the maintenance cost outweighs the value.
+            </p>
+          </article>
+
+          <article class="doc-card">
+            <span class="doc-status research" data-i18n="p9Status">Not a current target</span>
+            <h3 data-i18n="p9Title">Cross-process rendering and window composition</h3>
+            <p data-i18n="p9Text">
+              Combining GPU resources across independent clients is
+              platform-specific and adds driver, synchronization, and lifetime
+              risks.
+            </p>
+            <p data-i18n="p9Direction">
+              <strong>Solution direction:</strong> Keep independent windows
+              and prioritize reliable state synchronization. Consider
+              platform-native composition only after core behavior is stable.
+            </p>
+          </article>
+        </div>
+
+        <div class="doc-sources">
+          <a href="../problems.md" data-i18n="historyLink">Detailed issue history (problems.md)</a>
+          <a href="../solve.md" data-i18n="architectureLink">Proposed architecture (solve.md)</a>
+          <a href="../src/main.rs">Rust DataBus source</a>
+          <a href="../bus_test/BusAgent.java">Java Agent source</a>
+          <a href="../bus_test/MonsterSync.java">MonsterSync source</a>
+          <a href="todo.html" data-i18n="todoLink">See current TODO priorities →</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <a class="brand" href="index.html">
+        <span class="brand-mark">&lt;/&gt;</span>
+        <span>JVM <b>Mod</b> Combiner</span>
+      </a>
+      <p data-i18n="footerText">Experimental research project · Rust × JVM · Minecraft 1.21.4</p>
+      <a href="todo.html" data-i18n="footerLink">Development TODO →</a>
+    </footer>
+    <script src="pages.js"></script>
+  </body>
+</html>

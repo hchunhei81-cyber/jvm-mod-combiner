@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#090d14" />
+    <meta
+      name="description"
+      content="JVM Mod Combiner — an experimental Rust and Java prototype for cross-sandbox Minecraft interoperability."
+    />
+    <title>JVM Mod Combiner — Cross-platform Modding Kernel</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700;900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content" data-i18n="skipToContent"
+      >跳转到主要内容</a
+    >
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <div class="grid-bg"></div>
+
+    <header class="nav" id="top">
+      <a class="brand" href="#top">
+        <span class="brand-mark">&lt;/&gt;</span>
+        <span>JVM <b>Mod</b> Combiner</span>
+      </a>
+
+      <nav class="nav-links" id="navLinks">
+        <a href="#features" data-i18n="navFeatures">特性</a>
+        <a href="#architecture" data-i18n="navArchitecture">架构</a>
+        <a href="#demo" data-i18n="navDemo">终端</a>
+        <a href="#roadmap" data-i18n="navRoadmap">进度</a>
+        <a href="#start" class="nav-cta" data-i18n="navStart">快速开始</a>
+        <a
+          href="https://github.com/hchunhei81-cyber/jvm-mod-combiner"
+          class="nav-github"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-i18n="navGithub"
+          >GitHub ↗</a
+        >
+      </nav>
+
+      <div class="nav-tools">
+        <select id="language" aria-label="Language">
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
+        <button
+          class="icon-button"
+          id="themeToggle"
+          aria-label="Toggle theme"
+          title="Toggle theme"
+        >
+          LIGHT
+        </button>
+        <button
+          class="menu-toggle"
+          id="menuToggle"
+          aria-label="Open menu"
+          aria-expanded="false"
+        >
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+    </header>
+
+    <main id="main-content">
+      <section class="hero">
+        <div class="hero-content">
+          <div class="status-pill">
+            <span class="status-dot"></span
+            ><span data-i18n="heroBadge">实验性原型 · 单向玩家镜像概念验证</span>
+          </div>
+          <p class="overline">RUST / JNI / JVM / MINECRAFT</p>
+          <h1 data-i18n="heroTitle">
+            连接不同的<br /><span class="gradient-text"
+              >Minecraft 模组生态。</span
+            >
+          </h1>
+          <p class="hero-description" data-i18n="heroDesc">
+            JVM Mod Combiner 是一个基于 Rust 和 Java 的实验性原型。已验证
+            Fabric 与 NeoForge 在独立 JVM 中运行，并完成单向玩家状态同步概念验证。
+          </p>
+          <div class="hero-actions">
+            <a
+              href="#architecture"
+              class="button button-primary"
+              data-i18n="explore"
+              >探索架构</a
+            >
+            <a href="#demo" class="button button-secondary" data-i18n="viewDemo"
+              >查看启动演示</a
+            >
+            <a
+              href="https://github.com/hchunhei81-cyber/jvm-mod-combiner"
+              class="button button-github"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-i18n="viewSource"
+              >在 GitHub 上查看 ↗</a
+            >
+          </div>
+          <div class="hero-meta">
+            <span>MINECRAFT 1.21.4</span><span>JAVA 21</span
+            ><span>RUST KERNEL</span>
+          </div>
+        </div>
+
+        <div class="hero-terminal panel">
+          <div class="window-bar">
+            <div class="window-dots"><i></i><i></i><i></i></div>
+            <span>jvm-mod-combiner / terminal</span>
+            <span class="window-live">LOCAL DEMO</span>
+          </div>
+          <pre
+            id="terminal"
+            class="terminal-output"
+            aria-label="Terminal preview"
+          ></pre>
+          <div class="terminal-footer">
+            <span>FABRIC MODE</span><span>JAVA AGENT</span>
+          </div>
+        </div>
+        <div class="hero-orbit orbit-one"></div>
+        <div class="hero-orbit orbit-two"></div>
+      </section>
+
+      <section class="metrics">
+        <div>
+          <strong>Rust</strong><span data-i18n="metricKernel">启动内核</span>
+        </div>
+        <div>
+          <strong>JNI</strong
+          ><span data-i18n="metricBridge">Java 虚拟机桥接</span>
+        </div>
+        <div>
+          <strong>1.21.4</strong
+          ><span data-i18n="metricVersion">目标游戏版本</span>
+        </div>
+        <div>
+          <strong>2 JVM</strong
+          ><span data-i18n="metricGoal">双端互操作目标</span>
+        </div>
+      </section>
+
+      <section class="section flow-section" id="data-flow">
+        <div class="section-heading">
+          <p class="overline">END-TO-END FLOW</p>
+          <h2 data-i18n="flowTitle">一次原型验证，经过哪些环节？</h2>
+          <p data-i18n="flowDesc">
+            从 Rust 启动独立游戏进程，到通过本地 DataBus 传递单向玩家状态。
+          </p>
+        </div>
+        <div class="flow-grid">
+          <article class="flow-step">
+            <span class="flow-index">01</span>
+            <span class="flow-label" data-i18n="flowVerified">已验证</span>
+            <h3 data-i18n="flowLaunchTitle">Rust 启动器</h3>
+            <p data-i18n="flowLaunchDesc">
+              解析运行环境并启动独立 JVM，加载对应的 Minecraft 模组加载器。
+            </p>
+            <code>Rust + JNI</code>
+          </article>
+          <article class="flow-step">
+            <span class="flow-index">02</span>
+            <span class="flow-label" data-i18n="flowVerified">已验证</span>
+            <h3 data-i18n="flowAgentTitle">Java Agent</h3>
+            <p data-i18n="flowAgentDesc">
+              在目标 JVM 中初始化 Agent，读取游戏实例并提取 Fabric 玩家状态。
+            </p>
+            <code>premain / Instrumentation</code>
+          </article>
+          <article class="flow-step">
+            <span class="flow-index">03</span>
+            <span class="flow-label" data-i18n="flowVerified">已验证</span>
+            <h3 data-i18n="flowBusTitle">本地 TCP DataBus</h3>
+            <p data-i18n="flowBusDesc">
+              注册 Fabric 与 NeoForge 客户端，并在本机路由 JSON 消息。
+            </p>
+            <code>127.0.0.1 · JSON</code>
+          </article>
+          <article class="flow-step flow-step-active">
+            <span class="flow-index">04</span>
+            <span class="flow-label" data-i18n="flowPoc">概念验证</span>
+            <h3 data-i18n="flowMirrorTitle">单向玩家镜像</h3>
+            <p data-i18n="flowMirrorDesc">
+              Fabric 玩家状态已能驱动 NeoForge RemotePlayer 镜像；生命周期稳定性仍在完善。
+            </p>
+            <code>Fabric → NeoForge</code>
+          </article>
+        </div>
+        <p class="flow-footnote" data-i18n="flowFootnote">
+          这是本地原型的已验证数据流，不代表任意模组或服务器间的通用兼容。
+        </p>
+      </section>
+
+      <section class="section" id="features">
+        <div class="section-heading">
+          <p class="overline">CAPABILITIES</p>
+          <h2 data-i18n="featuresTitle">为 JVM 互操作而设计</h2>
+          <p data-i18n="featuresDesc">
+            从启动流程到运行时通信，逐层构建跨模组生态的技术基础。
+          </p>
+        </div>
+        <div class="feature-toolbar">
+          <input
+            id="featureSearch"
+            type="search"
+            placeholder="搜索功能 / Search features..."
+            data-i18n-placeholder="searchPlaceholder"
+          />
+          <span id="featureCount" aria-live="polite">6 项功能</span>
+        </div>
+        <div class="feature-grid" id="featureGrid">
+          <article
+            class="feature-card"
+            data-search="rust kernel startup jni 启动 内核"
+          >
+            <span class="card-index">01 / CORE</span>
+            <div class="feature-symbol">RUST</div>
+            <h3 data-i18n="f1Title">Rust 启动内核</h3>
+            <p data-i18n="f1Desc">
+              解析版本依赖、组织 JVM 类路径，并通过 JNI 启动目标 Java 环境。
+            </p>
+            <span class="card-status done" data-i18n="verified"
+              >已验证启动</span
+            >
+          </article>
+          <article
+            class="feature-card"
+            data-search="java agent instrumentation premain 代理"
+          >
+            <span class="card-index">02 / AGENT</span>
+            <div class="feature-symbol">JVM</div>
+            <h3 data-i18n="f2Title">Java Agent</h3>
+            <p data-i18n="f2Desc">
+              使用 premain 和 Instrumentation 探索运行时类结构及诊断能力。
+            </p>
+            <span class="card-status done" data-i18n="agentVerified"
+              >初始化已验证</span
+            >
+          </article>
+          <article
+            class="feature-card"
+            data-search="fabric player state movement extraction 玩家 状态 移动"
+          >
+            <span class="card-index">03 / PLAYER STATE</span>
+            <div class="feature-symbol">STATE</div>
+            <h3 data-i18n="f3Title">Fabric 玩家状态读取</h3>
+            <p data-i18n="f3Desc">
+              已通过反射读取本地玩家的位置和旋转角度，并将状态发布到 Rust DataBus。
+            </p>
+            <span class="card-status done" data-i18n="playerStateVerified"
+              >状态读取与发布已验证</span
+            >
+          </article>
+          <article
+            class="feature-card"
+            data-search="tcp bus network communication 网络"
+          >
+            <span class="card-index">04 / TRANSPORT</span>
+            <div class="feature-symbol">TCP</div>
+            <h3 data-i18n="f4Title">Rust TCP DataBus</h3>
+            <p data-i18n="f4Desc">
+              Rust TCP DataBus 已验证客户端注册、JSON 消息路由及玩家状态传输；发送方授权与协议健壮性仍待完善。
+            </p>
+            <span class="card-status done" data-i18n="routingVerified"
+              >基础路由已验证</span
+            >
+          </article>
+          <article
+            class="feature-card"
+            data-search="neoforge remote player mirror entity sync lifecycle 镜像 同步"
+          >
+            <span class="card-index">05 / SYNC</span>
+            <div class="feature-symbol">SYNC</div>
+            <h3 data-i18n="f5Title">双端实体镜像</h3>
+            <p data-i18n="f5Desc">
+              Fabric 到 NeoForge 的 RemotePlayer 镜像已完成概念验证；实体身份、重连和世界切换恢复仍需稳定化。
+            </p>
+            <span class="card-status progress" data-i18n="pocNeedsStability"
+              >概念验证完成 · 持续稳定中</span
+            >
+          </article>
+          <article
+            class="feature-card"
+            data-search="diagnostics reflection structure 诊断 反射"
+          >
+            <span class="card-index">06 / DEBUG</span>
+            <div class="feature-symbol">TRACE</div>
+            <h3 data-i18n="f6Title">运行时结构诊断</h3>
+            <p data-i18n="f6Desc">
+              输出 Minecraft 实例字段、类型和值，辅助分析混淆环境。
+            </p>
+            <span class="card-status done" data-i18n="diagnosticsVerified"
+              >基础诊断已验证</span
+            >
+          </article>
+        </div>
+        <p class="empty-state" id="emptyState" hidden data-i18n="noResults">
+          没有找到匹配的功能。
+        </p>
+      </section>
+
+      <section class="section architecture-section" id="architecture">
+        <div class="section-heading">
+          <p class="overline">SYSTEM DESIGN</p>
+          <h2 data-i18n="architectureTitle">系统架构</h2>
+          <p data-i18n="architectureDesc">
+            选择一个模块，查看它在整个启动和同步流程中的职责。
+          </p>
+        </div>
+        <div class="architecture-layout">
+          <div class="architecture-map">
+            <button
+              class="arch-node active"
+              data-node="rust"
+              aria-pressed="true"
+            >
+              <small>01 / KERNEL</small><b>Rust Kernel</b
+              ><span data-i18n="archRust">依赖解析 · JNI</span>
+            </button>
+            <div class="connector">↓</div>
+            <button class="arch-node" data-node="agent" aria-pressed="false">
+              <small>02 / AGENT</small><b>BusAgent</b
+              ><span data-i18n="archAgent">premain · Instrumentation</span>
+            </button>
+            <div class="connector">↓</div>
+            <button class="arch-node" data-node="game" aria-pressed="false">
+              <small>03 / GAME</small><b>Fabric / NeoForge</b
+              ><span data-i18n="archGame">游戏实例 · 玩家状态</span>
+            </button>
+            <div class="connector">↕</div>
+            <button class="arch-node" data-node="bus" aria-pressed="false">
+              <small>04 / TRANSPORT</small><b>TCP Bus</b
+              ><span>127.0.0.1:25565</span>
+            </button>
+          </div>
+          <aside class="architecture-detail panel">
+            <p class="overline" id="detailEyebrow">01 / KERNEL</p>
+            <h3 id="detailTitle">Rust Kernel</h3>
+            <p id="detailText" data-i18n="detailRust">
+              负责解析版本元数据、组织类路径，并通过 JNI 创建和启动 JVM。
+            </p>
+            <div class="detail-tags" id="detailTags">
+              <span>Rust</span><span>JNI</span><span>Classpath</span>
+            </div>
+            <div class="detail-note" data-i18n="detailNote">
+              架构图描述的是目标系统分层，不代表所有链路都已经完成。
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section demo-section" id="demo">
+        <div class="section-heading">
+          <p class="overline">INTERACTIVE TERMINAL</p>
+          <h2 data-i18n="demoTitle">原型验证流程回放</h2>
+          <p data-i18n="demoDesc">
+            根据已验证的启动、DataBus 路由和单向玩家镜像阶段整理的示例日志，并非实时连接游戏进程。
+          </p>
+        </div>
+        <div class="demo-panel panel">
+          <div class="window-bar">
+            <div class="window-dots"><i></i><i></i><i></i></div>
+            <span>prototype verification / local replay</span>
+            <span class="window-live">REPLAY</span>
+          </div>
+          <pre
+            id="replay"
+            class="terminal-output replay-output"
+            aria-live="polite"
+          ></pre>
+          <div class="demo-controls">
+            <button
+              class="button button-primary"
+              id="replayBtn"
+              data-i18n="play"
+            >
+              播放
+            </button>
+            <button
+              class="button button-secondary"
+              id="pauseBtn"
+              data-i18n="pause"
+            >
+              暂停
+            </button>
+            <button
+              class="button button-secondary"
+              id="resetBtn"
+              data-i18n="reset"
+            >
+              重置
+            </button>
+            <span id="replayHint" class="replay-hint" data-i18n="waiting"
+              >等待开始</span
+            >
+          </div>
+        </div>
+      </section>
+
+      <section class="section roadmap-section" id="roadmap">
+        <div class="section-heading">
+          <p class="overline">DEVELOPMENT TRACKER</p>
+          <h2 data-i18n="roadmapTitle">开发路线图</h2>
+          <p data-i18n="roadmapDesc">
+            用明确的里程碑记录工程进展，不把计划当作已交付功能。
+          </p>
+        </div>
+        <div class="roadmap">
+          <div class="roadmap-item complete">
+            <span class="roadmap-line"></span>
+            <div>
+              <small>PHASE 01</small>
+              <h3 data-i18n="r1Title">启动链路恢复</h3>
+              <p data-i18n="r1Desc">
+                验证 Rust/JNI 启动基础、Fabric 与 NeoForge 启动，以及 Forge 实验性启动。
+              </p>
+            </div>
+            <b data-i18n="completed">已完成</b>
+          </div>
+          <div class="roadmap-item complete">
+            <span class="roadmap-line"></span>
+            <div>
+              <small>PHASE 02</small>
+              <h3 data-i18n="r2Title">Agent 初始化与诊断</h3>
+              <p data-i18n="r2Desc">premain、等待游戏实例和基础结构扫描。</p>
+            </div>
+            <b data-i18n="completed">已完成</b>
+          </div>
+          <div class="roadmap-item complete">
+            <span class="roadmap-line"></span>
+            <div>
+              <small>PHASE 03</small>
+              <h3 data-i18n="r3Title">DataBus 与玩家镜像概念验证</h3>
+              <p data-i18n="r3Desc">
+                验证 Rust TCP 消息路由、Fabric 玩家状态发布和 NeoForge RemotePlayer 镜像。
+              </p>
+            </div>
+            <b data-i18n="completed">已完成</b>
+          </div>
+          <div class="roadmap-item active">
+            <span class="roadmap-line"></span>
+            <div>
+              <small>PHASE 04</small>
+              <h3 data-i18n="r4Title">单向状态权威与发送方授权</h3>
+              <p data-i18n="r4Desc">
+                重打包 receiver-only Agent，在 Rust DataBus 拒绝 NeoForge 发布权威 player_move，并验证客户端不断连。
+              </p>
+            </div>
+            <b data-i18n="inProgress">开发中</b>
+          </div>
+          <div class="roadmap-item">
+            <span class="roadmap-line"></span>
+            <div>
+              <small>PHASE 05</small>
+              <h3 data-i18n="r5Title">同步稳定性与启动器重构</h3>
+              <p data-i18n="r5Desc">
+                完善实体生命周期、重连和协议校验，并继续重构 Rust 启动器与依赖处理。
+              </p>
+            </div>
+            <b data-i18n="planned">后续重点</b>
+          </div>
+        </div>
+      </section>
+
+      <section class="section stack-section">
+        <div class="section-heading">
+          <p class="overline">TECHNOLOGY</p>
+          <h2 data-i18n="stackTitle">技术栈</h2>
+        </div>
+        <div class="stack-grid">
+          <div><b>Rust</b><span>Core / JNI</span></div>
+          <div><b>Java 21</b><span>Instrumentation</span></div>
+          <div><b>Fabric Loader</b><span>0.19.5</span></div>
+          <div><b>Sponge Mixin</b><span>0.8.7</span></div>
+          <div><b>Minecraft</b><span>1.21.4</span></div>
+          <div><b>TCP</b><span>Local transport</span></div>
+        </div>
+      </section>
+
+      <section class="section start-section" id="start">
+        <div class="start-card">
+          <div>
+            <p class="overline">GET STARTED</p>
+            <h2 data-i18n="startTitle">从本地环境开始</h2>
+            <p data-i18n="startDesc">
+              以下命令以项目根目录为起点。请根据实际仓库地址和本地环境调整。
+            </p>
+          </div>
+          <div class="command-list">
+            <div>
+              <code>cd jvm-mod-combiner</code
+              ><button
+                class="copy-btn"
+                data-copy="cd jvm-mod-combiner"
+                data-i18n="copy"
+              >
+                复制
+              </button>
+            </div>
+            <div>
+              <code>cargo build</code
+              ><button
+                class="copy-btn"
+                data-copy="cargo build"
+                data-i18n="copy"
+              >
+                复制
+              </button>
+            </div>
+            <div>
+              <code>cargo run -- --mode fabric</code
+              ><button
+                class="copy-btn"
+                data-copy="cargo run -- --mode fabric"
+                data-i18n="copy"
+              >
+                复制
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <a class="brand" href="#top"
+        ><span class="brand-mark">&lt;/&gt;</span
+        ><span>JVM <b>Mod</b> Combiner</span></a
+      >
+      <p data-i18n="footerText">
+        独立技术研究项目 · Rust × JVM · Minecraft 1.21.4
+      </p>
+      <p class="donate" data-i18n="donate">
+        纯为爱发电，不接受任何形式的资助或捐赠。
+      </p>
+      <a
+        class="footer-github"
+        href="https://github.com/hchunhei81-cyber/jvm-mod-combiner"
+        target="_blank"
+        rel="noopener noreferrer"
+        data-i18n="viewSource"
+        >在 GitHub 上查看 ↗</a
+      >
+      <a href="#top" data-i18n="backTop">返回顶部 ↑</a>
+    </footer>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="main.js"></script>
+  </body>
+</html>

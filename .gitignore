@@ -49,10 +49,6 @@ backups/
 forge_1165_launch.sh
 neoforge_launch.sh
 
-# --  Local HTML documentation and generated web content ---
-# Generated HTML files and web content should not be versioned yet.
-html/
-
 # --- Tool metadata, local caches, and project-specific temporary files ---
 # Exclude generated metadata, command history, downloads, and helper scripts.
 .fabric/

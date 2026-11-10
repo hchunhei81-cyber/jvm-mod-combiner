@@ -1601,20 +1601,32 @@ fn start_data_bus() -> std::io::Result<()> {
                     let from = my_name.clone().unwrap_or_default();
 
                     // One-way authority policy:
-                    // Fabric is the only authoritative player-state publisher.
-                    // No other registered client may publish player_move.
+                    // Fabric is the only authoritative publisher of player
+                    // and Monster state messages.
                     let message_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
-                    if message_type == "player_move" && from != "fabric" {
+                    let fabric_only_message = matches!(
+                        message_type,
+                        "player_move" |
+                        "monster_spawn" |
+                        "monster_update" |
+                        "monster_remove"
+                    );
+
+                    if fabric_only_message && from != "fabric" {
                         println!(
-                            "[DataBus][REJECT] '{}' attempted to publish player_move",
-                            from
+                            "[DataBus][REJECT] '{}' attempted to publish {}",
+                            from,
+                            message_type
                         );
 
-                        let _ = tx.send(
-                            r#"{"error":"player_state_authority_violation","message_type":"player_move","authoritative_sender":"fabric"}"#
-                                .to_string(),
-                        );
+                        let rejection = serde_json::json!({
+                            "error": "state_authority_violation",
+                            "message_type": message_type,
+                            "authoritative_sender": "fabric"
+                        });
+
+                        let _ = tx.send(rejection.to_string());
 
                         continue;
                     }

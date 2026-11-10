@@ -27,7 +27,8 @@ final class MonsterSync {
     private static Method entitiesForRenderingMethod;
 
     private static Method getTypeMethod;
-    private static Method getTypeDescriptionMethod;
+    private static Method getRegistryKeyMethod;
+    private static Object entityTypeRegistry;
     private static Method getUuidMethod;
     private static Method getXMethod;
     private static Method getYMethod;
@@ -115,9 +116,23 @@ final class MonsterSync {
                 }
 
                 Object entityType = getTypeMethod.invoke(entity);
-                String type = String.valueOf(
-                    getTypeDescriptionMethod.invoke(entityType)
+
+                Object registryKey = getRegistryKeyMethod.invoke(
+                    entityTypeRegistry,
+                    entityType
                 );
+
+                if (registryKey == null) {
+                    continue;
+                }
+
+                String type = registryKey.toString();
+
+                if (!type.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) {
+                    throw new IllegalStateException(
+                        "Invalid entity registry key: " + type
+                    );
+                }
 
                 MobState state = new MobState(
                     uuid,
@@ -133,14 +148,32 @@ final class MonsterSync {
 
                 MobState old = previous.get(uuid);
 
-                if (old == null) {
-                    System.out.println(
-                        "[MonsterSync][FOUND] type=" + state.type +
-                        " uuid=" + state.uuid +
-                        " pos=" + state.position()
-                    );
-                } else if (!state.sameAs(old)) {
-                    changed++;
+                if (old == null || !state.sameAs(old)) {
+                    String messageType =
+                        old == null ? "monster_spawn" : "monster_update";
+
+                    if (BusAgent.sendFabricMonster(
+                        state.toJson(messageType)
+                    )) {
+                        previous.put(uuid, state);
+
+                        System.out.println(
+                            "[MonsterSync][" +
+                            (old == null ? "SPAWN" : "UPDATE") +
+                            "] type=" + state.type +
+                            " uuid=" + state.uuid +
+                            " pos=" + state.position()
+                        );
+                    } else {
+                        System.out.println(
+                            "[MonsterSync][SEND_PENDING] type=" +
+                            messageType + " uuid=" + uuid
+                        );
+                    }
+
+                    if (old != null) {
+                        changed++;
+                    }
                 }
 
                 current.put(uuid, state);
@@ -162,8 +195,8 @@ final class MonsterSync {
                 }
             }
 
-            previous.clear();
-            previous.putAll(current);
+            // Keep previous as the last successfully transmitted state.
+            // Missing from entitiesForRendering() is NOT a remove event.
 
             long now = System.currentTimeMillis();
 
@@ -237,8 +270,17 @@ final class MonsterSync {
         isRemovedMethod = entityClass.getMethod("dQ");
 
         Class<?> entityTypeClass = loader.loadClass("but");
-        getTypeDescriptionMethod =
-            entityTypeClass.getMethod("g");
+        Class<?> builtInRegistriesClass = loader.loadClass("mb");
+        Class<?> registryClass = loader.loadClass("jm");
+
+        entityTypeRegistry = builtInRegistriesClass
+            .getField("f")
+            .get(null);
+
+        getRegistryKeyMethod = registryClass.getMethod(
+            "b",
+            Object.class
+        );
 
         getHealthMethod = livingEntityClass.getMethod("eD");
         getMaxHealthMethod = livingEntityClass.getMethod("eS");
@@ -298,6 +340,33 @@ final class MonsterSync {
                 && Float.compare(pitch, other.pitch) == 0
                 && Float.compare(health, other.health) == 0
                 && Float.compare(maxHealth, other.maxHealth) == 0;
+        }
+
+        String toJson(String messageType) {
+            if (!Double.isFinite(x) ||
+                !Double.isFinite(y) ||
+                !Double.isFinite(z) ||
+                !Float.isFinite(yaw) ||
+                !Float.isFinite(pitch) ||
+                !Float.isFinite(health) ||
+                !Float.isFinite(maxHealth)) {
+                throw new IllegalStateException(
+                    "Non-finite monster state: " + uuid
+                );
+            }
+
+            return "{\"to\":\"neoforge\"," +
+                "\"type\":\"" + messageType + "\"," +
+                "\"uuid\":\"" + uuid + "\"," +
+                "\"entity_type\":\"" + type + "\"," +
+                "\"x\":" + Double.toString(x) + "," +
+                "\"y\":" + Double.toString(y) + "," +
+                "\"z\":" + Double.toString(z) + "," +
+                "\"yaw\":" + Float.toString(yaw) + "," +
+                "\"pitch\":" + Float.toString(pitch) + "," +
+                "\"health\":" + Float.toString(health) + "," +
+                "\"max_health\":" + Float.toString(maxHealth) +
+                "}";
         }
 
         String position() {

@@ -346,6 +346,38 @@ public class BusAgent {
         }
     }
 
+    static boolean sendFabricMonster(String json) {
+        if (!"fabric".equals(myName) ||
+            json == null ||
+            json.isEmpty()) {
+            return false;
+        }
+
+        synchronized (BusAgent.class) {
+            PrintWriter writer = out;
+
+            if (writer == null) {
+                return false;
+            }
+
+            writer.println(json);
+
+            if (writer.checkError()) {
+                System.err.println(
+                    "[BusAgent:fabric][MONSTER][SEND][ERROR] " +
+                    "TCP write failed"
+                );
+                return false;
+            }
+        }
+
+        System.out.println(
+            "[BusAgent:fabric][MONSTER][SEND] message written"
+        );
+
+        return true;
+    }
+
     static void sendFabricPlayer(
         double x,
         double y,

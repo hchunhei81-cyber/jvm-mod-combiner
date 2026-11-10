@@ -1,0 +1,528 @@
+{
+  "source": "main",
+  "generatedAt": "2026-11-10",
+  "commits": [
+    {
+      "sha": "acb08d3656b4bf27a42ada6550e1f2becce77a89",
+      "date": "2026-10-24T18:09:12+08:00",
+      "message": "milestone: Rust JVM kernel with sandbox ClassLoader isolation working",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "9e363fc23b8f9fe4ff4b7f04d17823ff725fcfa9",
+      "date": "2026-10-24T18:38:57+08:00",
+      "message": "milestone: successfully boot Minecraft 1.21.4 with Fabric Loader via Rust JNI",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "ca31ac16808315babf07d5df48bf4a6420995dea",
+      "date": "2026-10-24T18:41:35+08:00",
+      "message": "docs: update status - Fabric sandbox now boots Minecraft 1.21.4 main menu",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "116efda4a7b82fc53863f5afe20854b417b2e266",
+      "date": "2026-10-24T18:49:38+08:00",
+      "message": "feat: implement dynamic classpath resolution from version JSON",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "52b1e51c41d4074c9b43bb668d07b5e43ea06b83",
+      "date": "2026-10-24T23:07:28+08:00",
+      "message": "chore: backup before README rewrite (2026-10-24 23:07)",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "cb1a9c1f7e0e56ec33c9508d4a7da44c08e46926",
+      "date": "2026-10-24T23:08:59+08:00",
+      "message": "chore: re-commit all files snapshot (2026-10-24 23:08)",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "ef88a59d908f2f385f3b24c5a2c793a2f045aa79",
+      "date": "2026-10-24T23:10:00+08:00",
+      "message": "chore: re-commit all files snapshot (2026-10-24 23:10)",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "7f92d181b799ff517e775e629ce638076b126ed0",
+      "date": "2026-10-24T23:10:45+08:00",
+      "message": "fix the gotignore and readme",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "faa0ec498a2d89e101d8e0efbb9bcbf69d6ad7c3",
+      "date": "2026-10-24T23:14:49+08:00",
+      "message": "delete the .bak documnets",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "ffb4ecfc42744865170e398ee5e97f26463c034f",
+      "date": "2026-10-24T23:21:21+08:00",
+      "message": "remove logs file",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "aeec78d62ed09ba503e89ff998067f66afe98538",
+      "date": "2026-10-24T23:22:34+08:00",
+      "message": "remove logs file",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "1b717ff18151d4f288d1f4f3af18407bb7aef315",
+      "date": "2026-10-25T12:23:40+08:00",
+      "message": "chore: ignore copyrighted Minecraft files",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "d26084b6316049b53ebb90420821ed2ba784bf5b",
+      "date": "2026-10-25T12:25:20+08:00",
+      "message": "fixed .gitignore",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "b001e8780734415beb8d4df2f20224fcc9b6b46c",
+      "date": "2026-10-25T12:28:12+08:00",
+      "message": "fix gitignore again",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "8488dff4334fedc63c743050d668a1ddb06e849c",
+      "date": "2026-10-25T17:08:02+08:00",
+      "message": "docs: update README and README.zh.md with latest Fabric and Forge progress",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "b7b91be0bfe4eb78237ec7ef567a41d8e601314a",
+      "date": "2026-10-25T17:08:27+08:00",
+      "message": "docs: update README and README.zh.md with latest Fabric and Forge progress",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "4760553049bab26cdcbbceec1bdb97d6e54e2e50",
+      "date": "2026-10-25T22:08:34+08:00",
+      "message": "chore: 更新 .gitignore，忽略 Rust 编译产物、沙盒临时文件和日志",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "7ce5d86c19307737d288ba10c6d6840c9e18b2d5",
+      "date": "2026-10-25T22:08:48+08:00",
+      "message": "feat: 实现基于 Rust Subprocess 的 Fabric/NeoForge 沙盒启动逻辑，支持动态 Classpath 拼装",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "8ec75daf7c2695d5de67ead7d323e5d37e55f7a1",
+      "date": "2026-10-25T22:14:36+08:00",
+      "message": "docs: 更新中英文 README（加入 NeoForge 成功截图），新增踩坑记录与路线图",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "7f455f79fb79ecd9985614dfdbe752ca50da9f23",
+      "date": "2026-10-25T22:14:48+08:00",
+      "message": "chore: 忽略本地测试脚本、DS_Store 和自动解压的 natives 目录",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "ef099700192231bc154653c58c161c3e3a76c952",
+      "date": "2026-10-25T22:15:19+08:00",
+      "message": "chore: 彻底移除已被追踪的 .DS_Store 文件",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "641b533e20608704867b08f2cf75e4113932ceab",
+      "date": "2026-10-25T22:27:44+08:00",
+      "message": "add dual launcha and fix bugs and fix the readme",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "26493c2227ed9617aecebe39de4e6ca41848816c",
+      "date": "2026-10-25T22:30:55+08:00",
+      "message": "docs: 添加双沙盒并行启动的实机截图证明",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "390968f073b0a03f44d04cc48d01d608d43cb950",
+      "date": "2026-10-25T22:35:14+08:00",
+      "message": "实现跨沙盒数据总线，完成 Fabric/NeoForge 双开通讯测试",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "b29cc99adb6ebf8978521256bad64aa8f6e4de51",
+      "date": "2026-10-25T22:51:19+08:00",
+      "message": "complete cross-sandbox IPC routing milestone",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "5e9bc14200a0413139fcacbf368c705d908d4067",
+      "date": "2026-10-25T23:13:04+08:00",
+      "message": "Update issue templates",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "8fd111569518db37de193a035b7e47853f69dafb",
+      "date": "2026-10-25T23:16:19+08:00",
+      "message": "chore: add github issue templates for bug reports and feature requests\"",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "ccb8fddc6115f622dc093a3e904d3fe93f267a12",
+      "date": "2026-10-26T14:57:59+08:00",
+      "message": "Rename project from 'Mod Fusion' to 'Mod Combiner'",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "54f48bd00e51fbd584c1b24e89f96a5d4d124160",
+      "date": "2026-10-26T16:54:37+08:00",
+      "message": "Runtime Bytecode Instrumentation",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "d1f4d4e7c4d90f70f578882035497a0143d4be00",
+      "date": "2026-10-26T17:28:32+08:00",
+      "message": "跨沙盒运行时状态同步（Proof of Concept）**：Fabric 沙盒通过反射绕过混淆提取玩家实时坐标，通过 Rust TCP 总线广播。NeoForge 沙盒成功接收并打印同步状态。这证明了跨物理隔离 JVM 进行实时数据层交汇的可行性。",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "0986db13595606bcdffe7d63afb7fb4661896bd7",
+      "date": "2026-10-26T17:43:14+08:00",
+      "message": "feat: achieve real-time cross-sandbox state synchronization via Rust bus",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "8b511d0e357b08c492abbb937a18c1dac2349527",
+      "date": "2026-10-26T20:03:46+08:00",
+      "message": "Delete saves/New World directory",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "55c22f2dc2d2e3a7c6699fd1a3a429752e6d5825",
+      "date": "2026-10-26T20:11:44+08:00",
+      "message": "feat: achieve real-time cross-sandbox state synchronization (F3 verified)",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "f31656907659e0f1756d4b441e3d67f67453594d",
+      "date": "2026-10-27T19:34:05+08:00",
+      "message": "Update README with project status note",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "4499b6240ff99bf7dabd5a7ddb43731918f160ca",
+      "date": "2026-10-27T19:34:58+08:00",
+      "message": "Update project status in README",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "ba15fbe01c84717a3c2a44b7ca1640448f5cf3ec",
+      "date": "2026-10-27T19:35:29+08:00",
+      "message": "Update README with project suspension notice",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "09b2543b5be160830fa0fb970c141381dcc658fb",
+      "date": "2026-10-27T20:21:44+08:00",
+      "message": "Update completed tasks in TODO.md",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "33be050780fea0a603c28bee299f44ad8389a46b",
+      "date": "2026-10-28T07:29:22+08:00",
+      "message": "Add SOLVE.md with architectural challenges and solutions",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "a48ba758de824d41423feac6e5c7afe1ac8420da",
+      "date": "2026-10-28T18:49:39+08:00",
+      "message": "feat: cross-sandbox RemotePlayer mirroring",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "d84ef45323fe783a7068c87b4a62b5d15a3575e7",
+      "date": "2026-10-29T00:36:05Z",
+      "message": "Update LICENSE with project and license information",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "b989e06db1f8b7154ecd13ede17d33c75d50c1d1",
+      "date": "2026-10-29T11:24:06+08:00",
+      "message": "Delete .fabric directory",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "7ffbd646180ffb982f5cd87d345ce4b2e527cb87",
+      "date": "2026-10-29T11:27:46+08:00",
+      "message": "Delete downloads directory",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "9cbcb5a413b43cd474203ffa288ae618800ba505",
+      "date": "2026-10-29T12:15:32+08:00",
+      "message": "Update README.md",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "321557261aee2b94f03f30e59bbdfcadb3e06554",
+      "date": "2026-10-29T12:16:37+08:00",
+      "message": "Update README.md",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "b96ed56a2a9447131fd6426826be4735f21210cd",
+      "date": "2026-11-01T23:25:32+08:00",
+      "message": "Update readme and .gitignore",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "6c5600c056b8554bd8f1bb4a3a72fa92fac7d491",
+      "date": "2026-11-01T23:26:22+08:00",
+      "message": "fix the stability of bus agent and some of the bugs and also adding more featuers",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "5beb905d93f1c113b2fc89f6e40c2d01aae7efd8",
+      "date": "2026-11-02T13:27:05+08:00",
+      "message": "Refactor code structure for improved readability and maintainability",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "9f59d0cd9482b1b72c99f0dc081b720195e466e7",
+      "date": "2026-11-02T13:27:38+08:00",
+      "message": "After days of debugs, we finally make forge to possible(1.21.4)",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "8838a74d7d6e59bb0d9080a127dbe23586dffc7d",
+      "date": "2026-11-02T13:34:46+08:00",
+      "message": "Remove unused imports and refactor connection structure in data bus",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "ce20ed0251e9579fed291210e5b1b4bed8aedc12",
+      "date": "2026-11-02T15:51:35+08:00",
+      "message": "Update .gitignore to include new fix scripts and remove usercache.json",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "dc5b3ac4faa538a452cfaa2e70a0cfcd79f82d16",
+      "date": "2026-11-02T15:52:06+08:00",
+      "message": "currently still fixing the synchorisations...",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "8ffadadbb585eb47cb4f5baf4c60e47e79d5ccf4",
+      "date": "2026-11-02T15:56:30+08:00",
+      "message": "Update .gitignore to categorize additional files and maintain organization",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "7d30001dbb376b86bbb78f7f344ddae9f4b41d61",
+      "date": "2026-11-02T19:31:52+08:00",
+      "message": "Update problems.md",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "12d0f4e0d320a62531fc4951e5ee278cd6071f83",
+      "date": "2026-11-02T19:34:51+08:00",
+      "message": "Revise ModLauncher and Bootstrap troubleshooting steps",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "dd065f4751c884fc13e19cf8307c526cb5cb403b",
+      "date": "2026-11-03T17:45:21+08:00",
+      "message": "I accidently broke the bus-agent(idk how) but its fix now :) so lucky",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "4264f47191dc801202beebb8c39278d25341e5af",
+      "date": "2026-11-06T15:07:50+08:00",
+      "message": "Update .gitignore to include 'html/' directory",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "a02bec013a3b852ca51340b690b364b0a1981caa",
+      "date": "2026-11-06T18:57:04+08:00",
+      "message": "Refactor BusAgent to improve socket handling and method binding for Minecraft player data",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "7745d705863596dedd41d456d2fad47dfcb9adbc",
+      "date": "2026-11-06T22:18:09+08:00",
+      "message": "spell \"fabric \"wrong:(",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "fdff4f126428debab99f3b7ff9817e8beb9e7148",
+      "date": "2026-11-09T13:19:16+08:00",
+      "message": "Refactor all markdowns into English and update the process",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "c2500ad78cc7c264e8d59ed05e36c4b46d8171fc",
+      "date": "2026-11-09T13:19:22+08:00",
+      "message": "Add NeoForge player monitoring and enhance error handling in BusAgent",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "c308cdf8b626544ddbf8f312f668e10fdca2ff22",
+      "date": "2026-11-09T13:22:13+08:00",
+      "message": "Fix formatting issue in problems.md by adding a newline at the end of the file",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "9371db2d6d2db8c2362b1f1452c578fbe0a68041",
+      "date": "2026-11-09T14:18:15+08:00",
+      "message": "Refactor player-state synchronization to enforce one-way authority model and improve NeoForge lifecycle management",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "27f69a711a6716749e68d843d00bec3a002abb0b",
+      "date": "2026-11-09T14:36:23+08:00",
+      "message": "Refactor BusAgent to remove NeoForge player methods and enforce one-way authority for player state publishing",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "328f67463d7570e532dd2710def2f9935d9931a0",
+      "date": "2026-11-09T15:04:41+08:00",
+      "message": "Add MonsterSync class for hostile mob discovery and sampling",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "a778731819f6a4d644b82ee7a920f4d18d9cca66",
+      "date": "2026-11-09T15:22:17+08:00",
+      "message": "Refactor BusAgent to implement a state management system for method binding and enhance connection registration in the data bus",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "f8ce3b877b3af92aa5a15c7df1e5e5bc672b2c8c",
+      "date": "2026-11-09T15:30:59+08:00",
+      "message": "Update .gitignore to improve clarity and organization of ignored files",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "b54ce081dffb957a7dc03f571ca2295dcf6d93a7",
+      "date": "2026-11-09T07:55:19Z",
+      "message": "Update links to point to jvm-mod-combiner",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "89d0971a0ea12dc6c186c616d6e0fbe5ad506442",
+      "date": "2026-11-09T07:56:21Z",
+      "message": "Update links to reflect project name change",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "789234e5ade4c31829aa496bb51ab963aaa306e6",
+      "date": "2026-11-09T20:55:23+08:00",
+      "message": "Convert bug report template to YAML format",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "969c40b1a59cf74ee80c9d5d379d80c7fe92e5ee",
+      "date": "2026-11-09T20:56:27+08:00",
+      "message": "Convert feature request template to YAML format",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "00ef85ac3996d0ba9c92ab6953acd7d8c92bbf1c",
+      "date": "2026-11-09T21:01:26+08:00",
+      "message": "Add stale.yml for automatic issue and PR management",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "474ed4652c8a168b59f7036650a3b3cd552a1fc5",
+      "date": "2026-11-09T21:02:37+08:00",
+      "message": "Add auto-labeling rules for various file types",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "c49ac8882b44d6af0660dd58f4696c2f4d8d976d",
+      "date": "2026-11-09T21:03:21+08:00",
+      "message": "Add GitHub Actions workflow for auto-labeling PRs",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "0c8b7203e84ded40de24219a89618abea7642879",
+      "date": "2026-11-09T21:04:29+08:00",
+      "message": "Create auto-assign.yml",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "9fcacf71f412997b287eed05cd71bd796a53f1f7",
+      "date": "2026-11-09T21:13:03+08:00",
+      "message": "Add Dependabot configuration for Rust and GitHub Actions",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "7e2810881f68f7c3a1aefeeac5cf674aa296053b",
+      "date": "2026-11-10T12:06:01+08:00",
+      "message": "feat: add development roadmap and architectural challenges for JVM Mod Combiner",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "39c740a4b44078b9b735ff0127bee3b1eb06b3bb",
+      "date": "2026-11-10T14:17:19+08:00",
+      "message": "update image paths",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "ac16e7b47b941da30aa0980462bd435ae99d7264",
+      "date": "2026-11-10T14:18:48+08:00",
+      "message": "feat: implement fabric monster messaging and enhance authority checks in data bus",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "1662c4f0008c2e5712947264471a13ff003658c8",
+      "date": "2026-11-10T14:30:24+08:00",
+      "message": "remove .sh files(no need)",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "bc1a6cbd2ca6591c9010518bc6886bd8bd516741",
+      "date": "2026-11-10T14:31:13+08:00",
+      "message": "chore: remove obsolete fix scripts from .gitignore",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "66ddd4473c1ab01733dd7c85aa1866dff62edcf2",
+      "date": "2026-11-10T14:36:39+08:00",
+      "message": "I am back!",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "ea181f45e830094f08b8a0926a0712387a788fb0",
+      "date": "2026-11-10T14:41:57+08:00",
+      "message": "docs: update project descriptions in README files for clarity and focus",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "8b914abb9d12bfa3aca7fb4e2a217fa5d4f183da",
+      "date": "2026-11-10T15:19:17+08:00",
+      "message": "Add initial CSS styles for dark and light themes, layout, and components",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "3aacba64804bd6e0e80827fd5afa380c94ffbd5e",
+      "date": "2026-11-10T15:24:55+08:00",
+      "message": "Add initial CSS styles for dark and light themes, layout, and components",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "f146f27a5f9402bcd22ea989a1be7a2e5120f33a",
+      "date": "2026-11-10T17:34:04+08:00",
+      "message": "feat: enhance BusAgent and MonsterSync for Minecraft 1.21.4 compatibility and improve classpath resolution",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "f2171ad4e260e23f6848c4794dd1cf5b940b5f6f",
+      "date": "2026-11-10T18:03:33+08:00",
+      "message": "feat: integrate loader detection and DataBus agent registration",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "e212414e7dc8bad0f03319c7f6216827b36301e5",
+      "date": "2026-11-10T18:30:05+08:00",
+      "message": "Add documentation for problems and solutions, enhance styles, and update TODO list",
+      "author": "hchunhei81-cyber"
+    }
+  ]
+}

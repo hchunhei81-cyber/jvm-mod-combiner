@@ -8,6 +8,7 @@
       overview: "Overview",
       problems: "Problems & solutions",
       todo: "TODO",
+      progress: "Progress",
       github: "GitHub ↗",
       languageLabel: "Language",
       themeLabel: "Toggle theme",
@@ -24,6 +25,7 @@
       overview: "项目概览",
       problems: "问题与解决方案",
       todo: "待办事项",
+      progress: "最新进展",
       github: "GitHub ↗",
       languageLabel: "语言",
       themeLabel: "切换主题",
@@ -37,6 +39,114 @@
   };
 
   const translations = {
+    progress: {
+      en: {
+        documentTitle: "Project Progress — JVM Mod Combiner",
+        metaDescription:
+          "Current JVM Mod Combiner progress, implementation status, and latest source update.",
+        eyebrow: "PROJECT STATUS",
+        pageTitle: "Progress & latest update",
+        pageIntro:
+          "A source-based snapshot of verified work, current implementation, and the next validation steps.",
+        latestStatus: "LATEST UPDATE · 2026-11-10",
+        latestTitle: "Hostile-mob mirror pipeline added in the working tree",
+        latestText:
+          "The current Java sources add NeoForge handling for Fabric monster spawn/update messages, entity mirrors, and an ACK/retry path. The Rust DataBus continues to restrict protected state messages to the registered Fabric name.",
+        branchLabel: "Main-branch context:",
+        branchText:
+          "The checked main history includes loader detection/DataBus registration (f2171ad), Minecraft 1.21.4 Agent/classpath work (f146f27), and the documentation refresh (e212414). The Java mob-mirror additions described here are uncommitted working-tree edits, not changes recorded in main.",
+        verifyLabel: "Verification status:",
+        verifyText:
+          "These Java additions are source-level implementation only. The packaged Agent must be rebuilt from the current sources, then tested in the live Fabric/NeoForge setup. Monster removal is not implemented; do not treat mob synchronization as complete.",
+        doneStatus: "Verified foundation",
+        doneTitle: "Capabilities already established",
+        doneIntro:
+          "Previously verified prototype milestones remain separate from the newest untested source work.",
+        done1: "Rust/JNI launcher and Java Agent initialization",
+        done2: "Fabric and NeoForge startup experiments, plus experimental Forge startup",
+        done3: "Rust TCP DataBus registration and JSON routing",
+        done4: "Fabric-to-NeoForge player-state and RemotePlayer proof of concept",
+        workStatus: "In current source · runtime test pending",
+        workTitle: "Working-tree implementation",
+        workIntro:
+          "These changes are present in the current bus_test source, but are not yet in the main-branch history.",
+        work1:
+          "NeoForge parses monster_spawn/monster_update, creates or updates mirrors, and clears mob mirrors when a world change is observed.",
+        work2:
+          "NeoForge sends monster_ack after applying a message; Fabric tracks pending sequence-numbered states and retries until acknowledged.",
+        work3:
+          "The existing Rust policy rejects non-Fabric player/monster state messages, but registration names are self-asserted and are not authenticated identities.",
+        nextStatus: "Next steps",
+        nextTitle: "Build, test, then complete lifecycle",
+        next1: "Rebuild/package the Java Agent from current source and confirm the JAR contains the latest code.",
+        next2: "Runtime-test normal player and mob delivery, unauthorized rejection, no forwarding, and connection continuity.",
+        next3: "Test monster ACK/retry behavior, world changes, disconnects, and reconnect recovery.",
+        next4: "Design and publish reliable monster_remove events; absence from the sampled render list is not proof of despawn.",
+        next5: "Validate or otherwise constrain DataBus registration names.",
+        scopeLabel: "Scope:",
+        scopeText:
+          "A source implementation or successful launcher startup is not end-to-end verification or general cross-loader mod compatibility.",
+        roadmapLink: "Development roadmap (TODO.md)",
+        problemsLink: "Problems & solutions",
+        architectureLink: "Proposed architecture (solve.md)",
+        rustLink: "Rust DataBus source",
+        agentLink: "Java Agent source",
+        mobLink: "MonsterSync source",
+        footerText: "Experimental research project · Rust × JVM · Minecraft 1.21.4",
+        footerLink: "Development TODO →",
+      },
+      zh: {
+        documentTitle: "项目进展 — JVM Mod Combiner",
+        metaDescription: "JVM Mod Combiner 当前进度、实现状态与最新源码更新。",
+        eyebrow: "项目状态",
+        pageTitle: "项目进度与最新更新",
+        pageIntro: "基于源码整理已验证成果、当前实现和下一步验证工作。",
+        latestStatus: "最新更新 · 2026-11-10",
+        latestTitle: "工作区新增敌对生物镜像链路",
+        latestText:
+          "当前 Java 源码新增 NeoForge 对 Fabric 怪物生成/更新消息的处理、实体镜像以及 ACK/重试流程。Rust DataBus 仍将受保护状态消息限制为已注册的 Fabric 名称。",
+        branchLabel: "main 分支记录：",
+        branchText:
+          "当前 main 历史包括加载器检测与 DataBus 注册（f2171ad）、Minecraft 1.21.4 Agent/类路径工作（f146f27）以及文档更新（e212414）。此处描述的 Java 怪物镜像改动尚未提交到 main，仍是工作区修改。",
+        verifyLabel: "验证状态：",
+        verifyText:
+          "这些 Java 改动目前仅有源码实现。需要从当前源码重新打包 Agent，并在 Fabric/NeoForge 环境中运行测试。怪物移除尚未实现，因此不能视为完整怪物同步。",
+        doneStatus: "已验证基础",
+        doneTitle: "已建立的能力",
+        doneIntro: "此前验证的原型里程碑与最新的未验证源码工作分开记录。",
+        done1: "Rust/JNI 启动器与 Java Agent 初始化",
+        done2: "Fabric 与 NeoForge 启动实验，以及 Forge 实验性启动",
+        done3: "Rust TCP DataBus 注册与 JSON 路由",
+        done4: "Fabric 到 NeoForge 玩家状态与 RemotePlayer 概念验证",
+        workStatus: "当前源码 · 待运行时测试",
+        workTitle: "工作区实现",
+        workIntro: "这些改动存在于当前 bus_test 源码中，但尚未进入 main 分支历史。",
+        work1:
+          "NeoForge 解析 monster_spawn/monster_update，创建或更新镜像，并在检测到世界变化时清理怪物镜像。",
+        work2:
+          "NeoForge 应用消息后发送 monster_ack；Fabric 跟踪带序列号的待确认状态，并在收到确认前重试。",
+        work3:
+          "现有 Rust 策略会拒绝非 Fabric 的玩家/怪物状态消息，但注册名由客户端自行声明，并非认证身份。",
+        nextStatus: "下一步",
+        nextTitle: "先打包和测试，再补齐生命周期",
+        next1: "从当前源码重新构建/打包 Java Agent，并确认 JAR 包含最新代码。",
+        next2: "运行时测试正常的玩家/怪物消息传递、未授权拒绝、不转发以及连接保持。",
+        next3: "测试怪物 ACK/重试、世界切换、断开和重连恢复。",
+        next4: "设计并发布可靠的 monster_remove 事件；采样渲染列表中缺失并不能证明实体已消失。",
+        next5: "校验或以其他方式限制 DataBus 注册名称。",
+        scopeLabel: "范围说明：",
+        scopeText:
+          "源码实现或成功启动加载器不等于端到端验证，也不代表通用跨加载器模组兼容。",
+        roadmapLink: "开发路线图（TODO.md）",
+        problemsLink: "问题与解决方案",
+        architectureLink: "架构方案（solve.md）",
+        rustLink: "Rust DataBus 源码",
+        agentLink: "Java Agent 源码",
+        mobLink: "MonsterSync 源码",
+        footerText: "实验性研究项目 · Rust × JVM · Minecraft 1.21.4",
+        footerLink: "开发待办 →",
+      },
+    },
     problems: {
       en: {
         documentTitle: "Problems & Solutions — JVM Mod Combiner",
@@ -73,12 +183,12 @@
           "Fabric is the sole publisher for protected player/monster state types. Rust checks the connection's registered name and returns <code>state_authority_violation</code> without routing the rejected message or closing the connection.",
         p4Remaining:
           "<strong>Remaining:</strong> Runtime-test the behavior and constrain registration. The first message's registration name is client-supplied, so it is a routing label—not authenticated proof of which process connected. Rebuild/package the Java Agent from <code>bus_test/</code>.",
-        p5Status: "Early source prototype",
+        p5Status: "Working-tree source · runtime pending",
         p5Title: "Hostile-mob synchronization",
         p5Text:
-          "<code>bus_test/MonsterSync.java</code> samples visible, living hostile Fabric mobs by UUID on the game thread and emits <code>monster_spawn</code> and changed-state <code>monster_update</code> messages.",
+          "<code>bus_test/MonsterSync.java</code> samples visible, living hostile Fabric mobs on the game thread and emits <code>monster_spawn</code>/<code>monster_update</code>. Current working-tree <code>BusAgent.java</code> handles those messages in NeoForge, creates/updates mirrors, and uses sequence-based ACK/retry.",
         p5Incomplete:
-          "<strong>Incomplete:</strong> Missing-from-render iteration is not treated as removal; <code>monster_remove</code> is not published, and the NeoForge Agent currently handles only <code>player_move</code>. No end-to-end monster mirror is implemented.",
+          "<strong>Incomplete:</strong> These Java changes are not yet in the checked-in main history or runtime-verified. Missing-from-render iteration is not treated as removal, and <code>monster_remove</code> is not published.",
         p6Status: "Stability work remains",
         p6Title: "Mirror identity and recovery",
         p6Text:
@@ -142,12 +252,12 @@
           "Fabric 是受保护玩家/怪物状态消息的唯一发布方。Rust 根据连接注册名检查消息，并返回 <code>state_authority_violation</code>；拒绝时不转发消息，也不关闭连接。",
         p4Remaining:
           "<strong>待完成：</strong> 运行时测试并限制注册行为。首条注册消息中的名称由客户端提供，只是路由标签，不能证明连接进程的真实身份。需要从 <code>bus_test/</code> 重新构建并打包 Java Agent。",
-        p5Status: "早期源码原型",
+        p5Status: "工作区源码 · 待运行时测试",
         p5Title: "敌对生物同步",
         p5Text:
-          "<code>bus_test/MonsterSync.java</code> 在游戏线程按 UUID 采样可见且存活的 Fabric 敌对生物，并发送 <code>monster_spawn</code> 与状态变化后的 <code>monster_update</code> 消息。",
+          "<code>bus_test/MonsterSync.java</code> 在游戏线程按 UUID 采样可见且存活的 Fabric 敌对生物，并发送 <code>monster_spawn</code>/<code>monster_update</code>。当前工作区 <code>BusAgent.java</code> 已在 NeoForge 处理这些消息、创建/更新镜像，并使用序列号 ACK/重试。",
         p5Incomplete:
-          "<strong>尚未完成：</strong> 生物不在渲染列表中不会被当作已移除；目前不会发布 <code>monster_remove</code>，NeoForge Agent 也只处理 <code>player_move</code>。尚无端到端的怪物镜像。",
+          "<strong>尚未完成：</strong> 这些 Java 改动尚未进入 main 历史，也未经过运行时验证。渲染列表中缺失不会被当作已移除，目前也不会发布 <code>monster_remove</code>。",
         p6Status: "仍需稳定化",
         p6Title: "镜像身份与恢复",
         p6Text:
@@ -211,14 +321,15 @@
         authority4: "Runtime-test rejection, no forwarding, and sender connection continuity",
         authority5: "Verify Fabric delivery using the packaged Agent",
         authority6: "Test reconnect and fresh authoritative state transmission",
-        mobStatus: "Early source prototype",
+        mobStatus: "Working-tree source · runtime pending",
         mobTitle: "Complete hostile-mob synchronization",
         mobIntro:
-          "bus_test/MonsterSync.java samples hostile Fabric mobs on the game thread at up to 5 Hz and emits initial/change messages. No NeoForge monster receiver is currently implemented.",
+          "bus_test/MonsterSync.java samples hostile Fabric mobs on the game thread at up to 5 Hz. Current working-tree BusAgent.java parses spawn/update messages, mirrors entities, and uses sequence-based ACK/retry; these changes still need packaging and runtime tests.",
         mob1: "Fabric-side mob discovery and state sampling by UUID",
         mob2: "Detect and publish mob removals",
-        mob3: "Parse and apply monster messages in NeoForge",
-        mob4: "Test mirror lifecycle, world transitions, and reconnects",
+        mob3: "NeoForge spawn/update parsing and mirror application (source implemented)",
+        mob4: "Sequence-based monster ACK/retry path (source implemented)",
+        mob5: "Runtime-test mirror lifecycle, world transitions, ACK/retries, and reconnects",
         laterStatus: "Following priorities",
         laterTitle: "Stabilize, then expand",
         later1: "Stable remote-player identity, collision-safe IDs, and duplicate prevention",
@@ -268,14 +379,15 @@
         authority4: "运行时测试拒绝、不转发以及发送端连接保持",
         authority5: "使用打包后的 Agent 验证 Fabric 消息送达",
         authority6: "测试重连和最新权威状态传输",
-        mobStatus: "早期源码原型",
+        mobStatus: "工作区源码 · 待运行时测试",
         mobTitle: "完成敌对生物同步",
         mobIntro:
-          "bus_test/MonsterSync.java 在游戏线程以最高 5 Hz 采样 Fabric 敌对生物并发送初始/变化消息。目前尚未实现 NeoForge 怪物接收端。",
+          "bus_test/MonsterSync.java 在游戏线程以最高 5 Hz 采样 Fabric 敌对生物。当前工作区 BusAgent.java 已加入生成/更新消息解析、实体镜像及带序列号的 ACK/重试；仍需打包并运行时测试。",
         mob1: "Fabric 端按 UUID 发现并采样生物状态",
         mob2: "检测并发布生物移除事件",
-        mob3: "在 NeoForge 解析和应用怪物消息",
-        mob4: "测试镜像生命周期、世界切换和重连",
+        mob3: "NeoForge 生成/更新解析与镜像应用（源码已实现）",
+        mob4: "带序列号的怪物 ACK/重试路径（源码已实现）",
+        mob5: "运行时测试镜像生命周期、世界切换、ACK/重试和重连",
         laterStatus: "后续优先事项",
         laterTitle: "先稳定，再扩展",
         later1: "稳定远程玩家身份、防止实体 ID 冲突和重复实体",

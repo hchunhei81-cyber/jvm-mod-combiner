@@ -1178,3 +1178,401 @@ button {
     transition-duration: 0.01ms !important;
   }
 }
+.timeline-panel {
+  max-width: 1080px;
+  margin: 0 auto 34px;
+  padding: clamp(20px, 4vw, 38px);
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background:
+    radial-gradient(
+      circle at 90% 0,
+      color-mix(in srgb, var(--accent) 10%, transparent),
+      transparent 30%
+    ),
+    var(--panel);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.12);
+}
+.timeline-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+.timeline-heading h2 {
+  margin: 2px 0 8px;
+  font-size: clamp(24px, 4vw, 34px);
+  letter-spacing: -0.04em;
+}
+.timeline-heading > div:first-child > p:last-child {
+  max-width: 650px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.timeline-actions {
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+}
+.timeline-source {
+  color: var(--muted);
+  font: 11px/1.5 var(--mono);
+  text-align: right;
+}
+.timeline-source.is-live {
+  color: var(--accent);
+}
+.timeline-source.is-fallback {
+  max-width: 320px;
+  color: #fbbf24;
+}
+.timeline-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 26px 0 22px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--border);
+}
+.timeline-stats > div {
+  display: grid;
+  gap: 4px;
+  padding: 14px 18px;
+  background: var(--panel-solid);
+}
+.timeline-stats span,
+.timeline-search > span,
+.timeline-year > span,
+.timeline-range > label {
+  color: var(--muted);
+  font-size: 11px;
+}
+.timeline-stats strong {
+  font: 600 15px var(--mono);
+  overflow-wrap: anywhere;
+}
+.timeline-controls {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) minmax(130px, 190px) auto;
+  align-items: end;
+  gap: 12px;
+}
+.timeline-search,
+.timeline-year {
+  display: grid;
+  gap: 6px;
+}
+.timeline-search input,
+.timeline-year select {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  outline: none;
+  background: var(--panel-solid);
+  color: var(--text);
+}
+.timeline-search input:focus,
+.timeline-year select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.timeline-jumps {
+  display: flex;
+  gap: 7px;
+}
+.timeline-jump {
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-solid);
+  color: var(--text);
+  cursor: pointer;
+}
+.timeline-jump:hover,
+.timeline-jump:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.timeline-range {
+  margin: 22px 0 14px;
+}
+.timeline-range > label {
+  display: block;
+  margin-bottom: 5px;
+}
+.timeline-range input {
+  width: 100%;
+  margin: 5px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.timeline-range-meta {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+.timeline-range-meta output {
+  color: var(--text);
+}
+.timeline-focus {
+  display: grid;
+  grid-template-columns: minmax(110px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel-solid));
+}
+.timeline-focus-label {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+.timeline-focus > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.timeline-focus strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.timeline-focus > div span {
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+.timeline-focus > a {
+  color: var(--accent);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.timeline-focus > a:hover {
+  text-decoration: underline;
+}
+.timeline-empty {
+  margin: 24px 0;
+  color: var(--muted);
+  text-align: center;
+}
+.commit-timeline {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  max-height: 940px;
+  margin: 24px 0 0;
+  padding: 0 5px 0 26px;
+  overflow: auto;
+  list-style: none;
+  scrollbar-color: var(--border) transparent;
+}
+.commit-timeline::before {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 9px;
+  width: 1px;
+  background: linear-gradient(var(--accent), var(--border) 45%, var(--accent));
+  content: "";
+}
+.timeline-year-heading {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 5px 0 4px;
+  background: var(--panel-solid);
+  color: var(--accent);
+  font: 700 13px var(--mono);
+}
+.commit-item {
+  position: relative;
+  min-width: 0;
+}
+.commit-item::before {
+  position: absolute;
+  top: 17px;
+  left: -21px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: var(--panel-solid);
+  content: "";
+  transition:
+    transform 0.18s,
+    background 0.18s,
+    box-shadow 0.18s;
+}
+.commit-item.is-selected::before {
+  transform: scale(1.35);
+  background: var(--accent);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.commit-details {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-solid) 82%, transparent);
+  transition:
+    border-color 0.18s,
+    transform 0.18s;
+}
+.commit-item.is-selected .commit-details {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+.commit-details > summary {
+  display: grid;
+  grid-template-columns: minmax(108px, auto) auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+.commit-details > summary::-webkit-details-marker {
+  display: none;
+}
+.commit-date {
+  color: var(--muted);
+  font: 10px var(--mono);
+  white-space: nowrap;
+}
+.commit-kind {
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--blue);
+  font: 9px var(--mono);
+  white-space: nowrap;
+}
+.commit-kind.feat,
+.commit-kind.milestone {
+  color: var(--accent);
+}
+.commit-kind.fix {
+  color: #fbbf24;
+}
+.commit-kind.docs {
+  color: var(--purple);
+}
+.commit-subject {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.commit-sha {
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+.commit-extra {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 0 14px 14px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.commit-extra code {
+  font: 10px var(--mono);
+  overflow-wrap: anywhere;
+}
+.commit-extra a {
+  color: var(--accent);
+  white-space: nowrap;
+}
+.timeline-footnote {
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: center;
+}
+@media (max-width: 720px) {
+  .timeline-heading {
+    display: grid;
+  }
+  .timeline-actions {
+    justify-items: start;
+  }
+  .timeline-source {
+    text-align: left;
+  }
+  .timeline-controls {
+    grid-template-columns: 1fr 130px;
+  }
+  .timeline-jumps {
+    grid-column: 1 / -1;
+  }
+  .timeline-focus {
+    grid-template-columns: 1fr auto;
+  }
+  .timeline-focus-label {
+    grid-column: 1 / -1;
+  }
+  .commit-details > summary {
+    grid-template-columns: 1fr auto;
+    gap: 7px 10px;
+  }
+  .commit-date {
+    grid-column: 1;
+  }
+  .commit-kind {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .commit-subject {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .commit-sha {
+    grid-column: 2;
+    grid-row: 2;
+  }
+}
+@media (max-width: 480px) {
+  .nav {
+    gap: 8px;
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+  .nav .brand {
+    gap: 7px;
+    font-size: 13px;
+  }
+  .nav-tools select {
+    max-width: 72px;
+    padding: 7px 6px;
+  }
+  .timeline-panel {
+    padding: 18px 14px;
+  }
+  .timeline-stats {
+    grid-template-columns: 1fr;
+  }
+  .timeline-stats > div {
+    grid-template-columns: 1fr auto;
+    align-items: baseline;
+  }
+  .timeline-controls {
+    grid-template-columns: 1fr;
+  }
+  .timeline-year,
+  .timeline-jumps {
+    grid-column: auto;
+  }
+  .timeline-focus {
+    grid-template-columns: 1fr;
+  }
+  .timeline-focus-label {
+    grid-column: auto;
+  }
+}

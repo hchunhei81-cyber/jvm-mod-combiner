@@ -8,6 +8,7 @@
       navArchitecture: "架构",
       navDemo: "终端",
       navRoadmap: "进度",
+      navProgress: "最新进展",
       navProblems: "问题与方案",
       navTodo: "待办",
       navStart: "快速开始",
@@ -59,7 +60,7 @@
       f4Desc: "Rust 源码按注册连接名限制玩家及怪物状态消息仅由 Fabric 发布；注册名仍由客户端自报，且拒绝行为待运行时验证。",
       f5Title: "双端实体镜像",
       f5Desc:
-        "Fabric 到 NeoForge 的 RemotePlayer 镜像已完成概念验证；实体身份、重连和世界切换恢复仍需稳定化。怪物接收端尚未实现。",
+        "Fabric 到 NeoForge 的 RemotePlayer 镜像已完成概念验证。当前工作区 Java 源码新增 NeoForge 怪物接收与 ACK/重试流程，但仍需打包和运行时测试；怪物移除尚未实现。",
       f6Title: "运行时结构诊断",
       f6Desc: "输出 Minecraft 实例字段、类型和值，辅助分析混淆环境。",
       architectureTitle: "系统架构",
@@ -117,6 +118,7 @@
       navArchitecture: "Architecture",
       navDemo: "Terminal",
       navRoadmap: "Roadmap",
+      navProgress: "Progress",
       navProblems: "Problems & solutions",
       navTodo: "TODO",
       navStart: "Get started",
@@ -179,7 +181,7 @@
         "Rust source restricts player and monster state messages to the registered Fabric name; registration is self-asserted and rejection still needs runtime verification.",
       f5Title: "Cross-instance entity mirror",
       f5Desc:
-        "The Fabric-to-NeoForge RemotePlayer mirror is a verified proof of concept; identity, reconnection, and world-transition recovery still need work. A NeoForge monster receiver is not implemented.",
+        "The Fabric-to-NeoForge RemotePlayer mirror is a verified proof of concept. Current working-tree Java sources add a NeoForge monster receiver and ACK/retry path, but these changes need packaging and runtime tests; monster removal is not implemented.",
       f6Title: "Runtime diagnostics",
       f6Desc:
         "Inspects Minecraft instance fields, types, and values to help analyze obfuscated environments.",

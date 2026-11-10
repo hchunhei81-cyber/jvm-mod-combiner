@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#090d14" />
+    <meta
+      name="description"
+      content="Current JVM Mod Combiner progress, implementation status, and latest source update."
+    />
+    <title>Project Progress — JVM Mod Combiner</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700;900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css?v=progress-timeline-2026-11" />
+  </head>
+  <body data-page="progress">
+    <a class="skip-link" href="#main-content" data-i18n="skip"
+      >Skip to main content</a
+    >
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <div class="grid-bg"></div>
+
+    <header class="nav" id="pageNav">
+      <a class="brand" href="index.html">
+        <span class="brand-mark">&lt;/&gt;</span>
+        <span>JVM <b>Mod</b> Combiner</span>
+      </a>
+      <nav class="nav-links" aria-label="Documentation" data-i18n-aria="docs">
+        <a href="index.html" data-i18n="overview">Overview</a>
+        <a href="problems.html" data-i18n="problems">Problems &amp; solutions</a>
+        <a href="todo.html" data-i18n="todo">TODO</a>
+        <a href="progress.html" aria-current="page" data-i18n="progress"
+          >Progress</a
+        >
+        <a
+          href="https://github.com/hchunhei81-cyber/jvm-mod-combiner"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-i18n="github"
+          >GitHub ↗</a
+        >
+      </nav>
+      <div class="nav-tools">
+        <select
+          id="pageLanguage"
+          aria-label="Language"
+          data-i18n-aria="languageLabel"
+        >
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
+        <button
+          class="icon-button"
+          id="pageTheme"
+          type="button"
+          aria-label="Toggle theme"
+          data-i18n-aria="themeLabel"
+        >
+          LIGHT
+        </button>
+        <button
+          class="menu-toggle"
+          id="pageMenu"
+          type="button"
+          aria-label="Open menu"
+          aria-expanded="false"
+          data-i18n-aria="menuLabel"
+        >
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+    </header>
+
+    <main id="main-content">
+      <section class="section doc-page">
+        <div class="section-heading">
+          <p class="overline" data-i18n="eyebrow">PROJECT STATUS</p>
+          <h1 data-i18n="pageTitle">Progress &amp; latest update</h1>
+          <p data-i18n="pageIntro">
+            A source-based snapshot of verified work, current implementation,
+            and the next validation steps.
+          </p>
+        </div>
+
+        <section class="timeline-panel" aria-labelledby="history-title">
+          <div class="timeline-heading">
+            <div>
+              <p class="overline" data-timeline-i18n="historyEyebrow">
+                MAIN BRANCH · COMPLETE HISTORY
+              </p>
+              <h2 id="history-title" data-timeline-i18n="historyTitle">
+                Commit timeline
+              </h2>
+              <p data-timeline-i18n="historyIntro">
+                Browse every commit from the first main commit to the latest.
+                Select an entry to inspect its message and open it on GitHub.
+              </p>
+            </div>
+            <div class="timeline-actions">
+              <span
+                class="timeline-source"
+                id="historySource"
+                role="status"
+                aria-live="polite"
+                data-timeline-i18n="loading"
+                >Loading main history…</span
+              >
+              <button
+                class="icon-button"
+                id="historyRefresh"
+                type="button"
+                data-timeline-i18n="refresh"
+              >
+                Refresh GitHub
+              </button>
+            </div>
+          </div>
+
+          <div class="timeline-stats" aria-live="polite">
+            <div>
+              <span data-timeline-i18n="commitCount">Commits</span>
+              <strong id="historyCount">—</strong>
+            </div>
+            <div>
+              <span data-timeline-i18n="firstCommit">First commit</span>
+              <strong id="historyFirst">—</strong>
+            </div>
+            <div>
+              <span data-timeline-i18n="latestCommit">Latest commit</span>
+              <strong id="historyLatest">—</strong>
+            </div>
+          </div>
+
+          <div class="timeline-controls">
+            <label class="timeline-search">
+              <span data-timeline-i18n="searchLabel">Search commits</span>
+              <input
+                id="historySearch"
+                type="search"
+                autocomplete="off"
+                data-timeline-i18n-placeholder="searchPlaceholder"
+                placeholder="Message, author, or SHA"
+              />
+            </label>
+            <label class="timeline-year">
+              <span data-timeline-i18n="yearLabel">Year</span>
+              <select id="historyYear">
+                <option value="all" data-timeline-i18n="allYears">
+                  All years
+                </option>
+              </select>
+            </label>
+            <div class="timeline-jumps">
+              <button
+                type="button"
+                class="timeline-jump"
+                id="historyJumpFirst"
+                data-timeline-i18n="jumpFirst"
+              >
+                First
+              </button>
+              <button
+                type="button"
+                class="timeline-jump"
+                id="historyJumpLatest"
+                data-timeline-i18n="jumpLatest"
+              >
+                Latest
+              </button>
+            </div>
+          </div>
+
+          <div class="timeline-range">
+            <label for="historyRange" data-timeline-i18n="rangeLabel">
+              Navigate the filtered timeline
+            </label>
+            <input id="historyRange" type="range" min="0" max="0" value="0" />
+            <div class="timeline-range-meta">
+              <span data-timeline-i18n="oldest">Oldest</span>
+              <output id="historyRangeOutput">0 / 0</output>
+              <span data-timeline-i18n="newest">Newest</span>
+            </div>
+          </div>
+
+          <article class="timeline-focus" id="historyFocus" aria-live="polite">
+            <span class="timeline-focus-label" data-timeline-i18n="selected">
+              Selected commit
+            </span>
+            <div>
+              <strong id="historyFocusTitle">—</strong>
+              <span id="historyFocusMeta">—</span>
+            </div>
+            <a id="historyFocusLink" href="#" target="_blank" rel="noopener noreferrer">
+              <span data-timeline-i18n="openCommit">Open commit ↗</span>
+            </a>
+          </article>
+
+          <p class="timeline-empty" id="historyEmpty" hidden>
+            <span data-timeline-i18n="empty">No matching commits.</span>
+          </p>
+          <ol
+            class="commit-timeline"
+            id="commitTimeline"
+            aria-label="Main branch commit history"
+          ></ol>
+          <p class="timeline-footnote" data-timeline-i18n="footnote">
+            History is limited to main. GitHub is refreshed automatically when
+            this page opens; the saved snapshot is used if the API is
+            unavailable.
+          </p>
+        </section>
+
+        <section class="doc-group" aria-labelledby="latest-title">
+          <span class="doc-status open" data-i18n="latestStatus"
+            >LATEST UPDATE · 2026-11-10</span
+          >
+          <h3 id="latest-title" data-i18n="latestTitle">
+            Hostile-mob mirror pipeline added in the working tree
+          </h3>
+          <p data-i18n="latestText">
+            The current Java sources add NeoForge handling for Fabric monster
+            spawn/update messages, entity mirrors, and an ACK/retry path. The
+            Rust DataBus continues to restrict protected state messages to the
+            registered Fabric name.
+          </p>
+          <div class="doc-callout">
+            <strong data-i18n="branchLabel">Main-branch context:</strong>
+            <span data-i18n="branchText">
+              The checked main history includes loader detection/DataBus
+              registration (f2171ad), Minecraft 1.21.4 Agent/classpath work
+              (f146f27), and the documentation refresh (e212414). The Java
+              mob-mirror additions described here are uncommitted working-tree
+              edits, not changes recorded in main.
+            </span>
+          </div>
+          <div class="doc-callout">
+            <strong data-i18n="verifyLabel">Verification status:</strong>
+            <span data-i18n="verifyText">
+              These Java additions are source-level implementation only. The
+              packaged Agent must be rebuilt from the current sources, then
+              tested in the live Fabric/NeoForge setup. Monster removal is not
+              implemented; do not treat mob synchronization as complete.
+            </span>
+          </div>
+        </section>
+
+        <section class="doc-group" aria-labelledby="done-title">
+          <span class="doc-status done" data-i18n="doneStatus"
+            >Verified foundation</span
+          >
+          <h3 id="done-title" data-i18n="doneTitle">
+            Capabilities already established
+          </h3>
+          <p data-i18n="doneIntro">
+            Previously verified prototype milestones remain separate from the
+            newest untested source work.
+          </p>
+          <ul class="doc-checks">
+            <li>
+              <input type="checkbox" checked disabled />
+              <span data-i18n="done1"
+                >Rust/JNI launcher and Java Agent initialization</span
+              >
+            </li>
+            <li>
+              <input type="checkbox" checked disabled />
+              <span data-i18n="done2"
+                >Fabric and NeoForge startup experiments, plus experimental
+                Forge startup</span
+              >
+            </li>
+            <li>
+              <input type="checkbox" checked disabled />
+              <span data-i18n="done3"
+                >Rust TCP DataBus registration and JSON routing</span
+              >
+            </li>
+            <li>
+              <input type="checkbox" checked disabled />
+              <span data-i18n="done4"
+                >Fabric-to-NeoForge player-state and RemotePlayer proof of
+                concept</span
+              >
+            </li>
+          </ul>
+        </section>
+
+        <section class="doc-group" aria-labelledby="work-title">
+          <span class="doc-status open" data-i18n="workStatus"
+            >In current source · runtime test pending</span
+          >
+          <h3 id="work-title" data-i18n="workTitle">
+            Working-tree implementation
+          </h3>
+          <p data-i18n="workIntro">
+            These changes are present in the current bus_test source, but are
+            not yet in the main-branch history.
+          </p>
+          <ul class="doc-checks">
+            <li>
+              <input type="checkbox" checked disabled />
+              <span data-i18n="work1"
+                >NeoForge parses monster_spawn/monster_update, creates or
+                updates mirrors, and clears mob mirrors when a world change is
+                observed.</span
+              >
+            </li>
+            <li>
+              <input type="checkbox" checked disabled />
+              <span data-i18n="work2"
+                >NeoForge sends monster_ack after applying a message; Fabric
+                tracks pending sequence-numbered states and retries until
+                acknowledged.</span
+              >
+            </li>
+            <li>
+              <input type="checkbox" checked disabled />
+              <span data-i18n="work3"
+                >The existing Rust policy rejects non-Fabric player/monster
+                state messages, but registration names are self-asserted and
+                are not authenticated identities.</span
+              >
+            </li>
+          </ul>
+        </section>
+
+        <section class="doc-group" aria-labelledby="next-title">
+          <span class="doc-status" data-i18n="nextStatus">Next steps</span>
+          <h3 id="next-title" data-i18n="nextTitle">
+            Build, test, then complete lifecycle
+          </h3>
+          <ul class="doc-checks">
+            <li>
+              <input type="checkbox" disabled />
+              <span data-i18n="next1"
+                >Rebuild/package the Java Agent from current source and confirm
+                the JAR contains the latest code.</span
+              >
+            </li>
+            <li>
+              <input type="checkbox" disabled />
+              <span data-i18n="next2"
+                >Runtime-test normal player and mob delivery, unauthorized
+                rejection, no forwarding, and connection continuity.</span
+              >
+            </li>
+            <li>
+              <input type="checkbox" disabled />
+              <span data-i18n="next3"
+                >Test monster ACK/retry behavior, world changes, disconnects,
+                and reconnect recovery.</span
+              >
+            </li>
+            <li>
+              <input type="checkbox" disabled />
+              <span data-i18n="next4"
+                >Design and publish reliable monster_remove events; absence
+                from the sampled render list is not proof of despawn.</span
+              >
+            </li>
+            <li>
+              <input type="checkbox" disabled />
+              <span data-i18n="next5"
+                >Validate or otherwise constrain DataBus registration
+                names.</span
+              >
+            </li>
+          </ul>
+        </section>
+
+        <div class="doc-callout">
+          <strong data-i18n="scopeLabel">Scope:</strong>
+          <span data-i18n="scopeText">
+            A source implementation or successful launcher startup is not
+            end-to-end verification or general cross-loader mod compatibility.
+          </span>
+        </div>
+
+        <div class="doc-sources">
+          <a href="../TODO.md" data-i18n="roadmapLink"
+            >Development roadmap (TODO.md)</a
+          >
+          <a href="problems.html" data-i18n="problemsLink"
+            >Problems &amp; solutions</a
+          >
+          <a href="../solve.md" data-i18n="architectureLink"
+            >Proposed architecture (solve.md)</a
+          >
+          <a href="../src/main.rs" data-i18n="rustLink">Rust DataBus source</a>
+          <a href="../bus_test/BusAgent.java" data-i18n="agentLink"
+            >Java Agent source</a
+          >
+          <a href="../bus_test/MonsterSync.java" data-i18n="mobLink"
+            >MonsterSync source</a
+          >
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <a class="brand" href="index.html">
+        <span class="brand-mark">&lt;/&gt;</span>
+        <span>JVM <b>Mod</b> Combiner</span>
+      </a>
+      <p data-i18n="footerText">
+        Experimental research project · Rust × JVM · Minecraft 1.21.4
+      </p>
+      <a href="todo.html" data-i18n="footerLink">Development TODO →</a>
+    </footer>
+    <script src="pages.js"></script>
+    <script src="progress.js?v=timeline-2026-11"></script>
+  </body>
+</html>

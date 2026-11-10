@@ -32,6 +32,7 @@
         <a href="index.html" data-i18n="overview">Overview</a>
         <a href="problems.html" aria-current="page" data-i18n="problems">Problems &amp; solutions</a>
         <a href="todo.html" data-i18n="todo">TODO</a>
+        <a href="progress.html" data-i18n="progress">Progress</a>
         <a
           href="https://github.com/hchunhei81-cyber/jvm-mod-combiner"
           target="_blank"
@@ -146,14 +147,13 @@
               <code>bus_test/MonsterSync.java</code> samples visible, living
               hostile Fabric mobs by UUID on the game thread and emits
               <code>monster_spawn</code> and changed-state
-              <code>monster_update</code> messages.
+              <code>monster_update</code> messages. Current working-tree Java
+              sources add a NeoForge receiver and ACK/retry path.
             </p>
             <p data-i18n="p5Incomplete">
               <strong>Incomplete:</strong> Missing-from-render iteration is not
-              treated as removal; <code>monster_remove</code> is not published,
-              and the NeoForge Agent currently handles only
-              <code>player_move</code>. No end-to-end monster mirror is
-              implemented.
+              treated as removal; <code>monster_remove</code> is not published.
+              The Java changes need packaging and runtime tests.
             </p>
           </article>
 

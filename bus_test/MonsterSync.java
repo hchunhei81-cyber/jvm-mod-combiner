@@ -24,7 +24,13 @@ final class MonsterSync {
     private static long lastSampleAtNanos;
 
     private static Field levelField;
-    private static Method entitiesForRenderingMethod;
+    // ClientLevel identity observed by the sampling thread.
+    private static Object lastLevel;
+
+    private static Field entityStorageField;
+    private static Method managerGetGetterMethod;
+    private static Method entityGetterGetAllMethod;
+    private static Method entityGetterGetByUuidMethod;
 
     private static Method getTypeMethod;
     private static Method getRegistryKeyMethod;
@@ -46,10 +52,98 @@ final class MonsterSync {
 
     private static long lastSummaryAt;
 
+    private static final Object STATE_LOCK = new Object();
+
+    // Only states confirmed by NeoForge belong in previous.
     private static final Map<UUID, MobState> previous =
         new HashMap<>();
 
+    // One latest unconfirmed state per monster UUID.
+    private static final Map<UUID, PendingMonster> pending =
+        new HashMap<>();
+
+    private static final java.util.concurrent.atomic.AtomicLong NEXT_SEQUENCE =
+        new java.util.concurrent.atomic.AtomicLong(0L);
+
     private MonsterSync() {
+    }
+
+    private static long nextSequence() {
+        long value = NEXT_SEQUENCE.incrementAndGet();
+
+        if (value <= 0L) {
+            throw new IllegalStateException(
+                "Monster sequence exhausted"
+            );
+        }
+
+        return value;
+    }
+
+    private static long retryDelayNanos(int attempts) {
+        if (attempts <= 1) {
+            return 1_000_000_000L;
+        }
+
+        if (attempts == 2) {
+            return 2_000_000_000L;
+        }
+
+        return 5_000_000_000L;
+    }
+
+    // Called by the DataBus receive thread.
+    static void acknowledge(UUID uuid, long seq) {
+        if (uuid == null || seq <= 0L) {
+            return;
+        }
+
+        MobState confirmed = null;
+
+        synchronized (STATE_LOCK) {
+            PendingMonster item = pending.get(uuid);
+
+            if (item == null || item.seq != seq) {
+                System.out.println(
+                    "[MonsterSync][ACK][STALE] uuid=" +
+                    uuid + " seq=" + seq
+                );
+                return;
+            }
+
+            confirmed = item.state;
+            previous.put(uuid, confirmed);
+            pending.remove(uuid);
+        }
+
+        System.out.println(
+            "[MonsterSync][ACK] type=" + confirmed.type +
+            " uuid=" + uuid +
+            " seq=" + seq +
+            " pos=" + confirmed.position()
+        );
+    }
+
+    private static final class PendingMonster {
+        final MobState state;
+        final long seq;
+        final String messageType;
+
+        long lastSentAtNanos;
+        int attempts;
+
+        PendingMonster(
+            MobState state,
+            long seq,
+            String messageType,
+            long nowNanos
+        ) {
+            this.state = state;
+            this.seq = seq;
+            this.messageType = messageType;
+            this.lastSentAtNanos = nowNanos;
+            this.attempts = 1;
+        }
     }
 
     static void sample(Object minecraft) {
@@ -57,7 +151,6 @@ final class MonsterSync {
             return;
         }
 
-        // M1.1: independently limit hostile-mob sampling to 5Hz.
         long sampleNow = System.nanoTime();
 
         if (lastSampleAtNanos != 0L &&
@@ -73,21 +166,76 @@ final class MonsterSync {
             Object level = levelField.get(minecraft);
 
             if (level == null) {
-                if (!previous.isEmpty()) {
+                int clearedPrevious;
+                int clearedPending;
+
+                lastLevel = null;
+
+                synchronized (STATE_LOCK) {
+                    clearedPrevious = previous.size();
+                    clearedPending = pending.size();
+                    previous.clear();
+                    pending.clear();
+                }
+
+                if (clearedPrevious != 0 || clearedPending != 0) {
                     System.out.println(
                         "[MonsterSync][WORLD] ClientLevel unavailable; " +
-                        previous.size() + " tracked mobs cleared"
+                        "confirmed=" + clearedPrevious +
+                        " pending=" + clearedPending +
+                        " cleared"
                     );
-                    previous.clear();
                 }
+
                 return;
             }
 
-            Object result = entitiesForRenderingMethod.invoke(level);
+            // A dimension/world transition may replace ClientLevel
+            // without an intermediate null level.
+            if (lastLevel != null && lastLevel != level) {
+                int clearedPrevious;
+                int clearedPending;
+
+                synchronized (STATE_LOCK) {
+                    clearedPrevious = previous.size();
+                    clearedPending = pending.size();
+                    previous.clear();
+                    pending.clear();
+                }
+
+                System.out.println(
+                    "[MonsterSync][WORLD] ClientLevel changed; " +
+                    "confirmed=" + clearedPrevious +
+                    " pending=" + clearedPending +
+                    " cleared"
+                );
+            }
+
+            lastLevel = level;
+
+            Object storage = entityStorageField.get(level);
+
+            if (storage == null) {
+                throw new IllegalStateException(
+                    "ClientLevel entity storage is null"
+                );
+            }
+
+            Object getter =
+                managerGetGetterMethod.invoke(storage);
+
+            if (getter == null) {
+                throw new IllegalStateException(
+                    "EntityGetter is null"
+                );
+            }
+
+            Object result =
+                entityGetterGetAllMethod.invoke(getter);
 
             if (!(result instanceof Iterable<?>)) {
                 throw new IllegalStateException(
-                    "ClientLevel.d() did not return Iterable"
+                    "EntityGetter.getAll() did not return Iterable"
                 );
             }
 
@@ -146,45 +294,143 @@ final class MonsterSync {
                     ((Number) getMaxHealthMethod.invoke(entity)).floatValue()
                 );
 
-                MobState old = previous.get(uuid);
-
-                if (old == null || !state.sameAs(old)) {
-                    String messageType =
-                        old == null ? "monster_spawn" : "monster_update";
-
-                    if (BusAgent.sendFabricMonster(
-                        state.toJson(messageType)
-                    )) {
-                        previous.put(uuid, state);
-
-                        System.out.println(
-                            "[MonsterSync][" +
-                            (old == null ? "SPAWN" : "UPDATE") +
-                            "] type=" + state.type +
-                            " uuid=" + state.uuid +
-                            " pos=" + state.position()
-                        );
-                    } else {
-                        System.out.println(
-                            "[MonsterSync][SEND_PENDING] type=" +
-                            messageType + " uuid=" + uuid
-                        );
-                    }
-
-                    if (old != null) {
-                        changed++;
-                    }
+                if (!state.isFinite()) {
+                    System.err.println(
+                        "[MonsterSync][INVALID_STATE] Non-finite values; " +
+                        "skipping uuid=" + uuid
+                    );
+                    continue;
                 }
 
                 current.put(uuid, state);
                 sampled++;
+
+                String outboundJson = null;
+                long outboundSeq = 0L;
+                String outboundType = null;
+                boolean retry = false;
+
+                long nowNanos = System.nanoTime();
+
+                synchronized (STATE_LOCK) {
+                    PendingMonster item = pending.get(uuid);
+                    MobState confirmed = previous.get(uuid);
+
+                    if (item != null) {
+                        if (!state.sameAs(item.state)) {
+                            // Replace an obsolete pending state immediately.
+                            // Even if state returns to the confirmed value,
+                            // send a compensating update: the old packet may
+                            // already be in flight.
+                            String messageType =
+                                confirmed == null
+                                    ? "monster_spawn"
+                                    : "monster_update";
+
+                            long seq = nextSequence();
+
+                            item = new PendingMonster(
+                                state,
+                                seq,
+                                messageType,
+                                nowNanos
+                            );
+
+                            // Serialize before committing the new pending state.
+                            outboundJson = state.toJson(messageType, seq);
+
+                            pending.put(uuid, item);
+
+                            outboundSeq = seq;
+                            outboundType = messageType;
+
+                            if (confirmed != null) {
+                                changed++;
+                            }
+                        } else if (
+                            nowNanos - item.lastSentAtNanos >=
+                            retryDelayNanos(item.attempts)
+                        ) {
+                            item.lastSentAtNanos = nowNanos;
+                            item.attempts++;
+
+                            outboundJson = item.state.toJson(
+                                item.messageType,
+                                item.seq
+                            );
+
+                            outboundSeq = item.seq;
+                            outboundType = item.messageType;
+                            retry = true;
+                        }
+                    } else if (
+                        confirmed == null || !state.sameAs(confirmed)
+                    ) {
+                        String messageType =
+                            confirmed == null
+                                ? "monster_spawn"
+                                : "monster_update";
+
+                        long seq = nextSequence();
+
+                        item = new PendingMonster(
+                            state,
+                            seq,
+                            messageType,
+                            nowNanos
+                        );
+
+                        // Serialize before installing the pending state.
+                        outboundJson = state.toJson(messageType, seq);
+
+                        // Install pending before writing to the socket.
+                        pending.put(uuid, item);
+
+                        outboundSeq = seq;
+                        outboundType = messageType;
+
+                        if (confirmed != null) {
+                            changed++;
+                        }
+                    }
+                }
+
+                if (outboundJson != null) {
+                    boolean sent = BusAgent.sendFabricMonster(outboundJson);
+
+                    if (sent) {
+                        System.out.println(
+                            "[MonsterSync][" +
+                            (retry ? "RETRY" : "SEND") +
+                            "] type=" + outboundType +
+                            " uuid=" + uuid +
+                            " seq=" + outboundSeq
+                        );
+                    } else {
+                        System.out.println(
+                            "[MonsterSync][SEND_PENDING] type=" +
+                            outboundType +
+                            " uuid=" + uuid +
+                            " seq=" + outboundSeq
+                        );
+                    }
+                }
+            }
+
+            Map<UUID, MobState> confirmedSnapshot;
+
+            synchronized (STATE_LOCK) {
+                confirmedSnapshot = new HashMap<>(previous);
             }
 
             int missing = 0;
 
-            for (UUID oldUuid : previous.keySet()) {
+            for (Map.Entry<UUID, MobState> entry :
+                    confirmedSnapshot.entrySet()) {
+                UUID oldUuid = entry.getKey();
+
                 if (!current.containsKey(oldUuid)) {
-                    MobState old = previous.get(oldUuid);
+                    MobState old = entry.getValue();
 
                     System.out.println(
                         "[MonsterSync][MISSING_FROM_ITERATION] type=" +
@@ -195,7 +441,6 @@ final class MonsterSync {
                 }
             }
 
-            // Keep previous as the last successfully transmitted state.
             // Missing from entitiesForRendering() is NOT a remove event.
 
             long now = System.currentTimeMillis();
@@ -203,10 +448,20 @@ final class MonsterSync {
             if (now - lastSummaryAt >= SUMMARY_INTERVAL_MS) {
                 lastSummaryAt = now;
 
+                int confirmedCount;
+                int pendingCount;
+
+                synchronized (STATE_LOCK) {
+                    confirmedCount = previous.size();
+                    pendingCount = pending.size();
+                }
+
                 System.out.println(
                     "[MonsterSync][SUMMARY] hostile=" + sampled +
                     " changed=" + changed +
-                    " missing=" + missing
+                    " missing=" + missing +
+                    " confirmed=" + confirmedCount +
+                    " pending=" + pendingCount
                 );
 
                 int shown = 0;
@@ -251,12 +506,28 @@ final class MonsterSync {
         // MinecraftClient.world
         levelField = minecraft.getClass().getField("field_1687");
 
-        // ClientWorld entity iteration
+        // ClientLevel -> TransientEntitySectionManager -> EntityGetter
         Class<?> clientLevelClass =
             loader.loadClass("net.minecraft.class_638");
 
-        entitiesForRenderingMethod =
-            clientLevelClass.getMethod("method_18112");
+        entityStorageField =
+            clientLevelClass.getDeclaredField("field_27734");
+        entityStorageField.setAccessible(true);
+
+        Class<?> managerClass =
+            loader.loadClass("net.minecraft.class_5582");
+
+        managerGetGetterMethod =
+            managerClass.getMethod("method_31866");
+
+        Class<?> getterClass =
+            loader.loadClass("net.minecraft.class_5577");
+
+        entityGetterGetAllMethod =
+            getterClass.getMethod("method_31803");
+
+        entityGetterGetByUuidMethod =
+            getterClass.getMethod("method_31808", UUID.class);
 
         // Hostile mob hierarchy
         monsterClass =
@@ -325,7 +596,10 @@ final class MonsterSync {
         System.out.println(
             "[MonsterSync][INIT] SUCCESS: " +
             "level=" + levelField.getName() +
-            ", iterator=" + entitiesForRenderingMethod.getName() +
+            ", storage=" + entityStorageField.getName() +
+            ", getter=" + managerGetGetterMethod.getName() +
+            ", getAll=" + entityGetterGetAllMethod.getName() +
+            ", getByUuid=" + entityGetterGetByUuidMethod.getName() +
             ", uuid=" + uuidField.getName() +
             ", registry=" + registryClass.getName() +
             ", hostileBase=" + monsterClass.getName()
@@ -368,6 +642,16 @@ final class MonsterSync {
             this.maxHealth = maxHealth;
         }
 
+        boolean isFinite() {
+            return Double.isFinite(x)
+                && Double.isFinite(y)
+                && Double.isFinite(z)
+                && Float.isFinite(yaw)
+                && Float.isFinite(pitch)
+                && Float.isFinite(health)
+                && Float.isFinite(maxHealth);
+        }
+
         boolean sameAs(MobState other) {
             return type.equals(other.type)
                 && Double.compare(x, other.x) == 0
@@ -379,14 +663,8 @@ final class MonsterSync {
                 && Float.compare(maxHealth, other.maxHealth) == 0;
         }
 
-        String toJson(String messageType) {
-            if (!Double.isFinite(x) ||
-                !Double.isFinite(y) ||
-                !Double.isFinite(z) ||
-                !Float.isFinite(yaw) ||
-                !Float.isFinite(pitch) ||
-                !Float.isFinite(health) ||
-                !Float.isFinite(maxHealth)) {
+        String toJson(String messageType, long seq) {
+            if (!isFinite()) {
                 throw new IllegalStateException(
                     "Non-finite monster state: " + uuid
                 );
@@ -395,6 +673,7 @@ final class MonsterSync {
             return "{\"to\":\"neoforge\"," +
                 "\"type\":\"" + messageType + "\"," +
                 "\"uuid\":\"" + uuid + "\"," +
+                "\"seq\":" + seq + "," +
                 "\"entity_type\":\"" + type + "\"," +
                 "\"x\":" + Double.toString(x) + "," +
                 "\"y\":" + Double.toString(y) + "," +

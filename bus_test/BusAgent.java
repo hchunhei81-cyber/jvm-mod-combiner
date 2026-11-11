@@ -135,6 +135,10 @@ public class BusAgent {
     // NeoForge
     static volatile Object nfMcInstance = null;
     static volatile Class<?> nfMcClass = null;
+    static volatile Method nfGetInstanceMethod = null;
+    static volatile Method nfExecuteMethod = null;
+    static volatile Field nfLevelField = null;
+    static volatile Field nfPlayerField = null;
     static volatile Object remotePlayer = null;
     static volatile Object remotePlayerLevel = null;
     static final java.util.concurrent.ConcurrentHashMap<java.util.UUID, Object> remoteMonsters = new java.util.concurrent.ConcurrentHashMap<>();
@@ -641,13 +645,11 @@ public class BusAgent {
 
                     if (nfProbePending.compareAndSet(false, true)) {
                         try {
-                            nfMcClass.getMethod(
-                                    "execute",
-                                    Runnable.class).invoke(mc, (Runnable) () -> {
+                            nfExecuteMethod.invoke(mc, (Runnable) () -> {
                                         try {
-                                            Object level = nfMcClass.getField("level").get(mc);
+                                            Object level = nfLevelField.get(mc);
 
-                                            Object player = nfMcClass.getField("player").get(mc);
+                                            Object player = nfPlayerField.get(mc);
 
                                             boolean levelReady = level != null;
                                             boolean playerReady = levelReady && player != null;
@@ -720,26 +722,59 @@ public class BusAgent {
     }
 
     static synchronized void initNeoForgeMinecraft() {
-        if (nfMcInstance != null)
+        if (nfInitialized && nfMcInstance != null) {
             return;
+        }
+
         try {
-            if (nfMcClass == null) {
+            Class<?> candidateClass = nfMcClass;
+
+            if (candidateClass == null) {
                 for (Class<?> c : inst.getAllLoadedClasses()) {
                     if (c.getName().equals("net.minecraft.client.Minecraft")) {
-                        nfMcClass = c;
+                        candidateClass = c;
                         break;
                     }
                 }
             }
-            if (nfMcClass == null) {
+
+            if (candidateClass == null) {
                 return;
             }
-            nfMcInstance = nfMcClass.getMethod("getInstance").invoke(null);
-            if (nfMcInstance != null) {
-                System.out.println("[BusAgent:neoforge] ✅ 成功锁定 Minecraft 实例！");
-                nfInitialized = true;
+
+            // Bind everything locally before publishing initialized state.
+            Method getInstanceMethod =
+                    candidateClass.getMethod("getInstance");
+            Method executeMethod =
+                    candidateClass.getMethod("execute", Runnable.class);
+            Field levelField =
+                    candidateClass.getField("level");
+            Field playerField =
+                    candidateClass.getField("player");
+
+            Object minecraft = getInstanceMethod.invoke(null);
+            if (minecraft == null) {
+                return;
             }
+
+            // Publish the complete binding before exposing the instance.
+            nfGetInstanceMethod = getInstanceMethod;
+            nfExecuteMethod = executeMethod;
+            nfLevelField = levelField;
+            nfPlayerField = playerField;
+            nfMcClass = candidateClass;
+            nfMcInstance = minecraft;
+            nfInitialized = true;
+
+            System.out.println("[BusAgent:neoforge] ✅ 成功锁定 Minecraft 实例！");
         } catch (Throwable e) {
+            nfInitialized = false;
+            nfMcInstance = null;
+            nfGetInstanceMethod = null;
+            nfExecuteMethod = null;
+            nfLevelField = null;
+            nfPlayerField = null;
+
             System.out.println("[BusAgent:neoforge] init failed: " + e);
         }
     }
@@ -768,7 +803,7 @@ public class BusAgent {
             }
 
             Object mc = nfMcInstance;
-            nfMcClass.getMethod("execute", Runnable.class).invoke(mc, (Runnable) () -> {
+            nfExecuteMethod.invoke(mc, (Runnable) () -> {
                 try {
                     synchronized (BusAgent.class) {
                         if (!dataBusConnected ||
@@ -777,7 +812,7 @@ public class BusAgent {
                         }
                     }
 
-                    Object level = nfMcClass.getField("level").get(mc);
+                    Object level = nfLevelField.get(mc);
                     if (level == null)
                         return;
                     ClassLoader loader = nfMcClass.getClassLoader();
@@ -920,9 +955,7 @@ public class BusAgent {
 
             Object mc = nfMcInstance;
 
-            nfMcClass.getMethod(
-                    "execute",
-                    Runnable.class).invoke(mc, (Runnable) () -> {
+            nfExecuteMethod.invoke(mc, (Runnable) () -> {
                         try {
                             synchronized (BusAgent.class) {
                                 if (!dataBusConnected ||
@@ -931,7 +964,7 @@ public class BusAgent {
                                 }
                             }
 
-                            Object level = nfMcClass.getField("level").get(mc);
+                            Object level = nfLevelField.get(mc);
 
                             if (level == null) {
                                 return;
@@ -1366,7 +1399,7 @@ public class BusAgent {
         }
 
         try {
-            mcClass.getMethod("execute", Runnable.class).invoke(
+            nfExecuteMethod.invoke(
                     mc,
                     (Runnable) () -> {
                         try {

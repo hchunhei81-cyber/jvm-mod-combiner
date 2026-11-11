@@ -9,6 +9,24 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::thread;
 
+// 默认使用正式 Agent；测试时可通过 JVM_COMBINER_AGENT_JAR 指定临时 JAR。
+fn resolve_agent_jar(project_root: &Path) -> PathBuf {
+    match env::var_os("JVM_COMBINER_AGENT_JAR")
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => {
+            let configured = PathBuf::from(value);
+            if configured.is_absolute() {
+                configured
+            } else {
+                project_root.join(configured)
+            }
+        }
+        None => project_root.join("bus_test/bus-agent.jar"),
+    }
+}
+
+
 fn rules_allow(lib: &Value) -> bool {
     let rules = match lib.get("rules").and_then(|r| r.as_array()) {
         Some(r) => r,
@@ -1627,7 +1645,7 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
         }
     };
 
-    let agent_jar = project_root.join("bus_test/bus-agent.jar");
+    let agent_jar = resolve_agent_jar(&project_root);
 
     let mut cmd = Command::new(&java);
     cmd.current_dir(&mc_root);
@@ -2047,9 +2065,9 @@ fn main() {
         }
     }
 
-    let agent_jar = std::env::current_dir()
-        .unwrap()
-        .join("bus_test/bus-agent.jar");
+    let project_root = env::current_dir()
+        .expect("无法获取项目目录");
+    let agent_jar = resolve_agent_jar(&project_root);
     if agent_jar.exists() {
         jvm_args.push(format!(
             "-javaagent:{}={}",

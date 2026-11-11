@@ -17,6 +17,8 @@ import java.util.UUID;
  * All calls must be made on the Minecraft client main thread.
  */
 final class MonsterSync {
+    private static final java.util.regex.Pattern ENTITY_TYPE_PATTERN =
+            java.util.regex.Pattern.compile("[a-z0-9_.-]+:[a-z0-9_./-]+");
 
     private static final long SUMMARY_INTERVAL_MS = 1000L;
 
@@ -104,7 +106,7 @@ final class MonsterSync {
             PendingMonster item = pending.get(uuid);
 
             if (item == null || item.seq != seq) {
-                System.out.println(
+                BusAgent.logDebug(
                     "[MonsterSync][ACK][STALE] uuid=" +
                     uuid + " seq=" + seq
                 );
@@ -116,7 +118,7 @@ final class MonsterSync {
             pending.remove(uuid);
         }
 
-        System.out.println(
+        BusAgent.logDebug(
             "[MonsterSync][ACK] type=" + confirmed.type +
             " uuid=" + uuid +
             " seq=" + seq +
@@ -276,7 +278,7 @@ final class MonsterSync {
 
                 String type = registryKey.toString();
 
-                if (!type.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) {
+                if (!ENTITY_TYPE_PATTERN.matcher(type).matches()) {
                     throw new IllegalStateException(
                         "Invalid entity registry key: " + type
                     );
@@ -399,7 +401,7 @@ final class MonsterSync {
                     boolean sent = BusAgent.sendFabricMonster(outboundJson);
 
                     if (sent) {
-                        System.out.println(
+                        BusAgent.logDebug(
                             "[MonsterSync][" +
                             (retry ? "RETRY" : "SEND") +
                             "] type=" + outboundType +
@@ -407,7 +409,7 @@ final class MonsterSync {
                             " seq=" + outboundSeq
                         );
                     } else {
-                        System.out.println(
+                        BusAgent.logDebug(
                             "[MonsterSync][SEND_PENDING] type=" +
                             outboundType +
                             " uuid=" + uuid +
@@ -432,7 +434,7 @@ final class MonsterSync {
                 if (!current.containsKey(oldUuid)) {
                     MobState old = entry.getValue();
 
-                    System.out.println(
+                    BusAgent.logDebug(
                         "[MonsterSync][MISSING_FROM_ITERATION] type=" +
                         old.type + " uuid=" + oldUuid
                     );
@@ -471,7 +473,7 @@ final class MonsterSync {
                         break;
                     }
 
-                    System.out.println(
+                    BusAgent.logDebug(
                         "[MonsterSync][SAMPLE] type=" + state.type +
                         " uuid=" + state.uuid +
                         " pos=" + state.position() +

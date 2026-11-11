@@ -5,6 +5,105 @@ import java.lang.reflect.*;
 import java.util.*;
 
 public class BusAgent {
+    private static final java.util.regex.Pattern MESSAGE_TYPE_PATTERN =
+            java.util.regex.Pattern.compile("\"type\"\\s*:\\s*\"([^\"]+)\"");
+
+    private static final java.util.regex.Pattern MESSAGE_FROM_PATTERN =
+            java.util.regex.Pattern.compile("\"from\"\\s*:\\s*\"([^\"]+)\"");
+
+
+    // Precompiled JSON field patterns for the fixed protocol fields.
+    private static final java.util.regex.Pattern JSON_SPRINT_TRUE_PATTERN =
+            java.util.regex.Pattern.compile("(?s).*\"sprint\"\\s*:\\s*true.*");
+
+    private static final java.util.regex.Pattern JSON_PLAYER_X_PATTERN =
+            java.util.regex.Pattern.compile("\"x\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+    private static final java.util.regex.Pattern JSON_PLAYER_Y_PATTERN =
+            java.util.regex.Pattern.compile("\"y\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+    private static final java.util.regex.Pattern JSON_PLAYER_Z_PATTERN =
+            java.util.regex.Pattern.compile("\"z\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+    private static final java.util.regex.Pattern JSON_PLAYER_YAW_PATTERN =
+            java.util.regex.Pattern.compile("\"yaw\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+    private static final java.util.regex.Pattern JSON_PLAYER_PITCH_PATTERN =
+            java.util.regex.Pattern.compile("\"pitch\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+
+    private static final java.util.regex.Pattern JSON_MONSTER_UUID_PATTERN =
+            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("uuid") + "\"\\s*:\\s*\"([^\"]*)\"");
+    private static final java.util.regex.Pattern JSON_MONSTER_ENTITY_TYPE_PATTERN =
+            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("entity_type") + "\"\\s*:\\s*\"([^\"]*)\"");
+    private static final java.util.regex.Pattern JSON_MONSTER_TYPE_PATTERN =
+            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("type") + "\"\\s*:\\s*\"([^\"]*)\"");
+
+    private static final java.util.regex.Pattern JSON_MONSTER_X_PATTERN =
+            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("x") + "\"\\s*:\\s*(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
+    private static final java.util.regex.Pattern JSON_MONSTER_Y_PATTERN =
+            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("y") + "\"\\s*:\\s*(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
+    private static final java.util.regex.Pattern JSON_MONSTER_Z_PATTERN =
+            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("z") + "\"\\s*:\\s*(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
+    private static final java.util.regex.Pattern JSON_MONSTER_YAW_PATTERN =
+            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("yaw") + "\"\\s*:\\s*(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
+    private static final java.util.regex.Pattern JSON_MONSTER_PITCH_PATTERN =
+            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("pitch") + "\"\\s*:\\s*(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
+    private static final java.util.regex.Pattern JSON_MONSTER_HEALTH_PATTERN =
+            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("health") + "\"\\s*:\\s*(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
+    private static final java.util.regex.Pattern JSON_MONSTER_MAX_HEALTH_PATTERN =
+            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("max_health") + "\"\\s*:\\s*(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
+
+    private static final java.util.regex.Pattern JSON_MONSTER_SEQ_PATTERN =
+            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("seq") + "\"\\s*:\\s*([0-9]+)");
+
+    private static java.util.regex.Pattern playerNumberPattern(String key) {
+        if ("x".equals(key)) return JSON_PLAYER_X_PATTERN;
+        if ("y".equals(key)) return JSON_PLAYER_Y_PATTERN;
+        if ("z".equals(key)) return JSON_PLAYER_Z_PATTERN;
+        if ("yaw".equals(key)) return JSON_PLAYER_YAW_PATTERN;
+        if ("pitch".equals(key)) return JSON_PLAYER_PITCH_PATTERN;
+        return java.util.regex.Pattern.compile(
+                "\"" + key + "\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+    }
+
+    private static java.util.regex.Pattern monsterStringPattern(String key) {
+        if ("uuid".equals(key)) return JSON_MONSTER_UUID_PATTERN;
+        if ("entity_type".equals(key)) return JSON_MONSTER_ENTITY_TYPE_PATTERN;
+        if ("type".equals(key)) return JSON_MONSTER_TYPE_PATTERN;
+        return java.util.regex.Pattern.compile(
+                "\"" + java.util.regex.Pattern.quote(key) +
+                        "\"\\s*:\\s*\"([^\"]*)\"");
+    }
+
+    private static java.util.regex.Pattern monsterNumberPattern(String key) {
+        if ("x".equals(key)) return JSON_MONSTER_X_PATTERN;
+        if ("y".equals(key)) return JSON_MONSTER_Y_PATTERN;
+        if ("z".equals(key)) return JSON_MONSTER_Z_PATTERN;
+        if ("yaw".equals(key)) return JSON_MONSTER_YAW_PATTERN;
+        if ("pitch".equals(key)) return JSON_MONSTER_PITCH_PATTERN;
+        if ("health".equals(key)) return JSON_MONSTER_HEALTH_PATTERN;
+        if ("max_health".equals(key)) return JSON_MONSTER_MAX_HEALTH_PATTERN;
+        return java.util.regex.Pattern.compile(
+                "\"" + java.util.regex.Pattern.quote(key) +
+                        "\"\\s*:\\s*" +
+                        "(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
+    }
+
+    private static java.util.regex.Pattern monsterLongPattern(String key) {
+        if ("seq".equals(key)) return JSON_MONSTER_SEQ_PATTERN;
+        return java.util.regex.Pattern.compile(
+                "\"" + java.util.regex.Pattern.quote(key) +
+                        "\"\\s*:\\s*([0-9]+)");
+    }
+
+    // Default INFO keeps routine per-message diagnostics out of the console.
+    private static final String CONFIGURED_LOG_LEVEL =
+            System.getenv("JVM_COMBINER_LOG_LEVEL");
+    private static final boolean DEBUG_LOGS =
+            CONFIGURED_LOG_LEVEL != null &&
+            "DEBUG".equalsIgnoreCase(CONFIGURED_LOG_LEVEL.trim());
+
+    static void logDebug(String message) {
+        if (DEBUG_LOGS) {
+            System.out.println(message);
+        }
+    }
     static volatile PrintWriter out;
     static String myName;
     static Instrumentation inst;
@@ -172,17 +271,15 @@ public class BusAgent {
                     String line;
 
                     while ((line = in.readLine()) != null) {
-                        java.util.regex.Matcher typeMatcher = java.util.regex.Pattern.compile(
-                                "\"type\"\\s*:\\s*\"([^\"]+)\"")
-                                .matcher(line);
+                        java.util.regex.Matcher typeMatcher =
+                                MESSAGE_TYPE_PATTERN.matcher(line);
 
                         if (!typeMatcher.find()) {
                             continue;
                         }
 
-                        java.util.regex.Matcher fromMatcher = java.util.regex.Pattern.compile(
-                                "\"from\"\\s*:\\s*\"([^\"]+)\"")
-                                .matcher(line);
+                        java.util.regex.Matcher fromMatcher =
+                                MESSAGE_FROM_PATTERN.matcher(line);
 
                         if (!fromMatcher.find() ||
                                 peer.isEmpty() ||
@@ -223,8 +320,8 @@ public class BusAgent {
                                 lastFabricReceiveAt = System.currentTimeMillis();
                             }
                             handleNeoForgeSync(line);
-                        } else if ("monster_spawn".equals(typeMatcher.group(1)) ||
-                                "monster_update".equals(typeMatcher.group(1))) {
+                        } else if ("monster_spawn".equals(incomingType) ||
+                                "monster_update".equals(incomingType)) {
                             handleNeoForgeMonsterSync(line);
                         }
                     }
@@ -424,7 +521,7 @@ public class BusAgent {
             }
         }
 
-        System.out.println(
+        BusAgent.logDebug(
                 "[BusAgent:fabric][MONSTER][SEND] message written");
 
         return true;
@@ -463,7 +560,7 @@ public class BusAgent {
             }
         }
 
-        System.out.println(
+        BusAgent.logDebug(
                 "[BusAgent:neoforge][MONSTER][ACK] uuid=" +
                         uuid + " seq=" + seq);
 
@@ -514,7 +611,7 @@ public class BusAgent {
         lastFabricState = state;
         lastFabricSendAt = now;
 
-        System.out.println(
+        BusAgent.logDebug(
                 "[BusAgent:fabric][SEND] x=" + x +
                         " y=" + y +
                         " z=" + z +
@@ -759,7 +856,7 @@ public class BusAgent {
                         runtimeCls.getMethod("setSprinting", boolean.class).invoke(remotePlayer, sprint);
                     } catch (Throwable ignored) {
                     }
-                    System.out.println(
+                    BusAgent.logDebug(
                             "[BusAgent:neoforge] 同步 -> (" + x + "," + y + "," + z + ") yaw=" + yaw + " pitch=" + pitch);
 
                 } catch (Throwable e) {
@@ -1328,13 +1425,14 @@ public class BusAgent {
     }
 
     static boolean readJsonBool(String json, String key) {
+        if ("sprint".equals(key)) {
+            return JSON_SPRINT_TRUE_PATTERN.matcher(json).matches();
+        }
         return json.matches("(?s).*\"" + key + "\"\\s*:\\s*true.*");
     }
 
     static double readJsonNumber(String json, String key) {
-        java.util.regex.Pattern p = java.util.regex.Pattern.compile(
-                "\"" + key + "\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
-        java.util.regex.Matcher m = p.matcher(json);
+        java.util.regex.Matcher m = playerNumberPattern(key).matcher(json);
         if (m.find())
             return Double.parseDouble(m.group(1));
         return 0;
@@ -1343,10 +1441,8 @@ public class BusAgent {
     static String readMonsterJsonString(
             String json,
             String key) {
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
-                "\"" + java.util.regex.Pattern.quote(key) +
-                        "\"\\s*:\\s*\"([^\"]*)\"")
-                .matcher(json);
+        java.util.regex.Matcher matcher =
+                monsterStringPattern(key).matcher(json);
 
         if (!matcher.find()) {
             throw new IllegalArgumentException(
@@ -1359,11 +1455,8 @@ public class BusAgent {
     static double readMonsterJsonNumber(
             String json,
             String key) {
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
-                "\"" + java.util.regex.Pattern.quote(key) +
-                        "\"\\s*:\\s*" +
-                        "(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)")
-                .matcher(json);
+        java.util.regex.Matcher matcher =
+                monsterNumberPattern(key).matcher(json);
 
         if (!matcher.find()) {
             throw new IllegalArgumentException(
@@ -1383,10 +1476,8 @@ public class BusAgent {
     static long readMonsterJsonLong(
             String json,
             String key) {
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
-                "\"" + java.util.regex.Pattern.quote(key) +
-                        "\"\\s*:\\s*([0-9]+)")
-                .matcher(json);
+        java.util.regex.Matcher matcher =
+                monsterLongPattern(key).matcher(json);
 
         if (!matcher.find()) {
             throw new IllegalArgumentException(

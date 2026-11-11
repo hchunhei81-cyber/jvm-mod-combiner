@@ -24,6 +24,7 @@ bus_test/bus-agent.jar
 *.bak
 *.bakup
 *.bakup.*
+backups/
 
 # --- Local Minecraft sandbox and save data ---
 # The sandbox and saves are local runtime data, not project sources.

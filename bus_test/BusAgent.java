@@ -115,6 +115,11 @@ public class BusAgent {
 
     static volatile java.lang.reflect.Method fabricExecuteMethod = null;
 
+    // Cached Fabric Loader reflection bindings.
+    static volatile Class<?> fabricLoaderClass = null;
+    static volatile Method fabricGetInstanceMethod = null;
+    static volatile Method fabricGetGameInstanceMethod = null;
+
     enum FabricBindingState {
         UNINITIALIZED,
         READY,
@@ -139,6 +144,348 @@ public class BusAgent {
     static volatile Method nfExecuteMethod = null;
     static volatile Field nfLevelField = null;
     static volatile Field nfPlayerField = null;
+
+    // Immutable, ClassLoader-scoped NeoForge player reflection bindings.
+    static volatile NeoForgePlayerBindings nfPlayerBindings = null;
+
+    static final class NeoForgePlayerBindings {
+        final ClassLoader loader;
+
+        final Class<?> levelClass;
+        final Class<?> playerClass;
+        final Class<?> profileClass;
+        final Class<?> entityClass;
+
+        final Constructor<?> profileConstructor;
+        final Constructor<?> playerConstructor;
+
+        final Method getEntity;
+        final Method setId;
+        final Method setUUID;
+        final Method setPos;
+        final Method setOldPosAndRot;
+        final Method addEntity;
+
+        // Optional methods preserve the previous per-method failure behavior.
+        final Method setYRot;
+        final Method setXRot;
+        final Method setYHeadRot;
+        final Method setYBodyRot;
+        final Method setSprinting;
+
+        NeoForgePlayerBindings(
+                ClassLoader loader,
+                Class<?> levelClass,
+                Class<?> playerClass,
+                Class<?> profileClass,
+                Class<?> entityClass,
+                Constructor<?> profileConstructor,
+                Constructor<?> playerConstructor,
+                Method getEntity,
+                Method setId,
+                Method setUUID,
+                Method setPos,
+                Method setOldPosAndRot,
+                Method addEntity,
+                Method setYRot,
+                Method setXRot,
+                Method setYHeadRot,
+                Method setYBodyRot,
+                Method setSprinting) {
+
+            this.loader = loader;
+            this.levelClass = levelClass;
+            this.playerClass = playerClass;
+            this.profileClass = profileClass;
+            this.entityClass = entityClass;
+            this.profileConstructor = profileConstructor;
+            this.playerConstructor = playerConstructor;
+            this.getEntity = getEntity;
+            this.setId = setId;
+            this.setUUID = setUUID;
+            this.setPos = setPos;
+            this.setOldPosAndRot = setOldPosAndRot;
+            this.addEntity = addEntity;
+            this.setYRot = setYRot;
+            this.setXRot = setXRot;
+            this.setYHeadRot = setYHeadRot;
+            this.setYBodyRot = setYBodyRot;
+            this.setSprinting = setSprinting;
+        }
+    }
+
+    static Method optionalPlayerMethod(
+            Class<?> type, String name, Class<?>... parameterTypes) {
+        try {
+            return type.getMethod(name, parameterTypes);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    static synchronized NeoForgePlayerBindings getNeoForgePlayerBindings(
+            ClassLoader loader) throws Exception {
+
+        NeoForgePlayerBindings cached = nfPlayerBindings;
+
+        if (cached != null && cached.loader == loader) {
+            return cached;
+        }
+
+        // Build locally. Publish only after every required binding succeeds.
+        Class<?> levelClass = Class.forName(
+                "net.minecraft.client.multiplayer.ClientLevel", true, loader);
+        Class<?> playerClass = Class.forName(
+                "net.minecraft.client.player.RemotePlayer", true, loader);
+        Class<?> profileClass = Class.forName(
+                "com.mojang.authlib.GameProfile", true, loader);
+        Class<?> entityClass = Class.forName(
+                "net.minecraft.world.entity.Entity", true, loader);
+        Class<?> entityTypeClass = Class.forName(
+                "net.minecraft.world.entity.EntityType", true, loader);
+        Class<?> registryApiClass = Class.forName(
+                "net.minecraft.core.Registry", true, loader);
+
+        Constructor<?> profileConstructor =
+                profileClass.getConstructor(java.util.UUID.class, String.class);
+        Constructor<?> playerConstructor =
+                playerClass.getConstructor(levelClass, profileClass);
+
+        Method getEntity = levelClass.getMethod("getEntity", int.class);
+        Method setId = entityClass.getMethod("setId", int.class);
+        Method setUUID =
+                entityClass.getMethod("setUUID", java.util.UUID.class);
+        Method setPos = entityClass.getMethod(
+                "setPos", double.class, double.class, double.class);
+        Method setOldPosAndRot =
+                entityClass.getMethod("setOldPosAndRot");
+        Method addEntity =
+                levelClass.getMethod("addEntity", entityClass);
+
+        Method setYRot =
+                optionalPlayerMethod(playerClass, "setYRot", float.class);
+        Method setXRot =
+                optionalPlayerMethod(playerClass, "setXRot", float.class);
+        Method setYHeadRot =
+                optionalPlayerMethod(playerClass, "setYHeadRot", float.class);
+        Method setYBodyRot =
+                optionalPlayerMethod(playerClass, "setYBodyRot", float.class);
+        Method setSprinting =
+                optionalPlayerMethod(playerClass, "setSprinting", boolean.class);
+
+        NeoForgePlayerBindings result = new NeoForgePlayerBindings(
+                loader,
+                levelClass,
+                playerClass,
+                profileClass,
+                entityClass,
+                profileConstructor,
+                playerConstructor,
+                getEntity,
+                setId,
+                setUUID,
+                setPos,
+                setOldPosAndRot,
+                addEntity,
+                setYRot,
+                setXRot,
+                setYHeadRot,
+                setYBodyRot,
+                setSprinting);
+
+        nfPlayerBindings = result;
+        return result;
+    }
+
+
+    // Immutable, ClassLoader-scoped NeoForge monster reflection bindings.
+    static volatile NeoForgeMonsterBindings nfMonsterBindings = null;
+
+    static final class NeoForgeMonsterBindings {
+        final ClassLoader loader;
+
+        final Class<?> entityClass;
+        final Class<?> livingClass;
+        final Class<?> levelClass;
+        final Class<?> clientLevelClass;
+        final Class<?> entityTypeClass;
+        final Class<?> registryClass;
+        final Class<?> registryApiClass;
+        final Class<?> resourceLocationClass;
+        final Class<?> spawnReasonClass;
+
+        final Field entityTypeRegistryField;
+
+        final Method entityIsRemoved;
+        final Method resourceLocationParse;
+        final Method registryGetOptional;
+        final Method entityTypeCreate;
+        final Method clientLevelGetEntity;
+        final Method entitySetId;
+        final Method entitySetUUID;
+        final Method entitySetPos;
+        final Method entitySetYRot;
+        final Method entitySetXRot;
+        final Method entitySetYHeadRot;
+        final Method entitySetYBodyRot;
+        final Method entitySetOldPosAndRot;
+        final Method clientLevelAddEntity;
+        final Method livingSetHealth;
+
+        NeoForgeMonsterBindings(
+                ClassLoader loader,
+                Class<?> entityClass,
+                Class<?> livingClass,
+                Class<?> levelClass,
+                Class<?> clientLevelClass,
+                Class<?> entityTypeClass,
+                Class<?> registryClass,
+                Class<?> registryApiClass,
+                Class<?> resourceLocationClass,
+                Class<?> spawnReasonClass,
+                Field entityTypeRegistryField,
+                Method entityIsRemoved,
+                Method resourceLocationParse,
+                Method registryGetOptional,
+                Method entityTypeCreate,
+                Method clientLevelGetEntity,
+                Method entitySetId,
+                Method entitySetUUID,
+                Method entitySetPos,
+                Method entitySetYRot,
+                Method entitySetXRot,
+                Method entitySetYHeadRot,
+                Method entitySetYBodyRot,
+                Method entitySetOldPosAndRot,
+                Method clientLevelAddEntity,
+                Method livingSetHealth) {
+
+            this.loader = loader;
+            this.entityClass = entityClass;
+            this.livingClass = livingClass;
+            this.levelClass = levelClass;
+            this.clientLevelClass = clientLevelClass;
+            this.entityTypeClass = entityTypeClass;
+            this.registryClass = registryClass;
+            this.registryApiClass = registryApiClass;
+            this.resourceLocationClass = resourceLocationClass;
+            this.spawnReasonClass = spawnReasonClass;
+            this.entityTypeRegistryField = entityTypeRegistryField;
+            this.entityIsRemoved = entityIsRemoved;
+            this.resourceLocationParse = resourceLocationParse;
+            this.registryGetOptional = registryGetOptional;
+            this.entityTypeCreate = entityTypeCreate;
+            this.clientLevelGetEntity = clientLevelGetEntity;
+            this.entitySetId = entitySetId;
+            this.entitySetUUID = entitySetUUID;
+            this.entitySetPos = entitySetPos;
+            this.entitySetYRot = entitySetYRot;
+            this.entitySetXRot = entitySetXRot;
+            this.entitySetYHeadRot = entitySetYHeadRot;
+            this.entitySetYBodyRot = entitySetYBodyRot;
+            this.entitySetOldPosAndRot = entitySetOldPosAndRot;
+            this.clientLevelAddEntity = clientLevelAddEntity;
+            this.livingSetHealth = livingSetHealth;
+        }
+    }
+
+    static NeoForgeMonsterBindings getNeoForgeMonsterBindings(
+            ClassLoader loader) throws Exception {
+
+        NeoForgeMonsterBindings cached = nfMonsterBindings;
+        if (cached != null && cached.loader == loader) {
+            return cached;
+        }
+
+        synchronized (BusAgent.class) {
+            cached = nfMonsterBindings;
+            if (cached != null && cached.loader == loader) {
+                return cached;
+            }
+
+            // Build locally. Publish only after every required lookup succeeds.
+            Class<?> entityClass = Class.forName(
+                    "net.minecraft.world.entity.Entity", true, loader);
+            Class<?> livingClass = Class.forName(
+                    "net.minecraft.world.entity.LivingEntity", true, loader);
+            Class<?> levelClass = Class.forName(
+                    "net.minecraft.world.level.Level", true, loader);
+            Class<?> clientLevelClass = Class.forName(
+                    "net.minecraft.client.multiplayer.ClientLevel", true, loader);
+            Class<?> entityTypeClass = Class.forName(
+                    "net.minecraft.world.entity.EntityType", true, loader);
+            Class<?> registryClass = Class.forName(
+                    "net.minecraft.core.registries.BuiltInRegistries", true, loader);
+            Class<?> registryApiClass = Class.forName(
+                    "net.minecraft.core.Registry", true, loader);
+            Class<?> resourceLocationClass = Class.forName(
+                    "net.minecraft.resources.ResourceLocation", true, loader);
+            Class<?> spawnReasonClass = Class.forName(
+                    "net.minecraft.world.entity.EntitySpawnReason", true, loader);
+
+            Field entityTypeRegistryField =
+                    registryClass.getField("ENTITY_TYPE");
+
+            Method entityIsRemoved = entityClass.getMethod("isRemoved");
+            Method resourceLocationParse =
+                    resourceLocationClass.getMethod("parse", String.class);
+            Method registryGetOptional =
+                    registryApiClass.getMethod("getOptional", resourceLocationClass);
+            Method entityTypeCreate =
+                    entityTypeClass.getMethod("create", levelClass, spawnReasonClass);
+            Method clientLevelGetEntity =
+                    clientLevelClass.getMethod("getEntity", int.class);
+            Method entitySetId = entityClass.getMethod("setId", int.class);
+            Method entitySetUUID =
+                    entityClass.getMethod("setUUID", java.util.UUID.class);
+            Method entitySetPos = entityClass.getMethod(
+                    "setPos", double.class, double.class, double.class);
+            Method entitySetYRot = entityClass.getMethod("setYRot", float.class);
+            Method entitySetXRot = entityClass.getMethod("setXRot", float.class);
+            Method entitySetYHeadRot =
+                    entityClass.getMethod("setYHeadRot", float.class);
+            Method entitySetYBodyRot =
+                    entityClass.getMethod("setYBodyRot", float.class);
+            Method entitySetOldPosAndRot =
+                    entityClass.getMethod("setOldPosAndRot");
+            Method clientLevelAddEntity =
+                    clientLevelClass.getMethod("addEntity", entityClass);
+            Method livingSetHealth =
+                    livingClass.getMethod("setHealth", float.class);
+
+            NeoForgeMonsterBindings result = new NeoForgeMonsterBindings(
+                    loader,
+                    entityClass,
+                    livingClass,
+                    levelClass,
+                    clientLevelClass,
+                    entityTypeClass,
+                    registryClass,
+                    registryApiClass,
+                    resourceLocationClass,
+                    spawnReasonClass,
+                    entityTypeRegistryField,
+                    entityIsRemoved,
+                    resourceLocationParse,
+                    registryGetOptional,
+                    entityTypeCreate,
+                    clientLevelGetEntity,
+                    entitySetId,
+                    entitySetUUID,
+                    entitySetPos,
+                    entitySetYRot,
+                    entitySetXRot,
+                    entitySetYHeadRot,
+                    entitySetYBodyRot,
+                    entitySetOldPosAndRot,
+                    clientLevelAddEntity,
+                    livingSetHealth);
+
+            nfMonsterBindings = result;
+            return result;
+        }
+    }
+
     static volatile Object remotePlayer = null;
     static volatile Object remotePlayerLevel = null;
     static final java.util.concurrent.ConcurrentHashMap<java.util.UUID, Object> remoteMonsters = new java.util.concurrent.ConcurrentHashMap<>();
@@ -351,22 +698,42 @@ public class BusAgent {
         }
     }
 
+    static synchronized void bindFabricLoaderMethods()
+            throws ReflectiveOperationException {
+        if (fabricLoaderClass != null &&
+                fabricGetInstanceMethod != null &&
+                fabricGetGameInstanceMethod != null) {
+            return;
+        }
+
+        // Build locally and publish only after every lookup succeeds.
+        Class<?> candidateClass = Class.forName(
+                "net.fabricmc.loader.api.FabricLoader");
+
+        Method getInstance =
+                candidateClass.getMethod("getInstance");
+
+        Method getGameInstance =
+                candidateClass.getMethod("getGameInstance");
+
+        fabricLoaderClass = candidateClass;
+        fabricGetInstanceMethod = getInstance;
+        fabricGetGameInstanceMethod = getGameInstance;
+    }
+
     static void monitorFabricPlayer() {
         System.out.println("[BusAgent:fabric] monitor thread started");
 
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 if (fabricMcInstance == null) {
-                    Class<?> loaderClass = Class.forName(
-                            "net.fabricmc.loader.api.FabricLoader");
+                    bindFabricLoaderMethods();
 
-                    Object loader = loaderClass
-                            .getMethod("getInstance")
-                            .invoke(null);
+                    Object loader =
+                            fabricGetInstanceMethod.invoke(null);
 
-                    Object instance = loaderClass
-                            .getMethod("getGameInstance")
-                            .invoke(loader);
+                    Object instance =
+                            fabricGetGameInstanceMethod.invoke(loader);
 
                     if (instance == null) {
                         Thread.sleep(250);
@@ -816,35 +1183,22 @@ public class BusAgent {
                     if (level == null)
                         return;
                     ClassLoader loader = nfMcClass.getClassLoader();
-
-                    Class<?> levelClass = Class.forName("net.minecraft.client.multiplayer.ClientLevel", true, loader);
-                    Class<?> playerClass = Class.forName("net.minecraft.client.player.RemotePlayer", true, loader);
-                    Class<?> profileClass = Class.forName("com.mojang.authlib.GameProfile", true, loader);
-                    Class<?> entityClass = Class.forName("net.minecraft.world.entity.Entity", true, loader);
-
-                    Class<?> entityTypeClass = Class.forName(
-                            "net.minecraft.world.entity.EntityType",
-                            true,
-                            loader);
-
-                    Class<?> registryApiClass = Class.forName(
-                            "net.minecraft.core.Registry",
-                            true,
-                            loader);
+                    NeoForgePlayerBindings bindings =
+                            getNeoForgePlayerBindings(loader);
 
                     if (remotePlayer != null && remotePlayerLevel != level) {
                         removeRemotePlayerNow("world-changed");
                     }
 
                     if (remotePlayer == null) {
-                        Object profile = profileClass.getConstructor(java.util.UUID.class, String.class)
+                        Object profile = bindings.profileConstructor
                                 .newInstance(remotePlayerUuid, "FabricMirror");
-                        Object player = playerClass.getConstructor(levelClass, profileClass)
+                        Object player = bindings.playerConstructor
                                 .newInstance(level, profile);
 
-                        Method getEntity = levelClass.getMethod("getEntity", int.class);
-                        Method setId = entityClass.getMethod("setId", int.class);
-                        Method setUUID = entityClass.getMethod("setUUID", java.util.UUID.class);
+                        Method getEntity = bindings.getEntity;
+                        Method setId = bindings.setId;
+                        Method setUUID = bindings.setUUID;
 
                         int candidate = 1_900_000_000;
                         for (int i = 0; i < 10000; i++, candidate--) {
@@ -855,40 +1209,47 @@ public class BusAgent {
                         setId.invoke(player, candidate);
                         setUUID.invoke(player, remotePlayerUuid);
 
-                        entityClass.getMethod("setPos", double.class, double.class, double.class)
-                                .invoke(player, x, y, z);
-                        entityClass.getMethod("setOldPosAndRot").invoke(player);
+                        bindings.setPos.invoke(player, x, y, z);
+                        bindings.setOldPosAndRot.invoke(player);
 
-                        levelClass.getMethod("addEntity", entityClass).invoke(level, player);
+                        bindings.addEntity.invoke(level, player);
                         remotePlayer = player;
                         remotePlayerLevel = level;
 
                         System.out.println("[BusAgent:neoforge] ✅ 成功创建镜像实体！ID=" + candidate);
                     } else {
-                        entityClass.getMethod("setPos", double.class, double.class, double.class)
-                                .invoke(remotePlayer, x, y, z);
-                        entityClass.getMethod("setOldPosAndRot").invoke(remotePlayer);
+                        bindings.setPos.invoke(remotePlayer, x, y, z);
+                        bindings.setOldPosAndRot.invoke(remotePlayer);
                     }
 
-                    Class<?> runtimeCls = remotePlayer.getClass();
                     try {
-                        runtimeCls.getMethod("setYRot", float.class).invoke(remotePlayer, yaw);
+                        if (bindings.setYRot != null) {
+                            bindings.setYRot.invoke(remotePlayer, yaw);
+                        }
                     } catch (Throwable ignored) {
                     }
                     try {
-                        runtimeCls.getMethod("setXRot", float.class).invoke(remotePlayer, pitch);
+                        if (bindings.setXRot != null) {
+                            bindings.setXRot.invoke(remotePlayer, pitch);
+                        }
                     } catch (Throwable ignored) {
                     }
                     try {
-                        runtimeCls.getMethod("setYHeadRot", float.class).invoke(remotePlayer, yaw);
+                        if (bindings.setYHeadRot != null) {
+                            bindings.setYHeadRot.invoke(remotePlayer, yaw);
+                        }
                     } catch (Throwable ignored) {
                     }
                     try {
-                        runtimeCls.getMethod("setYBodyRot", float.class).invoke(remotePlayer, yaw);
+                        if (bindings.setYBodyRot != null) {
+                            bindings.setYBodyRot.invoke(remotePlayer, yaw);
+                        }
                     } catch (Throwable ignored) {
                     }
                     try {
-                        runtimeCls.getMethod("setSprinting", boolean.class).invoke(remotePlayer, sprint);
+                        if (bindings.setSprinting != null) {
+                            bindings.setSprinting.invoke(remotePlayer, sprint);
+                        }
                     } catch (Throwable ignored) {
                     }
                     BusAgent.logDebug(
@@ -971,51 +1332,18 @@ public class BusAgent {
                             }
 
                             ClassLoader loader = nfMcClass.getClassLoader();
+                            NeoForgeMonsterBindings bindings =
+                                    getNeoForgeMonsterBindings(loader);
 
-                            Class<?> entityClass = Class.forName(
-                                    "net.minecraft.world.entity.Entity",
-                                    true,
-                                    loader);
-
-                            Class<?> livingClass = Class.forName(
-                                    "net.minecraft.world.entity.LivingEntity",
-                                    true,
-                                    loader);
-
-                            Class<?> levelClass = Class.forName(
-                                    "net.minecraft.world.level.Level",
-                                    true,
-                                    loader);
-
-                            Class<?> clientLevelClass = Class.forName(
-                                    "net.minecraft.client.multiplayer.ClientLevel",
-                                    true,
-                                    loader);
-
-                            Class<?> entityTypeClass = Class.forName(
-                                    "net.minecraft.world.entity.EntityType",
-                                    true,
-                                    loader);
-
-                            Class<?> registryClass = Class.forName(
-                                    "net.minecraft.core.registries.BuiltInRegistries",
-                                    true,
-                                    loader);
-
-                            Class<?> registryApiClass = Class.forName(
-                                    "net.minecraft.core.Registry",
-                                    true,
-                                    loader);
-
-                            Class<?> resourceLocationClass = Class.forName(
-                                    "net.minecraft.resources.ResourceLocation",
-                                    true,
-                                    loader);
-
-                            Class<?> spawnReasonClass = Class.forName(
-                                    "net.minecraft.world.entity.EntitySpawnReason",
-                                    true,
-                                    loader);
+                            Class<?> entityClass = bindings.entityClass;
+                            Class<?> livingClass = bindings.livingClass;
+                            Class<?> levelClass = bindings.levelClass;
+                            Class<?> clientLevelClass = bindings.clientLevelClass;
+                            Class<?> entityTypeClass = bindings.entityTypeClass;
+                            Class<?> registryClass = bindings.registryClass;
+                            Class<?> registryApiClass = bindings.registryApiClass;
+                            Class<?> resourceLocationClass = bindings.resourceLocationClass;
+                            Class<?> spawnReasonClass = bindings.spawnReasonClass;
 
                             // World changed: discard only monster mirrors.
                             if (remoteMonsterLevel != null &&
@@ -1044,7 +1372,7 @@ public class BusAgent {
 
                             if (entity != null) {
                                 boolean removed = Boolean.TRUE.equals(
-                                        entityClass.getMethod("isRemoved")
+                                        bindings.entityIsRemoved
                                                 .invoke(entity));
 
                                 if (removed) {
@@ -1054,17 +1382,13 @@ public class BusAgent {
                             }
 
                             if (entity == null) {
-                                Object resourceLocation = resourceLocationClass
-                                        .getMethod("parse", String.class)
+                                Object resourceLocation = bindings.resourceLocationParse
                                         .invoke(null, entityTypeId);
 
-                                Object registry = registryClass.getField("ENTITY_TYPE")
+                                Object registry = bindings.entityTypeRegistryField
                                         .get(null);
 
-                                Object optional = registryApiClass
-                                        .getMethod(
-                                                "getOptional",
-                                                resourceLocationClass)
+                                Object optional = bindings.registryGetOptional
                                         .invoke(registry, resourceLocation);
 
                                 if (!(optional instanceof java.util.Optional<?>)) {
@@ -1087,11 +1411,7 @@ public class BusAgent {
                                         (Class<Enum>) spawnReasonClass.asSubclass(Enum.class),
                                         "COMMAND");
 
-                                entity = entityTypeClass
-                                        .getMethod(
-                                                "create",
-                                                levelClass,
-                                                spawnReasonClass)
+                                entity = bindings.entityTypeCreate
                                         .invoke(entityType, level, spawnReason);
 
                                 if (entity == null) {
@@ -1104,10 +1424,9 @@ public class BusAgent {
 
                                 int candidate = nextRemoteMonsterId;
 
-                                Method getEntity = clientLevelClass
-                                        .getMethod("getEntity", int.class);
+                                Method getEntity = bindings.clientLevelGetEntity;
 
-                                Method setId = entityClass.getMethod("setId", int.class);
+                                Method setId = bindings.entitySetId;
 
                                 boolean foundFreeId = false;
 
@@ -1129,22 +1448,13 @@ public class BusAgent {
 
                                 setId.invoke(entity, candidate);
 
-                                entityClass.getMethod(
-                                        "setUUID",
-                                        java.util.UUID.class).invoke(entity, uuid);
+                                bindings.entitySetUUID.invoke(entity, uuid);
 
-                                entityClass.getMethod(
-                                        "setPos",
-                                        double.class,
-                                        double.class,
-                                        double.class).invoke(entity, x, y, z);
+                                bindings.entitySetPos.invoke(entity, x, y, z);
 
-                                entityClass.getMethod(
-                                        "setOldPosAndRot").invoke(entity);
+                                bindings.entitySetOldPosAndRot.invoke(entity);
 
-                                clientLevelClass.getMethod(
-                                        "addEntity",
-                                        entityClass).invoke(level, entity);
+                                bindings.clientLevelAddEntity.invoke(level, entity);
 
                                 remoteMonsters.put(uuid, entity);
 
@@ -1155,35 +1465,20 @@ public class BusAgent {
                                                 " id=" + candidate);
                             }
 
-                            entityClass.getMethod(
-                                    "setPos",
-                                    double.class,
-                                    double.class,
-                                    double.class).invoke(entity, x, y, z);
+                            bindings.entitySetPos.invoke(entity, x, y, z);
 
-                            entityClass.getMethod(
-                                    "setYRot",
-                                    float.class).invoke(entity, yaw);
+                            bindings.entitySetYRot.invoke(entity, yaw);
 
-                            entityClass.getMethod(
-                                    "setXRot",
-                                    float.class).invoke(entity, pitch);
+                            bindings.entitySetXRot.invoke(entity, pitch);
 
-                            entityClass.getMethod(
-                                    "setYHeadRot",
-                                    float.class).invoke(entity, yaw);
+                            bindings.entitySetYHeadRot.invoke(entity, yaw);
 
-                            entityClass.getMethod(
-                                    "setYBodyRot",
-                                    float.class).invoke(entity, yaw);
+                            bindings.entitySetYBodyRot.invoke(entity, yaw);
 
-                            entityClass.getMethod(
-                                    "setOldPosAndRot").invoke(entity);
+                            bindings.entitySetOldPosAndRot.invoke(entity);
 
                             if (livingClass.isInstance(entity)) {
-                                livingClass.getMethod(
-                                        "setHealth",
-                                        float.class).invoke(
+                                bindings.livingSetHealth.invoke(
                                                 entity,
                                                 Math.max(0.0f, Math.min(health, maxHealth)));
                             }

@@ -3,6 +3,7 @@ use jni::jni_str;
 use jni::objects::{JClass, JObjectArray, JString, JValue};
 use jni::{InitArgsBuilder, JNIVersion, JavaVM};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::net::TcpListener;
@@ -67,15 +68,15 @@ fn find_local(rel_path: &str, search_dirs: &[PathBuf]) -> Option<PathBuf> {
 fn resolve_classpath_recursive(
     json_path: &Path,
     search_dirs: &[PathBuf],
-    visited: &mut Vec<PathBuf>,
+    visited: &mut HashSet<PathBuf>,
     total: &mut usize,
-    selected_coordinates: &mut Vec<String>,
+    selected_coordinates: &mut HashSet<String>,
 ) -> Vec<PathBuf> {
     let identity = json_path
         .canonicalize()
         .unwrap_or_else(|_| json_path.to_path_buf());
 
-    if visited.contains(&identity) {
+    if !visited.insert(identity.clone()) {
         eprintln!(
             "[Rust] WARNING: version inheritance cycle detected at {}",
             json_path.display()
@@ -83,12 +84,11 @@ fn resolve_classpath_recursive(
         return Vec::new();
     }
 
-    visited.push(identity);
-
     let json_str = std::fs::read_to_string(json_path).expect("Failed to read version JSON");
     let json: Value = serde_json::from_str(&json_str).expect("Failed to parse version JSON");
 
     let mut classpath: Vec<PathBuf> = Vec::new();
+    let mut classpath_seen: HashSet<PathBuf> = HashSet::new();
 
     // Resolve this version before its parents.
     // A child version's Maven dependency takes precedence over its parent.
@@ -134,7 +134,7 @@ fn resolve_classpath_recursive(
             if let Some(art) = lib.pointer("/downloads/artifact") {
                 if let Some(path) = art.get("path").and_then(Value::as_str) {
                     if let Some(found) = find_local(path, search_dirs) {
-                        if !classpath.contains(&found) {
+                        if classpath_seen.insert(found.clone()) {
                             classpath.push(found);
                         }
                     }
@@ -146,7 +146,7 @@ fn resolve_classpath_recursive(
                     if let Some(c) = classifiers.get(key) {
                         if let Some(path) = c.get("path").and_then(Value::as_str) {
                             if let Some(found) = find_local(path, search_dirs) {
-                                if !classpath.contains(&found) {
+                                if classpath_seen.insert(found.clone()) {
                                     classpath.push(found);
                                 }
                             }
@@ -160,9 +160,7 @@ fn resolve_classpath_recursive(
             // child dependency is unavailable locally.
             if classpath.len() > before {
                 if let Some(key) = coordinate {
-                    if !selected_coordinates.contains(&key) {
-                        selected_coordinates.push(key);
-                    }
+                    selected_coordinates.insert(key);
                 }
             }
         }
@@ -189,7 +187,7 @@ fn resolve_classpath_recursive(
                 );
 
                 for path in inherited {
-                    if !classpath.contains(&path) {
+                    if classpath_seen.insert(path.clone()) {
                         classpath.push(path);
                     }
                 }
@@ -202,14 +200,14 @@ fn resolve_classpath_recursive(
         }
     }
 
-    visited.pop();
+    visited.remove(&identity);
     classpath
 }
 
 fn resolve_classpath(json_path: &Path, search_dirs: &[PathBuf]) -> Vec<PathBuf> {
-    let mut visited: Vec<PathBuf> = Vec::new();
+    let mut visited: HashSet<PathBuf> = HashSet::new();
     let mut total = 0usize;
-    let mut selected_coordinates: Vec<String> = Vec::new();
+    let mut selected_coordinates: HashSet<String> = HashSet::new();
 
     let classpath = resolve_classpath_recursive(
         json_path,
@@ -2149,4 +2147,230 @@ fn main() {
         Ok::<(), jni::errors::Error>(())
     }).expect("Failed to attach thread");
     println!("=== Test finished ===");
+}
+
+
+#[cfg(test)]
+mod classpath_resolver_tests {
+    use super::resolve_classpath;
+    use serde_json::json;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TestTree {
+        root: PathBuf,
+    }
+
+    impl TestTree {
+        fn new() -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock error")
+                .as_nanos();
+
+            let root = std::env::temp_dir().join(format!(
+                "jvm-combiner-r1-test-{}-{}",
+                std::process::id(),
+                nonce
+            ));
+
+            fs::create_dir_all(&root).expect("create test root");
+
+            Self { root }
+        }
+
+        fn artifact(&self, relative: &str) -> PathBuf {
+            let path = self.root.join(relative);
+
+            fs::create_dir_all(
+                path.parent().expect("artifact parent directory"),
+            )
+            .expect("create artifact directory");
+
+            fs::write(&path, b"test artifact").expect("write artifact");
+            path
+        }
+
+        fn version(
+            &self,
+            id: &str,
+            parent: Option<&str>,
+            libraries: &[(&str, &str)],
+        ) -> PathBuf {
+            let version_dir = self.root.join("versions").join(id);
+            fs::create_dir_all(&version_dir).expect("create version directory");
+
+            let library_values: Vec<_> = libraries
+                .iter()
+                .map(|(name, artifact_path)| {
+                    json!({
+                        "name": name,
+                        "downloads": {
+                            "artifact": {
+                                "path": artifact_path
+                            }
+                        }
+                    })
+                })
+                .collect();
+
+            let mut document = json!({
+                "libraries": library_values
+            });
+
+            if let Some(parent_id) = parent {
+                document["inheritsFrom"] = json!(parent_id);
+            }
+
+            let json_path = version_dir.join(format!("{id}.json"));
+
+            fs::write(
+                &json_path,
+                serde_json::to_vec_pretty(&document).expect("serialize version JSON"),
+            )
+            .expect("write version JSON");
+
+            json_path
+        }
+
+        fn search_dirs(&self) -> Vec<PathBuf> {
+            vec![self.root.clone()]
+        }
+    }
+
+    impl Drop for TestTree {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn child_dependency_overrides_parent_dependency() {
+        let tree = TestTree::new();
+
+        let child_artifact = tree.artifact("libraries/example/child.jar");
+        tree.artifact("libraries/example/parent.jar");
+
+        tree.version(
+            "parent",
+            None,
+            &[("example:library:1.0", "libraries/example/parent.jar")],
+        );
+
+        let child_json = tree.version(
+            "child",
+            Some("parent"),
+            &[("example:library:2.0", "libraries/example/child.jar")],
+        );
+
+        let result = resolve_classpath(&child_json, &tree.search_dirs());
+
+        assert_eq!(result, vec![child_artifact]);
+    }
+
+    #[test]
+    fn missing_child_artifact_falls_back_to_parent() {
+        let tree = TestTree::new();
+
+        let parent_artifact = tree.artifact("libraries/example/parent.jar");
+
+        tree.version(
+            "parent",
+            None,
+            &[("example:library:1.0", "libraries/example/parent.jar")],
+        );
+
+        let child_json = tree.version(
+            "child",
+            Some("parent"),
+            &[("example:library:2.0", "libraries/example/missing.jar")],
+        );
+
+        let result = resolve_classpath(&child_json, &tree.search_dirs());
+
+        assert_eq!(result, vec![parent_artifact]);
+    }
+
+    #[test]
+    fn duplicate_artifact_paths_are_emitted_once() {
+        let tree = TestTree::new();
+
+        let shared_artifact = tree.artifact("libraries/shared/library.jar");
+
+        let child_json = tree.version(
+            "child",
+            None,
+            &[
+                ("example:first:1.0", "libraries/shared/library.jar"),
+                ("example:second:1.0", "libraries/shared/library.jar"),
+            ],
+        );
+
+        let result = resolve_classpath(&child_json, &tree.search_dirs());
+
+        assert_eq!(result, vec![shared_artifact]);
+    }
+
+    #[test]
+    fn inheritance_preserves_child_parent_grandparent_order() {
+        let tree = TestTree::new();
+
+        let child_artifact = tree.artifact("libraries/order/child.jar");
+        let parent_artifact = tree.artifact("libraries/order/parent.jar");
+        let grandparent_artifact = tree.artifact("libraries/order/grandparent.jar");
+
+        tree.version(
+            "grandparent",
+            None,
+            &[("example:grandparent:1.0", "libraries/order/grandparent.jar")],
+        );
+
+        tree.version(
+            "parent",
+            Some("grandparent"),
+            &[("example:parent:1.0", "libraries/order/parent.jar")],
+        );
+
+        let child_json = tree.version(
+            "child",
+            Some("parent"),
+            &[("example:child:1.0", "libraries/order/child.jar")],
+        );
+
+        let result = resolve_classpath(&child_json, &tree.search_dirs());
+
+        assert_eq!(
+            result,
+            vec![
+                child_artifact,
+                parent_artifact,
+                grandparent_artifact,
+            ]
+        );
+    }
+
+    #[test]
+    fn inheritance_cycle_terminates_and_keeps_resolved_dependencies() {
+        let tree = TestTree::new();
+
+        let child_artifact = tree.artifact("libraries/cycle/a.jar");
+        let parent_artifact = tree.artifact("libraries/cycle/b.jar");
+
+        let version_a = tree.version(
+            "a",
+            Some("b"),
+            &[("example:a:1.0", "libraries/cycle/a.jar")],
+        );
+
+        tree.version(
+            "b",
+            Some("a"),
+            &[("example:b:1.0", "libraries/cycle/b.jar")],
+        );
+
+        let result = resolve_classpath(&version_a, &tree.search_dirs());
+
+        assert_eq!(result, vec![child_artifact, parent_artifact]);
+    }
 }

@@ -1,3 +1,5 @@
+mod window_manager;
+
 use jni::jni_sig;
 use jni::jni_str;
 use jni::objects::{JClass, JObjectArray, JString, JValue};
@@ -12,9 +14,7 @@ use std::thread;
 
 // 默认使用正式 Agent；测试时可通过 JVM_COMBINER_AGENT_JAR 指定临时 JAR。
 fn resolve_agent_jar(project_root: &Path) -> PathBuf {
-    match env::var_os("JVM_COMBINER_AGENT_JAR")
-        .filter(|value| !value.is_empty())
-    {
+    match env::var_os("JVM_COMBINER_AGENT_JAR").filter(|value| !value.is_empty()) {
         Some(value) => {
             let configured = PathBuf::from(value);
             if configured.is_absolute() {
@@ -26,7 +26,6 @@ fn resolve_agent_jar(project_root: &Path) -> PathBuf {
         None => project_root.join("bus_test/bus-agent.jar"),
     }
 }
-
 
 fn rules_allow(lib: &Value) -> bool {
     let rules = match lib.get("rules").and_then(|r| r.as_array()) {
@@ -270,8 +269,8 @@ fn cached_jar_validation<F>(
 where
     F: FnOnce(&Path) -> bool,
 {
-    let cache_key = cached_canonicalize(path, canonical_path_cache)
-        .unwrap_or_else(|| path.to_path_buf());
+    let cache_key =
+        cached_canonicalize(path, canonical_path_cache).unwrap_or_else(|| path.to_path_buf());
 
     if let Some(&cached) = cache.get(&cache_key) {
         return cached;
@@ -442,16 +441,8 @@ fn build_classpath(is_forge: bool, sandbox_dir: &Path) -> (Vec<PathBuf>, Vec<Pat
 
         let mc_jar = sandbox_dir.join("minecraft-client.jar");
 
-        push_unique_ordered(
-            &mut legacy_cp,
-            &mut legacy_cp_seen,
-            mc_jar.clone(),
-        );
-        push_unique_ordered(
-            &mut bootstrap_cp,
-            &mut bootstrap_cp_seen,
-            mc_jar,
-        );
+        push_unique_ordered(&mut legacy_cp, &mut legacy_cp_seen, mc_jar.clone());
+        push_unique_ordered(&mut bootstrap_cp, &mut bootstrap_cp_seen, mc_jar);
     }
 
     (bootstrap_cp, legacy_cp)
@@ -563,10 +554,8 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     // Validation results are scoped to this Forge launch only.
     let mut jar_validation_cache: std::collections::HashMap<PathBuf, bool> =
         std::collections::HashMap::new();
-    let mut canonical_path_cache: std::collections::HashMap<
-        PathBuf,
-        Option<PathBuf>,
-    > = std::collections::HashMap::new();
+    let mut canonical_path_cache: std::collections::HashMap<PathBuf, Option<PathBuf>> =
+        std::collections::HashMap::new();
     let forge_env = sandbox_dir.join("forge_env");
     let mods_dir = forge_env.join("mods");
     std::fs::create_dir_all(&mods_dir)
@@ -801,7 +790,13 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     legacy.retain(|p| !p.contains("/bootstrap/2.1.7/"));
 
     // Final integrity gate: no invalid or incompatible archive can reach Bootstrap.
-    legacy.retain(|value| accept_forge_jar(Path::new(value), &mut jar_validation_cache, &mut canonical_path_cache));
+    legacy.retain(|value| {
+        accept_forge_jar(
+            Path::new(value),
+            &mut jar_validation_cache,
+            &mut canonical_path_cache,
+        )
+    });
 
     let legacy_cp = legacy.join(":");
 
@@ -988,7 +983,12 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
 
     for path in &legacy {
         let candidate = Path::new(path);
-        if accept_forge_jar(candidate, &mut jar_validation_cache, &mut canonical_path_cache) && !real_cp.contains(path) {
+        if accept_forge_jar(
+            candidate,
+            &mut jar_validation_cache,
+            &mut canonical_path_cache,
+        ) && !real_cp.contains(path)
+        {
             real_cp.push(path.clone());
         }
     }
@@ -1006,7 +1006,9 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
 
         let value = path.to_string_lossy().to_string();
 
-        if accept_forge_jar(&path, &mut jar_validation_cache, &mut canonical_path_cache) && !real_cp.contains(&value) {
+        if accept_forge_jar(&path, &mut jar_validation_cache, &mut canonical_path_cache)
+            && !real_cp.contains(&value)
+        {
             real_cp.push(value);
         }
     }
@@ -1060,10 +1062,10 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
         let jar_string = jar.to_string_lossy().to_string();
 
         let jar_canonical = cached_canonicalize(&jar, &mut canonical_path_cache);
-        if !real_cp.iter().any(|p| {
-            cached_canonicalize(Path::new(p), &mut canonical_path_cache)
-                == jar_canonical
-        }) {
+        if !real_cp
+            .iter()
+            .any(|p| cached_canonicalize(Path::new(p), &mut canonical_path_cache) == jar_canonical)
+        {
             eprintln!("[forge] Added Bootstrap runtime module: {}", jar.display());
             real_cp.push(jar_string);
         }
@@ -1155,18 +1157,19 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     // Remove duplicate physical JAR paths while preserving order.
     let mut seen_forge_cp = std::collections::HashSet::new();
     real_cp.retain(|p| {
-        let key = cached_canonicalize(
-            Path::new(p),
-            &mut canonical_path_cache,
-        )
-        .unwrap_or_else(|| PathBuf::from(p));
+        let key = cached_canonicalize(Path::new(p), &mut canonical_path_cache)
+            .unwrap_or_else(|| PathBuf::from(p));
         seen_forge_cp.insert(key)
     });
     // ===== END FORGE_RUNTIME_MODULES_PATCH =====
 
     // Use the official ModLauncher JAR; sanitize_jar is disabled.
     // Do not refer to a patched JAR that is not generated.
-    if accept_forge_jar(&modlauncher_path, &mut jar_validation_cache, &mut canonical_path_cache) {
+    if accept_forge_jar(
+        &modlauncher_path,
+        &mut jar_validation_cache,
+        &mut canonical_path_cache,
+    ) {
         real_cp.retain(|p| !p.contains("/modlauncher/"));
         let official_ml = modlauncher_path.to_string_lossy().to_string();
         if !real_cp.contains(&official_ml) {
@@ -1310,11 +1313,7 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     }
 }
 
-fn push_unique_ordered<T>(
-    items: &mut Vec<T>,
-    seen: &mut HashSet<T>,
-    item: T,
-)
+fn push_unique_ordered<T>(items: &mut Vec<T>, seen: &mut HashSet<T>, item: T)
 where
     T: Eq + std::hash::Hash + Clone,
 {
@@ -1546,11 +1545,7 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
 
             if path.is_file() {
                 let value = path.to_string_lossy().to_string();
-                push_unique_ordered(
-                    &mut classpath,
-                    &mut classpath_seen,
-                    value,
-                );
+                push_unique_ordered(&mut classpath, &mut classpath_seen, value);
             } else {
                 eprintln!("[neoforge] WARNING: dependency 缺失: {}", path.display());
             }
@@ -2137,8 +2132,7 @@ fn main() {
         }
     }
 
-    let project_root = env::current_dir()
-        .expect("无法获取项目目录");
+    let project_root = env::current_dir().expect("无法获取项目目录");
     let agent_jar = resolve_agent_jar(&project_root);
     if agent_jar.exists() {
         jvm_args.push(format!(
@@ -2223,7 +2217,6 @@ fn main() {
     println!("=== Test finished ===");
 }
 
-
 #[cfg(test)]
 mod classpath_resolver_tests {
     use super::resolve_classpath;
@@ -2257,21 +2250,14 @@ mod classpath_resolver_tests {
         fn artifact(&self, relative: &str) -> PathBuf {
             let path = self.root.join(relative);
 
-            fs::create_dir_all(
-                path.parent().expect("artifact parent directory"),
-            )
-            .expect("create artifact directory");
+            fs::create_dir_all(path.parent().expect("artifact parent directory"))
+                .expect("create artifact directory");
 
             fs::write(&path, b"test artifact").expect("write artifact");
             path
         }
 
-        fn version(
-            &self,
-            id: &str,
-            parent: Option<&str>,
-            libraries: &[(&str, &str)],
-        ) -> PathBuf {
+        fn version(&self, id: &str, parent: Option<&str>, libraries: &[(&str, &str)]) -> PathBuf {
             let version_dir = self.root.join("versions").join(id);
             fs::create_dir_all(&version_dir).expect("create version directory");
 
@@ -2416,11 +2402,7 @@ mod classpath_resolver_tests {
 
         assert_eq!(
             result,
-            vec![
-                child_artifact,
-                parent_artifact,
-                grandparent_artifact,
-            ]
+            vec![child_artifact, parent_artifact, grandparent_artifact,]
         );
     }
 
@@ -2511,8 +2493,7 @@ mod forge_jar_cache_tests {
         let mut cache = HashMap::new();
         assert_eq!(super::cached_canonicalize(&file.path, &mut cache), None);
 
-        fs::write(&file.path, b"created after first lookup")
-            .expect("recreate test file");
+        fs::write(&file.path, b"created after first lookup").expect("recreate test file");
 
         assert_eq!(super::cached_canonicalize(&file.path, &mut cache), None);
         assert_eq!(cache.len(), 1);
@@ -2523,8 +2504,7 @@ mod forge_jar_cache_tests {
     fn canonical_path_aliases_resolve_to_the_same_value() {
         let file = TestFile::new("alias-canonical.jar");
         let alias = file.root.join("alias-link.jar");
-        std::os::unix::fs::symlink(&file.path, &alias)
-            .expect("create symlink alias");
+        std::os::unix::fs::symlink(&file.path, &alias).expect("create symlink alias");
 
         let mut cache = HashMap::new();
 
@@ -2565,15 +2545,25 @@ mod forge_jar_cache_tests {
         let mut canonical_path_cache = HashMap::new();
         let mut calls = 0;
 
-        assert!(cached_jar_validation(&file.path, &mut cache, &mut canonical_path_cache, |_| {
-            calls += 1;
-            true
-        }));
+        assert!(cached_jar_validation(
+            &file.path,
+            &mut cache,
+            &mut canonical_path_cache,
+            |_| {
+                calls += 1;
+                true
+            }
+        ));
 
-        assert!(cached_jar_validation(&file.path, &mut cache, &mut canonical_path_cache, |_| {
-            calls += 1;
-            false
-        }));
+        assert!(cached_jar_validation(
+            &file.path,
+            &mut cache,
+            &mut canonical_path_cache,
+            |_| {
+                calls += 1;
+                false
+            }
+        ));
 
         assert_eq!(calls, 1);
     }
@@ -2585,15 +2575,25 @@ mod forge_jar_cache_tests {
         let mut canonical_path_cache = HashMap::new();
         let mut calls = 0;
 
-        assert!(!cached_jar_validation(&file.path, &mut cache, &mut canonical_path_cache, |_| {
-            calls += 1;
-            false
-        }));
+        assert!(!cached_jar_validation(
+            &file.path,
+            &mut cache,
+            &mut canonical_path_cache,
+            |_| {
+                calls += 1;
+                false
+            }
+        ));
 
-        assert!(!cached_jar_validation(&file.path, &mut cache, &mut canonical_path_cache, |_| {
-            calls += 1;
-            true
-        }));
+        assert!(!cached_jar_validation(
+            &file.path,
+            &mut cache,
+            &mut canonical_path_cache,
+            |_| {
+                calls += 1;
+                true
+            }
+        ));
 
         assert_eq!(calls, 1);
     }
@@ -2606,15 +2606,25 @@ mod forge_jar_cache_tests {
         let mut canonical_path_cache = HashMap::new();
         let mut calls = 0;
 
-        assert!(cached_jar_validation(&first.path, &mut cache, &mut canonical_path_cache, |_| {
-            calls += 1;
-            true
-        }));
+        assert!(cached_jar_validation(
+            &first.path,
+            &mut cache,
+            &mut canonical_path_cache,
+            |_| {
+                calls += 1;
+                true
+            }
+        ));
 
-        assert!(!cached_jar_validation(&second.path, &mut cache, &mut canonical_path_cache, |_| {
-            calls += 1;
-            false
-        }));
+        assert!(!cached_jar_validation(
+            &second.path,
+            &mut cache,
+            &mut canonical_path_cache,
+            |_| {
+                calls += 1;
+                false
+            }
+        ));
 
         assert_eq!(calls, 2);
     }
@@ -2624,27 +2634,35 @@ mod forge_jar_cache_tests {
     fn canonical_path_aliases_share_one_cache_entry() {
         let file = TestFile::new("alias.jar");
         let alias = file.root.join("alias-link.jar");
-        std::os::unix::fs::symlink(&file.path, &alias)
-            .expect("create symlink alias");
+        std::os::unix::fs::symlink(&file.path, &alias).expect("create symlink alias");
 
         let mut cache = HashMap::new();
         let mut canonical_path_cache = HashMap::new();
         let mut calls = 0;
 
-        assert!(cached_jar_validation(&file.path, &mut cache, &mut canonical_path_cache, |_| {
-            calls += 1;
-            true
-        }));
+        assert!(cached_jar_validation(
+            &file.path,
+            &mut cache,
+            &mut canonical_path_cache,
+            |_| {
+                calls += 1;
+                true
+            }
+        ));
 
-        assert!(cached_jar_validation(Path::new(&alias), &mut cache, &mut canonical_path_cache, |_| {
-            calls += 1;
-            false
-        }));
+        assert!(cached_jar_validation(
+            Path::new(&alias),
+            &mut cache,
+            &mut canonical_path_cache,
+            |_| {
+                calls += 1;
+                false
+            }
+        ));
 
         assert_eq!(calls, 1);
     }
 }
-
 
 #[cfg(test)]
 mod neoforge_classpath_tests {
@@ -2682,21 +2700,9 @@ mod neoforge_classpath_tests {
         let mut items = Vec::new();
         let mut seen = HashSet::new();
 
-        push_unique_ordered(
-            &mut items,
-            &mut seen,
-            PathBuf::from("natives/first.jar"),
-        );
-        push_unique_ordered(
-            &mut items,
-            &mut seen,
-            PathBuf::from("natives/second.jar"),
-        );
-        push_unique_ordered(
-            &mut items,
-            &mut seen,
-            PathBuf::from("natives/first.jar"),
-        );
+        push_unique_ordered(&mut items, &mut seen, PathBuf::from("natives/first.jar"));
+        push_unique_ordered(&mut items, &mut seen, PathBuf::from("natives/second.jar"));
+        push_unique_ordered(&mut items, &mut seen, PathBuf::from("natives/first.jar"));
 
         assert_eq!(
             items,
@@ -2714,20 +2720,12 @@ mod neoforge_classpath_tests {
         let mut seen = HashSet::new();
 
         for value in ["third.jar", "first.jar", "second.jar", "first.jar"] {
-            push_unique_ordered(
-                &mut items,
-                &mut seen,
-                String::from(value),
-            );
+            push_unique_ordered(&mut items, &mut seen, String::from(value));
         }
 
-        assert_eq!(
-            items,
-            vec!["third.jar", "first.jar", "second.jar"]
-        );
+        assert_eq!(items, vec!["third.jar", "first.jar", "second.jar"]);
     }
 }
-
 
 #[cfg(test)]
 mod build_classpath_dedup_tests {
@@ -2741,19 +2739,11 @@ mod build_classpath_dedup_tests {
         let mut seen = HashSet::new();
 
         for path in ["scan-a.jar", "scan-b.jar"] {
-            push_unique_ordered(
-                &mut items,
-                &mut seen,
-                PathBuf::from(path),
-            );
+            push_unique_ordered(&mut items, &mut seen, PathBuf::from(path));
         }
 
         for path in ["scan-b.jar", "resolved-c.jar", "scan-a.jar"] {
-            push_unique_ordered(
-                &mut items,
-                &mut seen,
-                PathBuf::from(path),
-            );
+            push_unique_ordered(&mut items, &mut seen, PathBuf::from(path));
         }
 
         assert_eq!(
@@ -2776,27 +2766,11 @@ mod build_classpath_dedup_tests {
 
         let shared = PathBuf::from("shared.jar");
 
-        push_unique_ordered(
-            &mut legacy,
-            &mut legacy_seen,
-            shared.clone(),
-        );
-        push_unique_ordered(
-            &mut legacy,
-            &mut legacy_seen,
-            shared.clone(),
-        );
+        push_unique_ordered(&mut legacy, &mut legacy_seen, shared.clone());
+        push_unique_ordered(&mut legacy, &mut legacy_seen, shared.clone());
 
-        push_unique_ordered(
-            &mut bootstrap,
-            &mut bootstrap_seen,
-            shared.clone(),
-        );
-        push_unique_ordered(
-            &mut bootstrap,
-            &mut bootstrap_seen,
-            shared.clone(),
-        );
+        push_unique_ordered(&mut bootstrap, &mut bootstrap_seen, shared.clone());
+        push_unique_ordered(&mut bootstrap, &mut bootstrap_seen, shared.clone());
 
         assert_eq!(legacy, vec![shared.clone()]);
         assert_eq!(bootstrap, vec![shared]);
@@ -2814,16 +2788,8 @@ mod build_classpath_dedup_tests {
         let mut bootstrap = Vec::new();
         let mut bootstrap_seen = HashSet::new();
 
-        push_unique_ordered(
-            &mut legacy,
-            &mut legacy_seen,
-            mc_jar.clone(),
-        );
-        push_unique_ordered(
-            &mut bootstrap,
-            &mut bootstrap_seen,
-            mc_jar.clone(),
-        );
+        push_unique_ordered(&mut legacy, &mut legacy_seen, mc_jar.clone());
+        push_unique_ordered(&mut bootstrap, &mut bootstrap_seen, mc_jar.clone());
 
         assert_eq!(legacy, vec![mc_jar.clone()]);
         assert_eq!(bootstrap, vec![mc_jar]);
@@ -2835,11 +2801,7 @@ mod build_classpath_dedup_tests {
         let mut seen = HashSet::new();
 
         for path in ["libs/a.jar", "./libs/a.jar", "libs/b.jar", "libs/a.jar"] {
-            push_unique_ordered(
-                &mut items,
-                &mut seen,
-                PathBuf::from(path),
-            );
+            push_unique_ordered(&mut items, &mut seen, PathBuf::from(path));
         }
 
         assert_eq!(

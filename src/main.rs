@@ -1,3 +1,4 @@
+mod window_discovery;
 mod window_integration;
 mod window_manager;
 
@@ -2021,6 +2022,52 @@ fn start_data_bus() -> std::io::Result<()> {
 fn main() {
     let args: Vec<String> = env::args().collect();
 
+    let is_window_discovery = args
+        .windows(2)
+        .any(|pair| pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("window-discovery"))
+        || args.iter().any(|arg| {
+            arg.eq_ignore_ascii_case("window-discovery")
+                || arg.eq_ignore_ascii_case("--mode=window-discovery")
+        });
+
+    if is_window_discovery {
+        println!("=== macOS Window Discovery (read-only) ===");
+
+        match window_discovery::discover_windows() {
+            Ok(windows) => {
+                println!(
+                    "[WindowDiscovery] Found {} on-screen windows",
+                    windows.len()
+                );
+
+                for (index, window) in windows.iter().enumerate() {
+                    println!(
+                        "[Window {}] id={} pid={} owner={:?} title={:?} bounds=({:.1}, {:.1}, {:.1}, {:.1})",
+                        index + 1,
+                        window.window_id,
+                        window.pid,
+                        window.owner_name.as_deref().unwrap_or("<unknown>"),
+                        window.title.as_deref().unwrap_or("<untitled>"),
+                        window.bounds.x,
+                        window.bounds.y,
+                        window.bounds.width,
+                        window.bounds.height,
+                    );
+                }
+
+                if windows.is_empty() {
+                    println!("[WindowDiscovery] No eligible on-screen windows were returned.");
+                }
+            }
+            Err(error) => {
+                eprintln!("[WindowDiscovery] ERROR: {error}");
+                std::process::exit(1);
+            }
+        }
+
+        return;
+    }
+
     let is_fusion = args
         .windows(2)
         .any(|pair| pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("fusion"))
@@ -2078,8 +2125,57 @@ fn main() {
             cmd.status().unwrap();
         });
 
+        // Read-only window monitoring. The Fusion parent owns the
+        // Window Manager and is therefore the authoritative registry reader.
+        let mut last_registered_windows = Vec::new();
+        let mut discovery_failed = false;
+
         loop {
-            thread::sleep(std::time::Duration::from_secs(60));
+            match window_discovery::discover_windows() {
+                Ok(windows) => {
+                    discovery_failed = false;
+
+                    let registrations = window_runtime.registrations();
+                    let mut registered_windows =
+                        window_discovery::associate_windows(windows, &registrations);
+
+                    registered_windows.retain(|record| {
+                        record.loader.is_some()
+                            && record.role.as_deref() == Some("minecraft_client")
+                    });
+
+                    if registered_windows != last_registered_windows {
+                        eprintln!(
+                            "[WindowDiscovery] Registered Minecraft windows: {}",
+                            registered_windows.len()
+                        );
+
+                        for record in &registered_windows {
+                            eprintln!(
+                                "[MinecraftWindow] id={} pid={} loader={} title={:?} bounds=({}, {}, {}, {})",
+                                record.window.window_id,
+                                record.window.pid,
+                                record.loader.as_deref().unwrap_or("unknown"),
+                                record.window.title,
+                                record.window.bounds.x,
+                                record.window.bounds.y,
+                                record.window.bounds.width,
+                                record.window.bounds.height,
+                            );
+                        }
+
+                        last_registered_windows = registered_windows;
+                    }
+                }
+                Err(error) => {
+                    if !discovery_failed {
+                        eprintln!("[WindowDiscovery] Discovery failed: {error}");
+                        discovery_failed = true;
+                    }
+                }
+            }
+
+            thread::sleep(std::time::Duration::from_secs(2));
         }
     }
     let is_forge = args

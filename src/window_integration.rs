@@ -1,4 +1,4 @@
-use crate::window_manager::{self, WindowManagerHandle};
+use crate::window_manager::{self, ClientRegistration, WindowManagerHandle};
 use std::env;
 use std::io;
 use std::net::SocketAddr;
@@ -11,7 +11,7 @@ const BRIDGE_JAR: &str = "window_bridge/build/window-bridge-agent.jar";
 
 pub struct WindowRuntime {
     // 保留 handle，确保本地 Window Manager 不会提前退出。
-    _manager: Option<WindowManagerHandle>,
+    manager: Option<WindowManagerHandle>,
     address: SocketAddr,
     bridge_jar: PathBuf,
 }
@@ -23,7 +23,7 @@ impl WindowRuntime {
         let address = manager.local_addr();
 
         let runtime = Self {
-            _manager: Some(manager),
+            manager: Some(manager),
             address,
             bridge_jar: Self::resolve_bridge_jar(project_root)?,
         };
@@ -65,14 +65,14 @@ impl WindowRuntime {
             let actual_address = manager.local_addr();
             eprintln!("[WindowIntegration] Local Manager listening at {actual_address}");
             return Ok(Self {
-                _manager: Some(manager),
+                manager: Some(manager),
                 address: actual_address,
                 bridge_jar: Self::resolve_bridge_jar(project_root)?,
             });
         };
 
         Ok(Self {
-            _manager: manager,
+            manager,
             address,
             bridge_jar: Self::resolve_bridge_jar(project_root)?,
         })
@@ -92,6 +92,14 @@ impl WindowRuntime {
         }
 
         Ok(path)
+    }
+
+    /// Return registrations owned by this process's local Manager.
+    /// External clients have no access to the parent's in-memory registry.
+    pub fn registrations(&self) -> Vec<ClientRegistration> {
+        self.manager
+            .as_ref()
+            .map_or_else(Vec::new, WindowManagerHandle::registrations)
     }
 
     pub fn address(&self) -> SocketAddr {
@@ -142,7 +150,7 @@ mod tests {
         fs::write(bridge_dir.join("window-bridge-agent.jar"), b"test").unwrap();
 
         let runtime = WindowRuntime {
-            _manager: None,
+            manager: None,
             address: "127.0.0.1:25566".parse().unwrap(),
             bridge_jar: root.join(BRIDGE_JAR),
         };
@@ -173,7 +181,7 @@ mod tests {
     #[test]
     fn java_property_contains_actual_manager_address() {
         let runtime = WindowRuntime {
-            _manager: None,
+            manager: None,
             address: "127.0.0.1:34567".parse().unwrap(),
             bridge_jar: PathBuf::new(),
         };

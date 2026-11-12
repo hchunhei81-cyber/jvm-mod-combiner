@@ -304,6 +304,14 @@ A solution that works on one machine may fail on another GPU or operating system
 
 Start with ordinary operating-system window composition.
 
+**Current prototype status:** The Rust Window Manager and Java bridge register
+Fabric, Forge, and NeoForge JVM processes; tests cover registration,
+reconnection, rejection, and PID-based association. The macOS implementation
+enumerates on-screen windows and offers a read-only Accessibility API probe
+for titles and bounds. These tests do not establish operation against live
+Minecraft windows. The code does not move, resize, embed, or compose windows,
+and Windows/Linux discovery is not implemented.
+
 **1. Independent Client Windows**
 
 Each sandbox keeps its own rendering context and window.
@@ -684,6 +692,12 @@ consistency requirements, and failure behavior before implementation.
 
 ### Phase 5 — Improve Compatibility and Portability
 
+- [x] Add process registration, PID-based window association, and read-only
+      macOS window discovery/Accessibility inspection.
+- [ ] Validate discovery and macOS permission handling with live Minecraft
+      windows.
+- [ ] Define and implement window arrangement/embedding only after selecting
+      the intended user experience.
 - [ ] Establish loader-specific adapter interfaces.
 - [ ] Implement capability-based synchronization.
 - [ ] Add shadow representations for unsupported blocks and entities.

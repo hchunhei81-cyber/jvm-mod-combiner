@@ -74,6 +74,16 @@
 
 Fabric is the sole authoritative player-state publisher. NeoForge operates as a receiver-only client. This prototype does not establish complete gameplay equivalence or general cross-loader compatibility.
 
+### Window-management prototype
+
+- [x] Register Fabric, Forge, and NeoForge JVM processes with a Rust Window Manager through a Java Agent.
+- [x] Test registration, reconnect, explicit rejection, and manager-side client cleanup.
+- [x] Associate macOS on-screen windows with registered processes by PID.
+- [x] Implement read-only macOS window discovery and a read-only Accessibility API probe.
+- [ ] Validate discovery and Accessibility permission handling against live Minecraft windows.
+- [ ] Implement and test window arrangement/embedding only after defining the intended UX; no window manipulation is currently implemented.
+- [ ] Add Windows and Linux support.
+
 ---
 
 ## 🟡 High Priority
@@ -110,18 +120,18 @@ The current check uses the name attached to the TCP connection during registrati
 
 ### 8. Hostile-Mob Synchronization Prototype
 
-The current `bus_test/` working-tree source samples visible/alive hostile `Monster` entities on the Fabric client thread at a maximum of 5 Hz. It tracks mobs by UUID and emits `monster_spawn` for first observations and `monster_update` when sampled state changes. The Rust DataBus source authorizes these message types from Fabric only. The current Java source also has a NeoForge `monster_spawn`/`monster_update` receiver, mirror creation/update, world-change cleanup, and a sequence-based ACK/retry path. These Java changes are not yet runtime-verified and are not part of the checked-in `main` history.
+The committed `bus_test/` source samples visible/alive hostile `Monster` entities on the Fabric client thread at a maximum of 5 Hz. It tracks mobs by UUID and emits `monster_spawn` for first observations and `monster_update` when sampled state changes. The Rust DataBus source authorizes these message types from Fabric only. The Java source also includes a NeoForge `monster_spawn`/`monster_update` receiver, mirror creation/update, world-change cleanup, and a sequence-based ACK/retry path. These Java changes still need packaging and runtime verification.
 
 - [x] Discover and sample hostile Fabric mobs by UUID.
 - [x] Capture registry type, position, rotation, health, and max health.
 - [x] Emit Fabric-side spawn and changed-state JSON messages.
-- [x] Add current working-tree source for NeoForge spawn/update handling and monster mirrors.
-- [x] Add current working-tree source for ACK-based monster state confirmation and retry.
+- [x] Commit NeoForge spawn/update handling and monster-mirror source.
+- [x] Commit ACK-based monster state confirmation and retry source.
 - [ ] Add reliable mob removal detection and `monster_remove` publication.
 - [ ] Rebuild and package the current Java Agent source.
 - [ ] Runtime-test the end-to-end path, ACK/retry behavior, world transitions, and reconnect recovery.
 
-The working-tree source is an end-to-end implementation draft, not a verified feature. Mobs absent from the render iteration are deliberately not treated as removed, and no `monster_remove` message is published yet.
+The committed Java source is an end-to-end implementation draft, not a verified feature. Mobs absent from the render iteration are deliberately not treated as removed, and no `monster_remove` message is published yet.
 
 ### 9. Refactor the Rust Launcher
 
@@ -230,12 +240,14 @@ The TCP DataBus is already implemented. The next step is to evolve it from a bas
 
 ### 15. Rendering and Window Integration
 
+- [x] Prototype loader-process registration, PID-based window association, and read-only macOS window discovery/Accessibility inspection.
+- [ ] Validate discovery against live Minecraft windows and macOS permission behavior.
 - [ ] Investigate whether two Minecraft windows can be managed as one user-facing experience.
 - [ ] Research native window embedding and overlay approaches.
 - [ ] Evaluate platform-specific window composition.
 - [ ] Investigate shared rendering resources only after the process and gameplay synchronization layers are stable.
 
-**Priority:** Reliable gameplay synchronization comes before cross-process GPU sharing.
+**Limit:** The current window prototype observes windows only; it does not move, resize, embed, or compose them. **Priority:** Reliable gameplay synchronization comes before cross-process GPU sharing.
 
 ### 16. Advanced Mod Compatibility
 
@@ -295,7 +307,7 @@ Rust launcher, Fabric and NeoForge startup, Java Agent injection, TCP DataBus, a
 
 <badge color="warning">Next milestone</badge>
 
-Rebuild/package the current Java Agent sources, constrain the self-asserted DataBus registration identity, and runtime-test one-way sender authorization plus the new hostile-mob mirror/ACK path.
+Rebuild/package the committed Java Agent sources, constrain the self-asserted DataBus registration identity, and runtime-test one-way sender authorization plus the hostile-mob mirror/ACK path.
 
 The next milestone also includes testing unauthorized reverse `player_move` rejection, reconnect behavior, and RemotePlayer lifecycle recovery. The DataBus policy exists in Rust source, but it is not a substitute for authenticating local clients or for runtime verification. The current Java Agent additions are working-tree changes; they are not yet recorded in `main`.
 

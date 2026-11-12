@@ -115,6 +115,9 @@ Rust 负责：
 - [x] Fabric 心跳超时后的初始镜像移除已通过运行时验证。
 - [x] Fabric 重新进入世界后的初始镜像重建已通过运行时验证。
 - [x] Rust DataBus 源码会拒绝非 Fabric 注册客户端发布受保护的玩家和怪物状态消息。
+- [x] Rust Window Manager 与 Java Bridge 可注册 Fabric、Forge、NeoForge JVM 进程；测试覆盖注册、重连、拒绝及按 PID 关联窗口。
+- [x] 已实现 macOS 只读屏幕窗口发现和可选的只读辅助功能 API 检查；该检查需要用户授予 macOS 辅助功能权限。
+- [x] Rust 测试套件通过（36 项），Java Bridge 测试程序也通过三种 Loader 标签的注册、重连和拒绝测试。
 
 ### 正在开发
 
@@ -125,10 +128,11 @@ Rust 负责：
 - [ ] 增加协议版本、模式校验、序列号和过期状态拒绝。
 - [ ] 验证断开、重连和世界切换恢复。
 - [ ] 改善高延迟和丢包条件下的同步。
-- [ ] 重新打包并运行时测试当前工作区中的敌对生物接收、镜像及 ACK/重试实现。
+- [ ] 重新打包并运行时测试已提交的敌对生物接收、镜像及 ACK/重试实现。
 - [ ] 实现可靠的敌对生物移除消息，并验证重连和世界切换恢复。
+- [ ] 在 macOS 实际 Minecraft 窗口中验证注册与发现，再研究窗口排列/集成。当前尚未实现窗口移动、嵌入、合成或 Windows/Linux 支持。
 
-**当前源码说明：** Java 源码位于 [`bus_test/`](bus_test/)。当前工作区已包含 Fabric 怪物采样、NeoForge 生成/更新镜像处理，以及基于序列号的 ACK/重试实现。这些 Java 修改尚未进入已提交的 `main` 历史，也未经过运行时验证；可靠的怪物移除尚未实现。
+**当前源码说明：** Java 源码位于 [`bus_test/`](bus_test/)。已提交源码包含 Fabric 怪物采样、NeoForge 生成/更新镜像处理，以及基于序列号的 ACK/重试实现。这些改动仍需重新构建到 `bus_test/bus-agent.jar` 并在 Minecraft 中运行时验证；可靠的怪物移除尚未实现。
 
 ### 尚未实现
 
@@ -221,7 +225,7 @@ Rust 成功启动 Forge 1.21.4（54.1.22），并进入早期加载界面。
 
 ### 环境要求
 
-- Rust stable 工具链（1.75+）。
+- Rust stable 工具链（1.85+；项目使用 Rust 2024 edition）。
 - 推荐 JDK 21。
 - 本地 Minecraft 安装及对应 Loader 文件。
 - 当前主要验证环境为 macOS，Windows 和 Linux 尚需进一步测试。
@@ -396,6 +400,8 @@ JVM Mod Combiner 探索不同的架构：
 - [ ] Shared-memory / Zero-copy DataBus。
 - [ ] 同一 JVM 中的真实 Loader 隔离。
 - [ ] 动态依赖解析。
+- [x] 初步实现本地窗口注册、PID 关联和只读 macOS 窗口观察。
+- [ ] 窗口排列、嵌入/合成以及双 Minecraft 窗口实测。
 - [ ] Windows / Linux 验证。
 - [ ] 性能和稳定性测试。
 

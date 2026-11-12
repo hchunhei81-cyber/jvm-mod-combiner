@@ -1494,13 +1494,13 @@ Future reverse-direction messages may include explicitly defined interaction req
 
 The historical bidirectional design is retained for architectural context.
 
-## 8.6 Hostile-Mob Synchronization Is an Unverified Working-Tree Prototype
+## 8.6 Hostile-Mob Synchronization Is Committed but Runtime-Unverified
 
-<badge color="warning">Java source implementation added; build/runtime verification pending</badge>
+<badge color="warning">Java source committed; packaged-agent/runtime verification pending</badge>
 
-The current working-tree `bus_test/MonsterSync.java` runs from the Fabric monitor on the client thread. It samples visible, living hostile `Monster` entities at a maximum of 5 Hz, tracks them by UUID, and emits `monster_spawn` for newly observed mobs and `monster_update` when position, rotation, type, or health changes. Pending states carry sequence numbers, are retried with backoff, and are confirmed by a `monster_ack`. The Rust DataBus permits protected monster-state messages only from the registered `fabric` name.
+The committed `bus_test/MonsterSync.java` runs from the Fabric monitor on the client thread. It samples visible, living hostile `Monster` entities at a maximum of 5 Hz, tracks them by UUID, and emits `monster_spawn` for newly observed mobs and `monster_update` when position, rotation, type, or health changes. Pending states carry sequence numbers, are retried with backoff, and are confirmed by a `monster_ack`. The Rust DataBus permits protected monster-state messages only from the registered `fabric` name.
 
-The current working-tree `BusAgent.java` also parses `monster_spawn` and `monster_update` on NeoForge, creates or updates local entity mirrors, clears those mirrors when it observes a world change, and sends an ACK after applying a message. The Fabric side accepts those ACKs. This is an implementation in the uncommitted working tree, not proof that the packaged Agent or live clients run it successfully. The checked-in `main` history does not yet include these Java changes.
+The committed `BusAgent.java` also parses `monster_spawn` and `monster_update` on NeoForge, creates or updates local entity mirrors, clears those mirrors when it observes a world change, and sends an ACK after applying a message. The Fabric side accepts those ACKs. This source implementation does not prove that the packaged Agent or live clients run it successfully; rebuild and verify the packaged JAR before treating it as current.
 
 No `monster_remove` message is published yet. Mobs missing from the Fabric render iteration are deliberately not treated as removed, since absence from that iteration is not proof of despawn. The current Java Agent JAR must be rebuilt from source, and end-to-end behavior—including retries, ACKs, world transitions, and reconnect recovery—still needs runtime testing.
 
@@ -1510,6 +1510,33 @@ No `monster_remove` message is published yet. Mobs missing from the Fabric rende
 - Define reliable despawn and world-change semantics.
 - Publish removal events without inferring despawn from render-list absence.
 - Runtime-test entity creation/update, ACK/retry ordering, reconnect snapshots, and cleanup before calling this synchronized.
+
+## 8.7 Window Registration and Read-Only macOS Discovery
+
+<badge color="warning">Prototype implemented; live Minecraft validation pending</badge>
+
+The Rust Window Manager accepts loader-process registrations from the Java
+bridge, tracks process ID, loader, role, and protocol version, and exposes the
+registrations to the owning Rust process. The Java bridge has retry and explicit
+rejection behavior. Rust tests cover registration lifecycle and PID association;
+the Java harness verifies registration, reconnect, and rejection for Fabric,
+Forge, and NeoForge labels.
+
+On macOS, the project can enumerate on-screen windows and associate them with
+registered JVMs by PID. An optional Accessibility API probe reads window titles
+and bounds when the user has granted Accessibility permission. These operations
+are read-only: the prototype does not move, resize, embed, or compose windows.
+The test suite does not establish that the feature works with live Minecraft
+windows or that it is portable beyond macOS.
+
+**Remaining work**
+
+- Verify process registration and window association with live Minecraft
+  clients, including macOS permission handling.
+- Decide the intended user experience before implementing window control,
+  embedding, or composition.
+- Investigate Windows and Linux separately; their window APIs are not
+  implemented by this macOS probe.
 
 # 9. ClassLoader Isolation and Mixin Compatibility
 
@@ -1793,8 +1820,11 @@ Validate the same launch pipeline on:
 | Fabric-to-NeoForge state transfer | <badge color="success">PoC verified</badge> |
 | NeoForge RemotePlayer injection | <badge color="success">PoC verified</badge> |
 | Fabric hostile-mob sampling, spawn/update, and ACK/retry | <badge color="warning">Implemented in current working-tree source; runtime verification pending</badge> |
-| NeoForge hostile-mob receive/mirroring | <badge color="warning">Implemented in current working-tree source; runtime verification pending</badge> |
-| Hostile-mob ACK/retry delivery | <badge color="warning">Implemented in current working-tree source; runtime verification pending</badge> |
+| NeoForge hostile-mob receive/mirroring | <badge color="warning">Committed source; packaged-agent/runtime verification pending</badge> |
+| Hostile-mob ACK/retry delivery | <badge color="warning">Committed source; packaged-agent/runtime verification pending</badge> |
+| Rust Window Manager and Java bridge lifecycle | <badge color="success">Unit and bridge-harness tests pass</badge> |
+| macOS window discovery and PID association | <badge color="warning">Implemented; live Minecraft validation pending</badge> |
+| Window movement, embedding, or composition | <badge color="warning">Not implemented</badge> |
 | Bidirectional player mirroring | <badge color="warning">Not a current goal</badge> |
 | Cross-version world consistency | <badge color="warning">Under investigation</badge> |
 | Same-JVM real-loader isolation | <badge color="warning">Not solved</badge> |
@@ -1881,7 +1911,7 @@ The intended implementation order is:
 
 ## Current Development Focus
 
-The current focus is validating the Rust source-level one-way state policy at runtime, constraining registration identity, and rebuilding/testing the working-tree Java Agent changes for player and hostile-mob mirror lifecycle.
+The current focus is validating the Rust source-level one-way state policy at runtime, constraining registration identity, and rebuilding/testing the committed Java Agent changes for player and hostile-mob mirror lifecycle. The new window-management prototype also needs validation against live macOS Minecraft windows; it currently observes windows only.
 
 **Next milestone:**
 

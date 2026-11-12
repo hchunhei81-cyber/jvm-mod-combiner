@@ -107,6 +107,9 @@ Tested primarily on macOS with Apple Silicon and Temurin JDK 21.
 - [x] Initial mirror removal after Fabric heartbeat timeout has been verified at runtime.
 - [x] Initial mirror recreation after Fabric re-enters a world has been verified at runtime.
 - [x] Rust DataBus source rejects non-Fabric registered clients publishing protected player and monster state messages.
+- [x] A Rust Window Manager and Java bridge register Fabric, Forge, and NeoForge JVM processes; tests cover registration, reconnection, rejection, and PID-based window association.
+- [x] macOS read-only on-screen window discovery and an optional read-only Accessibility API probe are implemented. The probe requires the user's macOS Accessibility permission.
+- [x] Rust tests pass (36 tests), and the Java bridge harness passes registration, reconnect, and rejection cases for all three loader labels.
 
 ### Currently in progress
 
@@ -119,6 +122,7 @@ Tested primarily on macOS with Apple Silicon and Temurin JDK 21.
 - [ ] Improve synchronization behavior under latency and packet loss.
 - [ ] Rebuild and runtime-test the current working-tree hostile-mob receiver, mirror, and ACK/retry implementation.
 - [ ] Implement reliable hostile-mob removal messages and verify reconnect/world-transition recovery.
+- [ ] Validate window registration and discovery against live Minecraft windows on macOS, then investigate actual window arrangement/integration. Window movement, resizing, embedding, composition, and Windows/Linux support are not implemented.
 
 **Current authority model:** Fabric is the sole authoritative source of player
 movement state. NeoForge receives Fabric state and maintains a remote-player
@@ -134,10 +138,11 @@ self-asserted by the connecting client, so the name is a routing identity, not
 an authenticated process identity. The listener binds to loopback.
 
 The Java sources currently live in [`bus_test/`](bus_test/), not a
-`bus-agent/` directory. Current working-tree Java sources include Fabric mob
-sampling, NeoForge spawn/update mirror handling, and sequence-based ACK/retry.
-These Java edits are not yet in the checked-in `main` history and are not
-runtime-verified. Reliable monster removal is not implemented.
+`bus-agent/` directory. The committed Java sources include Fabric mob sampling,
+NeoForge spawn/update mirror handling, and sequence-based ACK/retry. These
+changes still need to be rebuilt into and verified in the packaged
+`bus_test/bus-agent.jar`, then runtime-tested with Minecraft. Reliable monster
+removal is not implemented.
 
 ### Not yet implemented
 
@@ -384,7 +389,7 @@ This project is research into those challenges, not a claim that they have alrea
 - [x] Initial mirror removal after Fabric heartbeat timeout.
 - [x] Initial mirror recreation after Fabric world reload.
 - [x] Rust-side source policy rejects player and monster state messages from non-Fabric registered clients.
-- [x] Current working-tree Java sources include a NeoForge hostile-mob mirror and sequence-based ACK/retry path; runtime verification is pending.
+- [x] Committed Java sources include a NeoForge hostile-mob mirror and sequence-based ACK/retry path; packaged-agent and runtime verification are pending.
 - [ ] Rebuild and package the receiver-only Java Agent.
 - [ ] Verify policy rejection at runtime and confirm rejected messages do not disconnect clients.
 - [ ] Restrict or authenticate the client-supplied registration identity.
@@ -411,6 +416,8 @@ requests, diagnostics, or interaction messages.
 - [ ] Shared-memory or zero-copy DataBus.
 - [ ] Real-loader isolation in one JVM.
 - [ ] Dynamic dependency resolution.
+- [x] Initial local window registration, PID association, and read-only macOS window observation.
+- [ ] Window arrangement, embedding/composition, and live dual-Minecraft validation.
 - [ ] Windows and Linux verification.
 - [ ] Performance and stability testing.
 

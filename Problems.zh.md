@@ -6,7 +6,7 @@
 >
 > 部分问题已经解决，部分问题仅通过临时方案绕过，另一些问题仍在调查中。每个章节都会区分已验证的结果与尚未确认的解释。
 
-**项目状态：** 实验性原型。Fabric、Forge 和 NeoForge 的启动实验已取得重要进展，但尚未实现完整的跨 Loader 互操作。当前工作区的 Java Agent 还新增了敌对生物镜像和 ACK/重试源码；这些改动尚未打包并运行时验证，也尚未进入 `main` 分支历史。
+**项目状态：** 实验性原型。Fabric、Forge 和 NeoForge 的启动实验已取得重要进展，但尚未实现完整的跨 Loader 互操作。已提交的 Java Agent 源码包含敌对生物镜像和 ACK/重试实现，但仍需打包并运行时验证。Rust Window Manager、Java Bridge 和只读 macOS 窗口发现也已加入；真实 Minecraft 窗口验证以及窗口操作尚未完成。
 
 ---
 
@@ -1462,15 +1462,15 @@ NeoForge 接收 Fabric 的 `player_move` 消息并更新远程玩家镜像。Neo
 
 ---
 
-## 8.6 敌对生物镜像：当前工作区实现待验证
+## 8.6 敌对生物镜像：已提交源码，运行时验证待完成
 
-<badge color="warning">源码已实现部分链路 · 打包和运行时验证待完成</badge>
+<badge color="warning">Java 源码已提交 · 打包和运行时验证待完成</badge>
 
-当前工作区 `bus_test/MonsterSync.java` 在 Fabric 客户端线程按 UUID 采样可见且存活的敌对 `Monster`，并发送 `monster_spawn` 和变化后的 `monster_update`。待确认状态包含序列号，未收到 ACK 时会按退避间隔重试。
+已提交的 `bus_test/MonsterSync.java` 在 Fabric 客户端线程按 UUID 采样可见且存活的敌对 `Monster`，并发送 `monster_spawn` 和变化后的 `monster_update`。待确认状态包含序列号，未收到 ACK 时会按退避间隔重试。
 
-当前工作区 `bus_test/BusAgent.java` 已增加 NeoForge 对 `monster_spawn` / `monster_update` 的解析、实体创建/更新、检测到世界变化时清理怪物镜像，以及应用状态后发送 `monster_ack`。Fabric Agent 接收 ACK 并确认对应序列。
+已提交的 `bus_test/BusAgent.java` 包含 NeoForge 对 `monster_spawn` / `monster_update` 的解析、实体创建/更新、检测到世界变化时清理怪物镜像，以及应用状态后发送 `monster_ack`。Fabric Agent 接收 ACK 并确认对应序列。源码实现并不能证明打包 JAR 或真实客户端运行成功；在视为最新可用版本前，应重新构建并验证 JAR。
 
-这部分是尚未提交到 `main` 的工作区源码，不代表打包 JAR 或真实客户端运行成功。`monster_remove` 仍未实现；生物不在采样/渲染列表中不能单独作为已移除的证据。
+`monster_remove` 仍未实现；生物不在采样/渲染列表中不能单独作为已移除的证据。
 
 **剩余工作**
 
@@ -1479,6 +1479,28 @@ NeoForge 接收 Fabric 的 `player_move` 消息并更新远程玩家镜像。Neo
 - 验证断开、重连和新状态恢复。
 - 定义可靠的生物移除语义并发布、应用 `monster_remove`。
 - 在完成端到端测试前，不要把怪物同步描述为已完成。
+
+## 8.7 窗口注册与只读 macOS 窗口发现
+
+<badge color="warning">原型已实现；真实 Minecraft 窗口验证待完成</badge>
+
+Rust Window Manager 接受 Java Bridge 的 Loader 进程注册，并跟踪进程
+PID、Loader、角色和协议版本；Rust 所属进程可读取这些注册信息。Java
+Bridge 支持连接重试，并在服务端明确拒绝后停止重试。Rust 测试覆盖注册
+生命周期和 PID 关联；Java 测试程序覆盖 Fabric、Forge、NeoForge 标签的
+注册、重连和拒绝行为。
+
+macOS 实现可枚举屏幕上的窗口，并按 PID 将窗口与已注册 JVM 关联。用户
+授予辅助功能权限后，可选的 Accessibility API 探针可以读取窗口标题和
+边界。这些操作均为只读：当前原型不会移动、缩放、嵌入或合成窗口。测试
+套件不能证明其已在真实 Minecraft 窗口中工作，也不能证明该功能可移植到
+macOS 以外的平台。
+
+**剩余工作**
+
+- 使用真实 Minecraft 客户端验证进程注册和窗口关联，包括 macOS 权限流程。
+- 在实现窗口控制、嵌入或合成前，先确定预期用户体验。
+- 分别研究 Windows 和 Linux；当前 macOS 探针未实现这些平台的窗口 API。
 
 # 9. ClassLoader 隔离和 Mixin 兼容性
 
@@ -1763,7 +1785,10 @@ Fabric 依赖解析器会读取 Minecraft 版本元数据并应用平台规则�
 | NeoForge RemotePlayer 注入 | <badge color="success">概念验证已通过</badge> |
 | NeoForge 到 Fabric 的权威玩家状态传输 | <badge color="warning">不属于当前架构目标</badge> |
 | Fabric 敌对生物采样及生成/更新 | <badge color="warning">当前工作区源码已实现；端到端验证待完成</badge> |
-| NeoForge 怪物镜像及 ACK/重试 | <badge color="warning">当前工作区源码已实现；运行时验证待完成</badge> |
+| NeoForge 怪物镜像及 ACK/重试 | <badge color="warning">已提交源码；打包与运行时验证待完成</badge> |
+| Rust Window Manager 与 Java Bridge 生命周期 | <badge color="success">单元测试和 Bridge 测试程序通过</badge> |
+| macOS 窗口发现和 PID 关联 | <badge color="warning">已实现；真实 Minecraft 验证待完成</badge> |
+| 窗口移动、嵌入或合成 | <badge color="warning">尚未实现</badge> |
 | 怪物移除事件 | <badge color="warning">尚未实现</badge> |
 | 双向玩家镜像 | <badge color="warning">尚未完成</badge> |
 | 跨版本世界一致性 | <badge color="warning">调查中</badge> |
@@ -1854,7 +1879,7 @@ Fabric 依赖解析器会读取 Minecraft 版本元数据并应用平台规则�
 
 ## 当前开发重点
 
-当前重点是运行时验证单向玩家状态权威策略，并重新打包/测试当前工作区的怪物镜像和 ACK/重试实现。
+当前重点是运行时验证单向玩家状态权威策略，并重新打包/测试已提交的怪物镜像和 ACK/重试实现。新加入的窗口管理原型还需在真实 macOS Minecraft 窗口中验证；目前仅支持观察窗口。
 
 **下一个里程碑：**
 

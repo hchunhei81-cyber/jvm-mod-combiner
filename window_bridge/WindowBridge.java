@@ -41,7 +41,14 @@ public final class WindowBridge {
             return;
         }
 
-        String configuredAddress = System.getenv("JVM_COMBINER_WINDOW_ADDR");
+        // JVM property takes precedence; environment variable is the fallback.
+        String configuredAddress =
+                System.getProperty("jvm.combiner.window.address");
+
+        if (configuredAddress == null || configuredAddress.isBlank()) {
+            configuredAddress = System.getenv("JVM_COMBINER_WINDOW_ADDR");
+        }
+
         if (configuredAddress == null || configuredAddress.isBlank()) {
             configuredAddress = DEFAULT_ADDRESS;
         }

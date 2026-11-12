@@ -1,3 +1,4 @@
+mod window_integration;
 mod window_manager;
 
 use jni::jni_sig;
@@ -1234,6 +1235,14 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
 
     // Java Agent：先验证 Forge 能注册到 DataBus，再实现 Forge 实体采样。
     let project_root = env::current_dir().expect("[forge] 无法获取项目目录");
+    let window_runtime = window_integration::WindowRuntime::start_or_connect(&project_root)
+        .expect("[WindowIntegration] Forge 无法启动或连接 Window Manager");
+    cmd.arg(window_runtime.java_property_arg());
+    cmd.arg(
+        window_runtime
+            .bridge_agent_arg("forge")
+            .expect("[WindowIntegration] 无法生成 Forge Bridge 参数"),
+    );
     let agent_jar = project_root.join("bus_test/bus-agent.jar");
 
     if agent_jar.is_file() {
@@ -1716,6 +1725,14 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
 
     let mut cmd = Command::new(&java);
     cmd.current_dir(&mc_root);
+    let window_runtime = window_integration::WindowRuntime::start_or_connect(&project_root)
+        .expect("[WindowIntegration] NeoForge 无法启动或连接 Window Manager");
+    cmd.arg(window_runtime.java_property_arg());
+    cmd.arg(
+        window_runtime
+            .bridge_agent_arg("neoforge")
+            .expect("[WindowIntegration] 无法生成 NeoForge Bridge 参数"),
+    );
 
     // 旧代码通过 JAVA_TOOL_OPTIONS 注入，可能造成重复注入。
     // 新实现直接作为 JVM 参数注入。
@@ -2005,8 +2022,11 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     let is_fusion = args
-        .iter()
-        .any(|arg| arg == "fusion" || arg == "--mode=fusion" || arg == "--mode=fusion");
+        .windows(2)
+        .any(|pair| pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("fusion"))
+        || args.iter().any(|arg| {
+            arg.eq_ignore_ascii_case("fusion") || arg.eq_ignore_ascii_case("--mode=fusion")
+        });
     let is_bus_test = args
         .iter()
         .any(|arg| arg == "bus-test" || arg == "--mode=bus-test");
@@ -2024,9 +2044,13 @@ fn main() {
         start_data_bus().expect("[DataBus] Fusion 父进程无法监听 127.0.0.1:25565");
         let current_dir = env::current_dir().unwrap();
         let sandbox_dir = current_dir.join("sandbox");
+        let window_runtime = window_integration::WindowRuntime::start_local(&current_dir)
+            .expect("[WindowIntegration] Fusion 无法启动 Window Manager");
+        let window_addr = window_runtime.address_string();
 
         // 启动 Fabric
         let _sandbox_fab = sandbox_dir.clone();
+        let fab_window_addr = window_addr.clone();
 
         let _fab_thread = thread::spawn(move || {
             let mut cmd = std::process::Command::new("cargo");
@@ -2036,17 +2060,21 @@ fn main() {
             cmd.args(&["run", "--", "--mode", "fabric"]);
 
             cmd.env("JVM_COMBINER_BUS_EXTERNAL", "1");
+            cmd.env("JVM_COMBINER_WINDOW_EXTERNAL", "1");
+            cmd.env("JVM_COMBINER_WINDOW_ADDR", fab_window_addr);
             cmd.status().unwrap();
         });
 
         // 启动 NeoForge
-        // 启动 NeoForge
         let _sandbox_nf = sandbox_dir.clone();
+        let nf_window_addr = window_addr.clone();
         let _nf_thread = thread::spawn(move || {
             let mut cmd = std::process::Command::new("cargo");
 
             cmd.args(&["run", "--", "--mode", "neoforge"]);
             cmd.env("JVM_COMBINER_BUS_EXTERNAL", "1");
+            cmd.env("JVM_COMBINER_WINDOW_EXTERNAL", "1");
+            cmd.env("JVM_COMBINER_WINDOW_ADDR", nf_window_addr);
             cmd.status().unwrap();
         });
 
@@ -2133,6 +2161,14 @@ fn main() {
     }
 
     let project_root = env::current_dir().expect("无法获取项目目录");
+    let window_runtime = window_integration::WindowRuntime::start_or_connect(&project_root)
+        .expect("[WindowIntegration] Fabric 无法启动或连接 Window Manager");
+    jvm_args.push(window_runtime.java_property_arg());
+    jvm_args.push(
+        window_runtime
+            .bridge_agent_arg("fabric")
+            .expect("[WindowIntegration] 无法生成 Fabric Bridge 参数"),
+    );
     let agent_jar = resolve_agent_jar(&project_root);
     if agent_jar.exists() {
         jvm_args.push(format!(

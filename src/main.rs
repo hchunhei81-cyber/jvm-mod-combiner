@@ -375,6 +375,8 @@ fn build_classpath(is_forge: bool, sandbox_dir: &Path) -> (Vec<PathBuf>, Vec<Pat
         PathBuf::from(env::var("HOME").unwrap()).join("Library/Application Support/minecraft");
     let mut legacy_cp: Vec<PathBuf> = Vec::new();
     let mut bootstrap_cp: Vec<PathBuf> = Vec::new();
+    let mut legacy_cp_seen: HashSet<PathBuf> = HashSet::new();
+    let mut bootstrap_cp_seen: HashSet<PathBuf> = HashSet::new();
 
     if is_forge {
         let _forge_env = sandbox_dir.join("forge_env");
@@ -417,14 +419,10 @@ fn build_classpath(is_forge: bool, sandbox_dir: &Path) -> (Vec<PathBuf>, Vec<Pat
             {
                 continue;
             }
-            if !legacy_cp.contains(&p) {
-                legacy_cp.push(p);
-            }
+            push_unique_ordered(&mut legacy_cp, &mut legacy_cp_seen, p);
         }
         for p in resolve_classpath(&v_json, &dirs) {
-            if !legacy_cp.contains(&p) {
-                legacy_cp.push(p.clone());
-            }
+            push_unique_ordered(&mut legacy_cp, &mut legacy_cp_seen, p);
         }
         legacy_cp.push(sandbox_dir.join("minecraft-client.jar"));
     } else {
@@ -438,22 +436,22 @@ fn build_classpath(is_forge: bool, sandbox_dir: &Path) -> (Vec<PathBuf>, Vec<Pat
         ];
 
         for p in resolve_classpath(&v_json, &dirs) {
-            if !legacy_cp.contains(&p) {
-                legacy_cp.push(p.clone());
-            }
-            if !bootstrap_cp.contains(&p) {
-                bootstrap_cp.push(p);
-            }
+            push_unique_ordered(&mut legacy_cp, &mut legacy_cp_seen, p.clone());
+            push_unique_ordered(&mut bootstrap_cp, &mut bootstrap_cp_seen, p);
         }
 
         let mc_jar = sandbox_dir.join("minecraft-client.jar");
 
-        if !legacy_cp.contains(&mc_jar) {
-            legacy_cp.push(mc_jar.clone());
-        }
-        if !bootstrap_cp.contains(&mc_jar) {
-            bootstrap_cp.push(mc_jar);
-        }
+        push_unique_ordered(
+            &mut legacy_cp,
+            &mut legacy_cp_seen,
+            mc_jar.clone(),
+        );
+        push_unique_ordered(
+            &mut bootstrap_cp,
+            &mut bootstrap_cp_seen,
+            mc_jar,
+        );
     }
 
     (bootstrap_cp, legacy_cp)
@@ -1312,6 +1310,19 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     }
 }
 
+fn push_unique_ordered<T>(
+    items: &mut Vec<T>,
+    seen: &mut HashSet<T>,
+    item: T,
+)
+where
+    T: Eq + std::hash::Hash + Clone,
+{
+    if seen.insert(item.clone()) {
+        items.push(item);
+    }
+}
+
 fn launch_neoforge_subprocess(sandbox_dir: &Path) {
     use std::process::{Command, Stdio};
 
@@ -1473,7 +1484,10 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
     // ---------------------------------------------------------
 
     let mut classpath: Vec<String> = Vec::new();
+    let mut classpath_seen: HashSet<String> = HashSet::new();
+
     let mut native_jars: Vec<PathBuf> = Vec::new();
+    let mut native_jars_seen: HashSet<PathBuf> = HashSet::new();
 
     let mut all_libraries: Vec<&Value> = Vec::new();
 
@@ -1518,7 +1532,7 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
         if is_native {
             if let Some(relative) = artifact_path {
                 let path = libraries_dir.join(relative);
-                if path.is_file() && !native_jars.contains(&path) {
+                if path.is_file() && native_jars_seen.insert(path.clone()) {
                     native_jars.push(path);
                 } else if !path.is_file() {
                     eprintln!("[neoforge] WARNING: native JAR 不存在: {}", path.display());
@@ -1532,9 +1546,11 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
 
             if path.is_file() {
                 let value = path.to_string_lossy().to_string();
-                if !classpath.contains(&value) {
-                    classpath.push(value);
-                }
+                push_unique_ordered(
+                    &mut classpath,
+                    &mut classpath_seen,
+                    value,
+                );
             } else {
                 eprintln!("[neoforge] WARNING: dependency 缺失: {}", path.display());
             }
@@ -2626,5 +2642,214 @@ mod forge_jar_cache_tests {
         }));
 
         assert_eq!(calls, 1);
+    }
+}
+
+
+#[cfg(test)]
+mod neoforge_classpath_tests {
+    use super::push_unique_ordered;
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    #[test]
+    fn classpath_strings_are_deduplicated() {
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+
+        push_unique_ordered(&mut items, &mut seen, String::from("a.jar"));
+        push_unique_ordered(&mut items, &mut seen, String::from("b.jar"));
+        push_unique_ordered(&mut items, &mut seen, String::from("a.jar"));
+
+        assert_eq!(items, vec!["a.jar", "b.jar"]);
+        assert_eq!(seen.len(), 2);
+    }
+
+    #[test]
+    fn distinct_path_strings_remain_distinct() {
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+
+        push_unique_ordered(&mut items, &mut seen, String::from("libs/a.jar"));
+        push_unique_ordered(&mut items, &mut seen, String::from("./libs/a.jar"));
+
+        assert_eq!(items, vec!["libs/a.jar", "./libs/a.jar"]);
+        assert_eq!(seen.len(), 2);
+    }
+
+    #[test]
+    fn native_paths_are_deduplicated() {
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+
+        push_unique_ordered(
+            &mut items,
+            &mut seen,
+            PathBuf::from("natives/first.jar"),
+        );
+        push_unique_ordered(
+            &mut items,
+            &mut seen,
+            PathBuf::from("natives/second.jar"),
+        );
+        push_unique_ordered(
+            &mut items,
+            &mut seen,
+            PathBuf::from("natives/first.jar"),
+        );
+
+        assert_eq!(
+            items,
+            vec![
+                PathBuf::from("natives/first.jar"),
+                PathBuf::from("natives/second.jar"),
+            ]
+        );
+        assert_eq!(seen.len(), 2);
+    }
+
+    #[test]
+    fn insertion_order_is_preserved() {
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+
+        for value in ["third.jar", "first.jar", "second.jar", "first.jar"] {
+            push_unique_ordered(
+                &mut items,
+                &mut seen,
+                String::from(value),
+            );
+        }
+
+        assert_eq!(
+            items,
+            vec!["third.jar", "first.jar", "second.jar"]
+        );
+    }
+}
+
+
+#[cfg(test)]
+mod build_classpath_dedup_tests {
+    use super::push_unique_ordered;
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    #[test]
+    fn forge_scan_and_resolved_dependencies_share_dedup_state() {
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+
+        for path in ["scan-a.jar", "scan-b.jar"] {
+            push_unique_ordered(
+                &mut items,
+                &mut seen,
+                PathBuf::from(path),
+            );
+        }
+
+        for path in ["scan-b.jar", "resolved-c.jar", "scan-a.jar"] {
+            push_unique_ordered(
+                &mut items,
+                &mut seen,
+                PathBuf::from(path),
+            );
+        }
+
+        assert_eq!(
+            items,
+            vec![
+                PathBuf::from("scan-a.jar"),
+                PathBuf::from("scan-b.jar"),
+                PathBuf::from("resolved-c.jar"),
+            ]
+        );
+        assert_eq!(seen.len(), 3);
+    }
+
+    #[test]
+    fn fabric_legacy_and_bootstrap_classpaths_deduplicate_independently() {
+        let mut legacy = Vec::new();
+        let mut bootstrap = Vec::new();
+        let mut legacy_seen = HashSet::new();
+        let mut bootstrap_seen = HashSet::new();
+
+        let shared = PathBuf::from("shared.jar");
+
+        push_unique_ordered(
+            &mut legacy,
+            &mut legacy_seen,
+            shared.clone(),
+        );
+        push_unique_ordered(
+            &mut legacy,
+            &mut legacy_seen,
+            shared.clone(),
+        );
+
+        push_unique_ordered(
+            &mut bootstrap,
+            &mut bootstrap_seen,
+            shared.clone(),
+        );
+        push_unique_ordered(
+            &mut bootstrap,
+            &mut bootstrap_seen,
+            shared.clone(),
+        );
+
+        assert_eq!(legacy, vec![shared.clone()]);
+        assert_eq!(bootstrap, vec![shared]);
+        assert_eq!(legacy_seen.len(), 1);
+        assert_eq!(bootstrap_seen.len(), 1);
+    }
+
+    #[test]
+    fn fabric_minecraft_jar_membership_is_checked_per_classpath() {
+        let mc_jar = PathBuf::from("minecraft-client.jar");
+
+        let mut legacy = vec![mc_jar.clone()];
+        let mut legacy_seen = HashSet::from([mc_jar.clone()]);
+
+        let mut bootstrap = Vec::new();
+        let mut bootstrap_seen = HashSet::new();
+
+        push_unique_ordered(
+            &mut legacy,
+            &mut legacy_seen,
+            mc_jar.clone(),
+        );
+        push_unique_ordered(
+            &mut bootstrap,
+            &mut bootstrap_seen,
+            mc_jar.clone(),
+        );
+
+        assert_eq!(legacy, vec![mc_jar.clone()]);
+        assert_eq!(bootstrap, vec![mc_jar]);
+    }
+
+    #[test]
+    fn distinct_path_spellings_remain_distinct_and_ordered() {
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+
+        for path in ["libs/a.jar", "./libs/a.jar", "libs/b.jar", "libs/a.jar"] {
+            push_unique_ordered(
+                &mut items,
+                &mut seen,
+                PathBuf::from(path),
+            );
+        }
+
+        assert_eq!(
+            items,
+            vec![
+                PathBuf::from("libs/a.jar"),
+                PathBuf::from("./libs/a.jar"),
+                PathBuf::from("libs/b.jar"),
+            ]
+        );
+        assert_eq!(seen.len(), 3);
     }
 }

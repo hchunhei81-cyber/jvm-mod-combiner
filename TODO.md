@@ -309,6 +309,6 @@ Rust launcher, Fabric and NeoForge startup, Java Agent injection, TCP DataBus, a
 
 Rebuild/package the committed Java Agent sources, constrain the self-asserted DataBus registration identity, and runtime-test one-way sender authorization plus the hostile-mob mirror/ACK path.
 
-The next milestone also includes testing unauthorized reverse `player_move` rejection, reconnect behavior, and RemotePlayer lifecycle recovery. The DataBus policy exists in Rust source, but it is not a substitute for authenticating local clients or for runtime verification. The current Java Agent additions are working-tree changes; they are not yet recorded in `main`.
+The next milestone also includes testing unauthorized reverse `player_move` rejection, reconnect behavior, and RemotePlayer lifecycle recovery. The DataBus policy exists in Rust source, but it is not a substitute for authenticating local clients or for runtime verification. Separately, validate the read-only window-registration/discovery path with live Minecraft windows before deciding whether window control is needed.
 
 > The immediate objective is not to make every Fabric mod work with every NeoForge mod. It is to build a reliable, measurable foundation on which broader interoperability can be developed.

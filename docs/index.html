@@ -219,7 +219,7 @@
             placeholder="搜索功能 / Search features..."
             data-i18n-placeholder="searchPlaceholder"
           />
-          <span id="featureCount" aria-live="polite">6 项功能</span>
+          <span id="featureCount" aria-live="polite">7 项功能</span>
         </div>
         <div class="feature-grid" id="featureGrid">
           <article
@@ -286,7 +286,7 @@
             <div class="feature-symbol">SYNC</div>
             <h3 data-i18n="f5Title">双端实体镜像</h3>
             <p data-i18n="f5Desc">
-              Fabric 到 NeoForge 的 RemotePlayer 镜像已完成概念验证；实体身份、重连和世界切换恢复仍需稳定化。NeoForge 怪物接收端尚未实现。
+              Fabric 到 NeoForge 的 RemotePlayer 镜像已完成概念验证。已提交源码包含 NeoForge 怪物接收与 ACK/重试流程，但仍需打包和运行时测试；怪物移除尚未实现。
             </p>
             <span class="card-status progress" data-i18n="pocNeedsStability"
               >概念验证完成 · 持续稳定中</span
@@ -304,6 +304,20 @@
             </p>
             <span class="card-status done" data-i18n="diagnosticsVerified"
               >基础诊断已验证</span
+            >
+          </article>
+          <article
+            class="feature-card"
+            data-search="window manager registration macos accessibility 窗口 注册 辅助功能"
+          >
+            <span class="card-index">07 / WINDOWS</span>
+            <div class="feature-symbol">WINDOW</div>
+            <h3 data-i18n="f7Title">窗口注册与观察</h3>
+            <p data-i18n="f7Desc">
+              Java Bridge 注册 Loader JVM，Rust 按 PID 关联窗口；macOS 窗口发现和辅助功能检查为只读，不会操作窗口。
+            </p>
+            <span class="card-status progress" data-i18n="windowPrototypeStatus"
+              >原型已实现 · 真实环境验证待完成</span
             >
           </article>
         </div>

@@ -1784,7 +1784,7 @@ Fabric 依赖解析器会读取 Minecraft 版本元数据并应用平台规则�
 | Fabric 到 NeoForge 的状态传输 | <badge color="success">概念验证已通过</badge> |
 | NeoForge RemotePlayer 注入 | <badge color="success">概念验证已通过</badge> |
 | NeoForge 到 Fabric 的权威玩家状态传输 | <badge color="warning">不属于当前架构目标</badge> |
-| Fabric 敌对生物采样及生成/更新 | <badge color="warning">当前工作区源码已实现；端到端验证待完成</badge> |
+| Fabric 敌对生物采样及生成/更新 | <badge color="warning">源码已提交；打包与端到端验证待完成</badge> |
 | NeoForge 怪物镜像及 ACK/重试 | <badge color="warning">已提交源码；打包与运行时验证待完成</badge> |
 | Rust Window Manager 与 Java Bridge 生命周期 | <badge color="success">单元测试和 Bridge 测试程序通过</badge> |
 | macOS 窗口发现和 PID 关联 | <badge color="warning">已实现；真实 Minecraft 验证待完成</badge> |
@@ -1831,12 +1831,12 @@ Fabric 依赖解析器会读取 Minecraft 版本元数据并应用平台规则�
 ### 优先级 3 — 完成敌对生物同步原型
 
 - [x] Fabric 按 UUID 采样敌对生物，并从当前 Java 源码发送生成/更新消息。
-- [x] 当前工作区 Java 源码加入 NeoForge 生成/更新接收、实体镜像和 ACK/重试。
+- [x] 已提交 Java 源码加入 NeoForge 生成/更新接收、实体镜像和 ACK/重试。
 - [ ] 重新构建并打包 Agent，运行时验证完整的生成/更新和 ACK/重试链路。
 - [ ] 实现并验证可靠的 `monster_remove` 发布和接收。
 - [ ] 测试世界切换、断开和重连恢复。
 
-当前 Java 改动尚未进入 `main` 历史；怪物同步尚未完成端到端验证。
+Java 源码已进入 `main` 历史；怪物同步尚未完成端到端验证。
 
 ### 优先级 4 — 提高同步质量
 
@@ -1870,7 +1870,7 @@ Fabric 依赖解析器会读取 Minecraft 版本元数据并应用平台规则�
 1. 重新构建并打包当前 Java Agent 源码。
 2. 限制自报的 DataBus 注册名，运行时验证状态消息拒绝、不转发和连接保持。
 3. 使用打包后的 Agent 验证 Fabric 到 NeoForge 的玩家状态传递和重连恢复。
-4. 运行时验证当前工作区的怪物镜像及 ACK/重试链路。
+4. 运行时验证已提交的怪物镜像及 ACK/重试链路。
 5. 实现并测试可靠的 `monster_remove` 事件。
 6. 改进实体生命周期处理和故障恢复。
 7. 添加协议版本控制、时间戳、序列号和会话代次。

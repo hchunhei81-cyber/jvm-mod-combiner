@@ -1819,7 +1819,7 @@ Validate the same launch pipeline on:
 | NeoForge player discovery | <badge color="success">Verified</badge> |
 | Fabric-to-NeoForge state transfer | <badge color="success">PoC verified</badge> |
 | NeoForge RemotePlayer injection | <badge color="success">PoC verified</badge> |
-| Fabric hostile-mob sampling, spawn/update, and ACK/retry | <badge color="warning">Implemented in current working-tree source; runtime verification pending</badge> |
+| Fabric hostile-mob sampling, spawn/update, and ACK/retry | <badge color="warning">Committed source; packaged-agent/runtime verification pending</badge> |
 | NeoForge hostile-mob receive/mirroring | <badge color="warning">Committed source; packaged-agent/runtime verification pending</badge> |
 | Hostile-mob ACK/retry delivery | <badge color="warning">Committed source; packaged-agent/runtime verification pending</badge> |
 | Rust Window Manager and Java bridge lifecycle | <badge color="success">Unit and bridge-harness tests pass</badge> |
@@ -1857,7 +1857,7 @@ The following order minimizes the risk of expanding the architecture before the 
 ### Priority 2 — Complete the Hostile-Mob Synchronization Prototype
 
 - [x] Sample hostile Fabric mobs and emit initial/change messages from Java source.
-- [x] Add current working-tree NeoForge spawn/update receive, entity-mirror, world-change cleanup, and ACK/retry source.
+- [x] Commit NeoForge spawn/update receive, entity-mirror, world-change cleanup, and ACK/retry source.
 - [ ] Implement and test removal detection and `monster_remove` publication.
 - [ ] Rebuild/package the Java Agent and runtime-test the end-to-end path before describing mob synchronization as a feature.
 

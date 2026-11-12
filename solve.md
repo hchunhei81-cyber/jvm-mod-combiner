@@ -626,10 +626,10 @@ the protocol.
       authoritative movement transmission in the edited Java source.
 - [x] Rust DataBus source rejects non-Fabric registered clients publishing
       `player_move` or monster state messages.
-- [x] Current working-tree Java source parses NeoForge `monster_spawn` and
+- [x] Committed Java source parses NeoForge `monster_spawn` and
       `monster_update`, creates/updates mirrors, and clears mob mirrors on a
       detected world change.
-- [x] Current working-tree Java source adds sequence-based monster ACK/retry.
+- [x] Committed Java source adds sequence-based monster ACK/retry.
 - [ ] Rebuild and package the Java Agent containing the receiver-only change.
 - [ ] Validate or authenticate registration names; current names are supplied
       by the connecting client and are not authenticated process identities.
@@ -644,12 +644,12 @@ the protocol.
 - [ ] Verify that both clients remain responsive during synchronization.
 
 The Rust source now enforces the one-way state policy at the DataBus boundary.
-The current working-tree Java Agent source extends the prototype with hostile-
-mob receive/mirroring and ACK/retry, but those Java edits are not yet in the
-checked-in `main` history and are not runtime-verified. The immediate task is
-to package the Java Agent, constrain the self-asserted registration identity,
-and verify rejection and normal delivery at runtime. `monster_remove` is not
-implemented, so hostile-mob lifecycle synchronization remains incomplete.
+Committed Java Agent source extends the prototype with hostile-mob
+receive/mirroring and ACK/retry, but the packaged Agent and live behavior are
+not yet runtime-verified. The immediate task is to rebuild the Java Agent,
+constrain the self-asserted registration identity, and verify rejection and
+normal delivery at runtime. `monster_remove` is not implemented, so hostile-mob
+lifecycle synchronization remains incomplete.
 
 ### Phase 2 — Establish a Versioned Synchronization Protocol
 

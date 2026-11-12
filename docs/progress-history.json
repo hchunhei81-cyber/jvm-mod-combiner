@@ -1,6 +1,6 @@
 {
   "source": "main",
-  "generatedAt": "2026-11-10",
+  "generatedAt": "2026-11-12",
   "commits": [
     {
       "sha": "acb08d3656b4bf27a42ada6550e1f2becce77a89",
@@ -522,6 +522,102 @@
       "sha": "e212414e7dc8bad0f03319c7f6216827b36301e5",
       "date": "2026-11-10T18:30:05+08:00",
       "message": "Add documentation for problems and solutions, enhance styles, and update TODO list",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "2d599df4e4a45b96ff47e3b6d28f5b93ac79d4e3",
+      "date": "2026-11-10T21:58:04+08:00",
+      "message": "feat: Update documentation and enhance hostile mob synchronization prototype",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "2f0fc527693fc724d665f0541b060df64d08d1f7",
+      "date": "2026-11-10T21:58:46+08:00",
+      "message": "Refactor MonsterSync for improved state management and error handling",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "cb5b3906610fc8d7e89834c0ab7e1cfd2db0fdf1",
+      "date": "2026-11-10T21:59:37+08:00",
+      "message": "Add progress documentation and timeline functionality",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "7b8cb4a75f91bad50c3c5f476fbecf4b7785308a",
+      "date": "2026-11-11T20:15:51+08:00",
+      "message": "Add manifest file for monster-ack-test with Premain-Class definition",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "1d871590ac6cb18e2ee3bf1bf8482bb0b49890ba",
+      "date": "2026-11-11T20:53:18+08:00",
+      "message": "feat: Refactor BusAgent and MonsterSync with additional regex patterns and logging improvements",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "9c695fc03fbf036fdd696c84dffc538667c303c6",
+      "date": "2026-11-11T20:55:35+08:00",
+      "message": "fix: Add 'backups/' to .gitignore to prevent backup files from being tracked",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "c04a40a572b1cfd2a7d66cd70b16c7b620553579",
+      "date": "2026-11-11T21:02:26+08:00",
+      "message": "feat: Enhance BusAgent with dynamic method and field binding for NeoForge integration",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "ee71cd908d0467eac8acafcc427d5e935c21acae",
+      "date": "2026-11-11T22:09:49+08:00",
+      "message": "feat: Enhance BusAgent with NeoForge reflection bindings and class loader methods, The official Agent JAR has not yet been changed for some functions",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "ab802464e7bb89d5611f052ad7014c20873844fe",
+      "date": "2026-11-12T17:05:19+08:00",
+      "message": "feat: Add entry for unclassified files in .gitignore",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "4eacdf7664d36b5722927b058d120beb31f83353",
+      "date": "2026-11-12T17:47:18+08:00",
+      "message": "refactor(rust): cache Forge canonical paths during launch",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "dcf3d9fd90a07256927411a76b42980dbc012f79",
+      "date": "2026-11-12T18:52:53+08:00",
+      "message": "perf(rust): optimize dependency resolution and classpath construction",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "d9117be43a7545817b27f51b70f8ad3bbcfda657",
+      "date": "2026-11-12T20:23:39+08:00",
+      "message": "feat(window): add Java bridge and Rust integration tests",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "1f8ac6f531c3d73c3a401d85b6d7360130f0ff0f",
+      "date": "2026-11-12T20:55:35+08:00",
+      "message": "feat(window): implement WindowIntegration for managing local and external Window Managers",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "f0b89d6ad34d35ef9fb4fc74668e24fa1c4601e5",
+      "date": "2026-11-12T21:22:06+08:00",
+      "message": "feat(window): associate discovered windows with JVM registrations",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "8fcdfeb6e05a0e437d74522ad8ccf69ae4e3449c",
+      "date": "2026-11-12T21:54:36+08:00",
+      "message": "feat(window): add read-only macOS accessibility probe",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "2781603a0427177e0ce747c00d9807d7062eadb6",
+      "date": "2026-11-12T22:23:22+08:00",
+      "message": "Update the progress of .md(s)",
       "author": "hchunhei81-cyber"
     }
   ]

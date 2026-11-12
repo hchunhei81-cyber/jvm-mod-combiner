@@ -217,34 +217,37 @@
 
         <section class="doc-group" aria-labelledby="latest-title">
           <span class="doc-status open" data-i18n="latestStatus"
-            >LATEST UPDATE · 2026-11-10</span
+            >LATEST UPDATE · 2026-11-12</span
           >
           <h3 id="latest-title" data-i18n="latestTitle">
-            Hostile-mob mirror pipeline added in the working tree
+            Window-management prototype and launcher performance updates
           </h3>
           <p data-i18n="latestText">
-            The current Java sources add NeoForge handling for Fabric monster
-            spawn/update messages, entity mirrors, and an ACK/retry path. The
-            Rust DataBus continues to restrict protected state messages to the
-            registered Fabric name.
+            The Rust launcher now includes a Window Manager, a Java registration
+            bridge, PID-based window association, and read-only macOS window
+            discovery/Accessibility inspection. Dependency and classpath
+            construction were also optimized.
           </p>
           <div class="doc-callout">
             <strong data-i18n="branchLabel">Main-branch context:</strong>
             <span data-i18n="branchText">
-              The checked main history includes loader detection/DataBus
-              registration (f2171ad), Minecraft 1.21.4 Agent/classpath work
-              (f146f27), and the documentation refresh (e212414). The Java
-              mob-mirror additions described here are uncommitted working-tree
-              edits, not changes recorded in main.
+              The current main snapshot runs through documentation update
+              2781603 (2026-11-12); the latest feature commit is the read-only
+              macOS Accessibility probe (8fcdfeb). Recent implementation work
+              also includes dependency-resolution optimization (dcf3d9f), Java
+              bridge tests (d9117be), Window Manager integration (1f8ac6f),
+              and PID association (f0b89d6).
             </span>
           </div>
           <div class="doc-callout">
             <strong data-i18n="verifyLabel">Verification status:</strong>
             <span data-i18n="verifyText">
-              These Java additions are source-level implementation only. The
-              packaged Agent must be rebuilt from the current sources, then
-              tested in the live Fabric/NeoForge setup. Monster removal is not
-              implemented; do not treat mob synchronization as complete.
+              The Rust suite passes 36 tests; the Java bridge harness passes
+              registration, reconnect, and rejection tests for Fabric, Forge,
+              and NeoForge labels. Live Minecraft window discovery and the
+              Accessibility permission flow remain unverified. Hostile-mob
+              source is committed but still needs a current packaged Agent and
+              end-to-end testing; monster removal is not implemented.
             </span>
           </div>
         </section>
@@ -287,19 +290,24 @@
                 concept</span
               >
             </li>
+            <li>
+              <input type="checkbox" checked disabled />
+              <span data-i18n="done5"
+                >Window Manager/Java bridge registration tests and read-only
+                macOS window discovery prototype</span
+              >
+            </li>
           </ul>
         </section>
 
         <section class="doc-group" aria-labelledby="work-title">
           <span class="doc-status open" data-i18n="workStatus"
-            >In current source · runtime test pending</span
+            >Committed source · live runtime test pending</span
           >
-          <h3 id="work-title" data-i18n="workTitle">
-            Working-tree implementation
-          </h3>
+          <h3 id="work-title" data-i18n="workTitle">Committed implementation requiring validation</h3>
           <p data-i18n="workIntro">
-            These changes are present in the current bus_test source, but are
-            not yet in the main-branch history.
+            The Java hostile-mob receiver and ACK/retry source is in main, but
+            the packaged Agent and live Minecraft behavior still need verification.
           </p>
           <ul class="doc-checks">
             <li>
@@ -321,9 +329,9 @@
             <li>
               <input type="checkbox" checked disabled />
               <span data-i18n="work3"
-                >The existing Rust policy rejects non-Fabric player/monster
-                state messages, but registration names are self-asserted and
-                are not authenticated identities.</span
+                >The Rust policy rejects non-Fabric player/monster state by
+                registered name; names remain self-asserted, not authenticated
+                process identities.</span
               >
             </li>
           </ul>
@@ -368,6 +376,14 @@
               <span data-i18n="next5"
                 >Validate or otherwise constrain DataBus registration
                 names.</span
+              >
+            </li>
+            <li>
+              <input type="checkbox" disabled />
+              <span data-i18n="next6"
+                >Validate window registration, discovery, and macOS permission
+                handling with live Minecraft clients; do not imply window
+                movement or embedding.</span
               >
             </li>
           </ul>

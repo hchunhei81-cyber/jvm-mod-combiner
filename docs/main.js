@@ -18,7 +18,7 @@
       heroTitle:
         '连接不同的<br><span class="gradient-text">Minecraft 模组生态。</span>',
       heroDesc:
-        "JVM Mod Combiner 是一个基于 Rust 和 Java 的实验性原型。已验证 Fabric 与 NeoForge 在独立 JVM 中运行，并完成单向玩家状态同步概念验证。",
+        "JVM Mod Combiner 是一个基于 Rust 和 Java 的实验性原型。已验证 Fabric 与 NeoForge 在独立 JVM 中运行，并完成单向玩家状态同步概念验证；近期还加入了只读 macOS 窗口发现原型。",
       explore: "探索架构",
       viewDemo: "查看启动演示",
       metricKernel: "启动内核",
@@ -48,6 +48,7 @@
       routingVerified: "基础路由已验证",
       playerStateVerified: "状态读取与发布已验证",
       pocNeedsStability: "概念验证完成 · 持续稳定中",
+      windowPrototypeStatus: "原型已实现 · 真实环境验证待完成",
       diagnosticsVerified: "基础诊断已验证",
       noResults: "没有找到匹配的功能。",
       f1Title: "Rust 启动内核",
@@ -60,9 +61,12 @@
       f4Desc: "Rust 源码按注册连接名限制玩家及怪物状态消息仅由 Fabric 发布；注册名仍由客户端自报，且拒绝行为待运行时验证。",
       f5Title: "双端实体镜像",
       f5Desc:
-        "Fabric 到 NeoForge 的 RemotePlayer 镜像已完成概念验证。当前工作区 Java 源码新增 NeoForge 怪物接收与 ACK/重试流程，但仍需打包和运行时测试；怪物移除尚未实现。",
+        "Fabric 到 NeoForge 的 RemotePlayer 镜像已完成概念验证。已提交源码包含 NeoForge 怪物接收与 ACK/重试流程，但仍需打包和运行时测试；怪物移除尚未实现。",
       f6Title: "运行时结构诊断",
       f6Desc: "输出 Minecraft 实例字段、类型和值，辅助分析混淆环境。",
+      f7Title: "窗口注册与观察",
+      f7Desc:
+        "Java Bridge 注册 Loader JVM，Rust 按 PID 关联窗口；macOS 窗口发现和辅助功能检查为只读，不会操作窗口。",
       architectureTitle: "系统架构",
       architectureDesc: "选择一个模块，查看它在整个启动和同步流程中的职责。",
       archRust: "依赖解析 · JNI",
@@ -128,7 +132,7 @@
       heroTitle:
         'Connecting different<br><span class="gradient-text">Minecraft mod ecosystems.</span>',
       heroDesc:
-        "JVM Mod Combiner is an experimental Rust and Java prototype. Fabric and NeoForge have been verified in separate JVMs, with a proof of concept for one-way player-state synchronization.",
+        "JVM Mod Combiner is an experimental Rust and Java prototype. Fabric and NeoForge have been verified in separate JVMs, with a proof of concept for one-way player-state synchronization; a read-only macOS window-discovery prototype has also been added.",
       explore: "Explore architecture",
       viewDemo: "View launch demo",
       metricKernel: "Launcher kernel",
@@ -165,6 +169,7 @@
       routingVerified: "Basic routing verified",
       playerStateVerified: "State extraction and publishing verified",
       pocNeedsStability: "PoC verified · Stabilization ongoing",
+      windowPrototypeStatus: "Prototype implemented · live validation pending",
       diagnosticsVerified: "Basic diagnostics verified",
       noResults: "No matching features found.",
       f1Title: "Rust launcher kernel",
@@ -181,10 +186,13 @@
         "Rust source restricts player and monster state messages to the registered Fabric name; registration is self-asserted and rejection still needs runtime verification.",
       f5Title: "Cross-instance entity mirror",
       f5Desc:
-        "The Fabric-to-NeoForge RemotePlayer mirror is a verified proof of concept. Current working-tree Java sources add a NeoForge monster receiver and ACK/retry path, but these changes need packaging and runtime tests; monster removal is not implemented.",
+        "The Fabric-to-NeoForge RemotePlayer mirror is a verified proof of concept. Committed Java sources add a NeoForge monster receiver and ACK/retry path, but these changes need packaging and runtime tests; monster removal is not implemented.",
       f6Title: "Runtime diagnostics",
       f6Desc:
         "Inspects Minecraft instance fields, types, and values to help analyze obfuscated environments.",
+      f7Title: "Window registration and observation",
+      f7Desc:
+        "The Java bridge registers loader JVMs and Rust associates windows by PID; macOS discovery and Accessibility inspection are read-only and do not control windows.",
       architectureTitle: "System architecture",
       architectureDesc:
         "Select a module to inspect its role in the launch and synchronization pipeline.",

@@ -147,13 +147,14 @@
               <code>bus_test/MonsterSync.java</code> samples visible, living
               hostile Fabric mobs by UUID on the game thread and emits
               <code>monster_spawn</code> and changed-state
-              <code>monster_update</code> messages. Current working-tree Java
-              sources add a NeoForge receiver and ACK/retry path.
+              <code>monster_update</code> messages. Committed Java sources add
+              a NeoForge receiver and ACK/retry path.
             </p>
             <p data-i18n="p5Incomplete">
               <strong>Incomplete:</strong> Missing-from-render iteration is not
               treated as removal; <code>monster_remove</code> is not published.
-              The Java changes need packaging and runtime tests.
+              The Java sources need to be rebuilt into the packaged Agent and
+              runtime-tested with Minecraft.
             </p>
           </article>
 
@@ -210,7 +211,9 @@
             <span class="doc-status research" data-i18n="p9Status">Not a current target</span>
             <h3 data-i18n="p9Title">Cross-process rendering and window composition</h3>
             <p data-i18n="p9Text">
-              Combining GPU resources across independent clients is
+              The current prototype registers JVMs and observes window
+              metadata on macOS, but does not move, resize, embed, or compose
+              windows. Combining GPU resources across independent clients is
               platform-specific and adds driver, synchronization, and lifetime
               risks.
             </p>

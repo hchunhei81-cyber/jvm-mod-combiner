@@ -120,7 +120,7 @@ Tested primarily on macOS with Apple Silicon and Temurin JDK 21.
 - [ ] Add protocol versioning, schema validation, sequence numbers, and stale-state rejection.
 - [ ] Verify disconnect, reconnect, and world-transition recovery.
 - [ ] Improve synchronization behavior under latency and packet loss.
-- [ ] Rebuild and runtime-test the current working-tree hostile-mob receiver, mirror, and ACK/retry implementation.
+- [ ] Rebuild and runtime-test the committed hostile-mob receiver, mirror, and ACK/retry implementation.
 - [ ] Implement reliable hostile-mob removal messages and verify reconnect/world-transition recovery.
 - [ ] Validate window registration and discovery against live Minecraft windows on macOS, then investigate actual window arrangement/integration. Window movement, resizing, embedding, composition, and Windows/Linux support are not implemented.
 

@@ -1,3 +1,4 @@
+mod window_accessibility;
 mod window_discovery;
 mod window_integration;
 mod window_manager;
@@ -2021,6 +2022,89 @@ fn start_data_bus() -> std::io::Result<()> {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+
+    let is_window_accessibility = args
+        .windows(2)
+        .any(|pair| pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("window-accessibility"))
+        || args.iter().any(|arg| {
+            arg.eq_ignore_ascii_case("window-accessibility")
+                || arg.eq_ignore_ascii_case("--mode=window-accessibility")
+        });
+
+    if is_window_accessibility {
+        println!("=== macOS Accessibility Probe (read-only) ===");
+
+        let pid_value = args
+            .windows(2)
+            .find(|pair| pair[0] == "--pid")
+            .map(|pair| pair[1].as_str())
+            .or_else(|| args.iter().find_map(|arg| arg.strip_prefix("--pid=")));
+
+        let pid = match pid_value.and_then(|value| value.parse::<u32>().ok()) {
+            Some(pid) if pid > 0 => pid,
+            _ => {
+                eprintln!("[Accessibility] Usage: --mode window-accessibility --pid <PID>");
+                std::process::exit(2);
+            }
+        };
+
+        match window_accessibility::is_accessibility_trusted() {
+            Ok(true) => {
+                println!("[Accessibility] Permission: granted");
+            }
+            Ok(false) => {
+                println!("[Accessibility] Permission: not granted");
+                println!(
+                    "[Accessibility] Authorize the terminal or application in System Settings > Privacy & Security > Accessibility."
+                );
+                return;
+            }
+            Err(error) => {
+                eprintln!("[Accessibility] Permission check failed: {error}");
+                std::process::exit(1);
+            }
+        }
+
+        println!("[Accessibility] Target PID: {pid}");
+
+        match window_accessibility::inspect_application_windows(pid) {
+            Ok(windows) => {
+                println!(
+                    "[Accessibility] Found {} application windows",
+                    windows.len()
+                );
+
+                for window in &windows {
+                    match &window.bounds {
+                        Some(bounds) => println!(
+                            "[AX Window {}] title={:?} position=({:.1}, {:.1}) size=({:.1}, {:.1})",
+                            window.index,
+                            window.title.as_deref().unwrap_or("<untitled>"),
+                            bounds.x,
+                            bounds.y,
+                            bounds.width,
+                            bounds.height,
+                        ),
+                        None => println!(
+                            "[AX Window {}] title={:?} bounds=<unavailable>",
+                            window.index,
+                            window.title.as_deref().unwrap_or("<untitled>"),
+                        ),
+                    }
+                }
+
+                if windows.is_empty() {
+                    println!("[Accessibility] No application windows returned.");
+                }
+            }
+            Err(error) => {
+                eprintln!("[Accessibility] Inspection failed: {error}");
+                std::process::exit(1);
+            }
+        }
+
+        return;
+    }
 
     let is_window_discovery = args
         .windows(2)

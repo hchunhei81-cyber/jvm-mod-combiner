@@ -142,14 +142,14 @@ mod macos {
 
         fn CFDictionaryGetValue(dictionary: CFDictionaryRef, key: *const c_void) -> *const c_void;
 
-        fn CFNumberGetValue(number: CFNumberRef, number_type: i32, value: *mut c_void) -> bool;
+        fn CFNumberGetValue(number: CFNumberRef, number_type: i32, value: *mut c_void) -> u8;
 
         fn CFStringGetCString(
             string: CFStringRef,
             buffer: *mut c_char,
             buffer_size: CFIndex,
             encoding: u32,
-        ) -> bool;
+        ) -> u8;
 
         fn CFRelease(value: *const c_void);
     }
@@ -192,7 +192,7 @@ mod macos {
             )
         };
 
-        success.then_some(result)
+        (success != 0).then_some(result)
     }
 
     unsafe fn read_string(dictionary: CFDictionaryRef, key: CFStringRef) -> Option<String> {
@@ -215,7 +215,7 @@ mod macos {
             )
         };
 
-        if !success {
+        if success == 0 {
             return None;
         }
 

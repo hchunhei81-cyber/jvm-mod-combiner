@@ -244,40 +244,84 @@ fn find_jars_in(dir: &Path, keyword: &str) -> Vec<PathBuf> {
     result
 }
 
+// Cache canonicalization results for the duration of one Forge launch.
+// Cache failures too, preserving the existing Option-based comparison behavior.
+fn cached_canonicalize(
+    path: &Path,
+    cache: &mut std::collections::HashMap<PathBuf, Option<PathBuf>>,
+) -> Option<PathBuf> {
+    if let Some(cached) = cache.get(path) {
+        return cached.clone();
+    }
+
+    let canonical = path.canonicalize().ok();
+    cache.insert(path.to_path_buf(), canonical.clone());
+    canonical
+}
+
+// Cache validation results for the duration of one Forge launch.
+// Canonical paths make equivalent path spellings share one result.
+fn cached_jar_validation<F>(
+    path: &Path,
+    cache: &mut std::collections::HashMap<PathBuf, bool>,
+    canonical_path_cache: &mut std::collections::HashMap<PathBuf, Option<PathBuf>>,
+    validate: F,
+) -> bool
+where
+    F: FnOnce(&Path) -> bool,
+{
+    let cache_key = cached_canonicalize(path, canonical_path_cache)
+        .unwrap_or_else(|| path.to_path_buf());
+
+    if let Some(&cached) = cache.get(&cache_key) {
+        return cached;
+    }
+
+    let valid = validate(path);
+    cache.insert(cache_key, valid);
+    valid
+}
+
 // Validate a JAR as a real ZIP archive before putting it on any JVM path.
 // macOS provides /usr/bin/unzip. Original files are never modified.
-fn jar_is_valid(path: &Path) -> bool {
-    if !path.is_file() {
-        eprintln!("[JAR-FILTER][REJECT] {} -- file missing", path.display());
-        return false;
-    }
-
-    let output = std::process::Command::new("/usr/bin/unzip")
-        .arg("-tqq")
-        .arg(path)
-        .output();
-
-    match output {
-        Ok(result) if result.status.success() => true,
-        Ok(result) => {
-            let detail = String::from_utf8_lossy(&result.stderr);
-            eprintln!(
-                "[JAR-FILTER][REJECT] {} -- invalid ZIP (status: {}, {})",
-                path.display(),
-                result.status,
-                detail.trim()
-            );
-            false
+fn jar_is_valid(
+    path: &Path,
+    cache: &mut std::collections::HashMap<PathBuf, bool>,
+    canonical_path_cache: &mut std::collections::HashMap<PathBuf, Option<PathBuf>>,
+) -> bool {
+    cached_jar_validation(path, cache, canonical_path_cache, |path| {
+        if !path.is_file() {
+            eprintln!("[JAR-FILTER][REJECT] {} -- file missing", path.display());
+            return false;
         }
-        Err(e) => {
-            eprintln!(
-                "[JAR-FILTER][REJECT] {} -- cannot execute unzip: {}",
-                path.display(),
-                e
-            );
-            false
+
+        let output = std::process::Command::new("/usr/bin/unzip")
+            .arg("-tqq")
+            .arg(path)
+            .output();
+
+        match output {
+            Ok(result) if result.status.success() => true,
+            Ok(result) => {
+                let detail = String::from_utf8_lossy(&result.stderr);
+                eprintln!(
+                    "[JAR-FILTER][REJECT] {} -- invalid ZIP (status: {}, {})",
+                    path.display(),
+                    result.status,
+                    detail.trim()
+                );
+                false
+            }
+            Err(e) => {
+                eprintln!(
+                    "[JAR-FILTER][REJECT] {} -- cannot execute unzip: {}",
+                    path.display(),
+                    e
+                );
+                false
+            }
         }
-    }
+    })
 }
 
 // Reject known incompatible Forge/NeoForge generations.
@@ -297,7 +341,11 @@ fn incompatible_forge_dependency(path: &Path) -> bool {
         || value.contains("/net/minecraftforge/forge/36.2.")
 }
 
-fn accept_forge_jar(path: &Path) -> bool {
+fn accept_forge_jar(
+    path: &Path,
+    cache: &mut std::collections::HashMap<PathBuf, bool>,
+    canonical_path_cache: &mut std::collections::HashMap<PathBuf, Option<PathBuf>>,
+) -> bool {
     if incompatible_forge_dependency(path) {
         eprintln!(
             "[JAR-FILTER][REJECT] {} -- incompatible Forge/NeoForge version",
@@ -306,7 +354,7 @@ fn accept_forge_jar(path: &Path) -> bool {
         return false;
     }
 
-    jar_is_valid(path)
+    jar_is_valid(path, cache, canonical_path_cache)
 }
 
 fn set_property(env: &mut jni::Env, key: &str, value: &str) {
@@ -514,6 +562,13 @@ fn sanitize_jar(_src: &Path, _cache_dir: &Path) -> Option<PathBuf> {
 }
 
 fn launch_forge_subprocess(sandbox_dir: &Path) {
+    // Validation results are scoped to this Forge launch only.
+    let mut jar_validation_cache: std::collections::HashMap<PathBuf, bool> =
+        std::collections::HashMap::new();
+    let mut canonical_path_cache: std::collections::HashMap<
+        PathBuf,
+        Option<PathBuf>,
+    > = std::collections::HashMap::new();
     let forge_env = sandbox_dir.join("forge_env");
     let mods_dir = forge_env.join("mods");
     std::fs::create_dir_all(&mods_dir)
@@ -580,7 +635,7 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     let search_dirs = vec![libs.clone(), sandbox_dir.to_path_buf()];
 
     for path in resolve_classpath(&forge_json, &search_dirs) {
-        if !accept_forge_jar(&path) {
+        if !accept_forge_jar(&path, &mut jar_validation_cache, &mut canonical_path_cache) {
             continue;
         }
 
@@ -748,7 +803,7 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     legacy.retain(|p| !p.contains("/bootstrap/2.1.7/"));
 
     // Final integrity gate: no invalid or incompatible archive can reach Bootstrap.
-    legacy.retain(|value| accept_forge_jar(Path::new(value)));
+    legacy.retain(|value| accept_forge_jar(Path::new(value), &mut jar_validation_cache, &mut canonical_path_cache));
 
     let legacy_cp = legacy.join(":");
 
@@ -851,7 +906,7 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
         ];
         for rel in core_rel_paths {
             let path = libs.join(rel);
-            if !accept_forge_jar(&path) {
+            if !accept_forge_jar(&path, &mut jar_validation_cache, &mut canonical_path_cache) {
                 continue;
             }
             // ModLauncher 用终端 python3 生成的补丁 JAR，避免 getPackage() 版本为 null 的 NPE
@@ -935,7 +990,7 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
 
     for path in &legacy {
         let candidate = Path::new(path);
-        if accept_forge_jar(candidate) && !real_cp.contains(path) {
+        if accept_forge_jar(candidate, &mut jar_validation_cache, &mut canonical_path_cache) && !real_cp.contains(path) {
             real_cp.push(path.clone());
         }
     }
@@ -953,7 +1008,7 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
 
         let value = path.to_string_lossy().to_string();
 
-        if accept_forge_jar(&path) && !real_cp.contains(&value) {
+        if accept_forge_jar(&path, &mut jar_validation_cache, &mut canonical_path_cache) && !real_cp.contains(&value) {
             real_cp.push(value);
         }
     }
@@ -1006,10 +1061,11 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
 
         let jar_string = jar.to_string_lossy().to_string();
 
-        if !real_cp
-            .iter()
-            .any(|p| Path::new(p).canonicalize().ok() == jar.canonicalize().ok())
-        {
+        let jar_canonical = cached_canonicalize(&jar, &mut canonical_path_cache);
+        if !real_cp.iter().any(|p| {
+            cached_canonicalize(Path::new(p), &mut canonical_path_cache)
+                == jar_canonical
+        }) {
             eprintln!("[forge] Added Bootstrap runtime module: {}", jar.display());
             real_cp.push(jar_string);
         }
@@ -1101,16 +1157,18 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     // Remove duplicate physical JAR paths while preserving order.
     let mut seen_forge_cp = std::collections::HashSet::new();
     real_cp.retain(|p| {
-        let key = Path::new(p)
-            .canonicalize()
-            .unwrap_or_else(|_| PathBuf::from(p));
+        let key = cached_canonicalize(
+            Path::new(p),
+            &mut canonical_path_cache,
+        )
+        .unwrap_or_else(|| PathBuf::from(p));
         seen_forge_cp.insert(key)
     });
     // ===== END FORGE_RUNTIME_MODULES_PATCH =====
 
     // Use the official ModLauncher JAR; sanitize_jar is disabled.
     // Do not refer to a patched JAR that is not generated.
-    if accept_forge_jar(&modlauncher_path) {
+    if accept_forge_jar(&modlauncher_path, &mut jar_validation_cache, &mut canonical_path_cache) {
         real_cp.retain(|p| !p.contains("/modlauncher/"));
         let official_ml = modlauncher_path.to_string_lossy().to_string();
         if !real_cp.contains(&official_ml) {
@@ -2372,5 +2430,201 @@ mod classpath_resolver_tests {
         let result = resolve_classpath(&version_a, &tree.search_dirs());
 
         assert_eq!(result, vec![child_artifact, parent_artifact]);
+    }
+}
+
+#[cfg(test)]
+mod forge_jar_cache_tests {
+    use super::cached_jar_validation;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TestFile {
+        root: PathBuf,
+        path: PathBuf,
+    }
+
+    impl TestFile {
+        fn new(name: &str) -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock error")
+                .as_nanos();
+
+            let root = std::env::temp_dir().join(format!(
+                "jvm-combiner-r2-cache-{}-{}",
+                std::process::id(),
+                nonce
+            ));
+
+            fs::create_dir_all(&root).expect("create test directory");
+
+            let path = root.join(name);
+            fs::write(&path, b"test").expect("create test file");
+
+            Self { root, path }
+        }
+    }
+
+    impl Drop for TestFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn canonicalization_results_are_cached_for_repeated_paths() {
+        let file = TestFile::new("cached.jar");
+        let mut cache = HashMap::new();
+
+        let first = super::cached_canonicalize(&file.path, &mut cache);
+        let second = super::cached_canonicalize(&file.path, &mut cache);
+
+        assert_eq!(first, second);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(first, Some(file.path.canonicalize().unwrap()));
+    }
+
+    #[test]
+    fn canonicalization_failures_are_cached_as_none() {
+        let file = TestFile::new("created-later.jar");
+        fs::remove_file(&file.path).expect("remove test file");
+
+        let mut cache = HashMap::new();
+        assert_eq!(super::cached_canonicalize(&file.path, &mut cache), None);
+
+        fs::write(&file.path, b"created after first lookup")
+            .expect("recreate test file");
+
+        assert_eq!(super::cached_canonicalize(&file.path, &mut cache), None);
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_path_aliases_resolve_to_the_same_value() {
+        let file = TestFile::new("alias-canonical.jar");
+        let alias = file.root.join("alias-link.jar");
+        std::os::unix::fs::symlink(&file.path, &alias)
+            .expect("create symlink alias");
+
+        let mut cache = HashMap::new();
+
+        let first = super::cached_canonicalize(&file.path, &mut cache);
+        let second = super::cached_canonicalize(&alias, &mut cache);
+
+        assert_ne!(file.path, alias);
+        assert_eq!(first, second);
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn two_failed_canonicalizations_preserve_none_equality() {
+        let root = std::env::temp_dir().join(format!(
+            "jvm-combiner-r3-missing-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock error")
+                .as_nanos()
+        ));
+        let first = root.join("first.jar");
+        let second = root.join("second.jar");
+        let mut cache = HashMap::new();
+
+        let first_result = super::cached_canonicalize(&first, &mut cache);
+        let second_result = super::cached_canonicalize(&second, &mut cache);
+
+        assert_eq!(first_result, None);
+        assert_eq!(second_result, None);
+        assert_eq!(first_result, second_result);
+    }
+
+    #[test]
+    fn successful_result_is_validated_only_once() {
+        let file = TestFile::new("valid.jar");
+        let mut cache = HashMap::new();
+        let mut canonical_path_cache = HashMap::new();
+        let mut calls = 0;
+
+        assert!(cached_jar_validation(&file.path, &mut cache, &mut canonical_path_cache, |_| {
+            calls += 1;
+            true
+        }));
+
+        assert!(cached_jar_validation(&file.path, &mut cache, &mut canonical_path_cache, |_| {
+            calls += 1;
+            false
+        }));
+
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn failed_result_is_validated_only_once() {
+        let file = TestFile::new("invalid.jar");
+        let mut cache = HashMap::new();
+        let mut canonical_path_cache = HashMap::new();
+        let mut calls = 0;
+
+        assert!(!cached_jar_validation(&file.path, &mut cache, &mut canonical_path_cache, |_| {
+            calls += 1;
+            false
+        }));
+
+        assert!(!cached_jar_validation(&file.path, &mut cache, &mut canonical_path_cache, |_| {
+            calls += 1;
+            true
+        }));
+
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn different_paths_are_validated_independently() {
+        let first = TestFile::new("first.jar");
+        let second = TestFile::new("second.jar");
+        let mut cache = HashMap::new();
+        let mut canonical_path_cache = HashMap::new();
+        let mut calls = 0;
+
+        assert!(cached_jar_validation(&first.path, &mut cache, &mut canonical_path_cache, |_| {
+            calls += 1;
+            true
+        }));
+
+        assert!(!cached_jar_validation(&second.path, &mut cache, &mut canonical_path_cache, |_| {
+            calls += 1;
+            false
+        }));
+
+        assert_eq!(calls, 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_path_aliases_share_one_cache_entry() {
+        let file = TestFile::new("alias.jar");
+        let alias = file.root.join("alias-link.jar");
+        std::os::unix::fs::symlink(&file.path, &alias)
+            .expect("create symlink alias");
+
+        let mut cache = HashMap::new();
+        let mut canonical_path_cache = HashMap::new();
+        let mut calls = 0;
+
+        assert!(cached_jar_validation(&file.path, &mut cache, &mut canonical_path_cache, |_| {
+            calls += 1;
+            true
+        }));
+
+        assert!(cached_jar_validation(Path::new(&alias), &mut cache, &mut canonical_path_cache, |_| {
+            calls += 1;
+            false
+        }));
+
+        assert_eq!(calls, 1);
     }
 }

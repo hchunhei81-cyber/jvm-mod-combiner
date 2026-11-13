@@ -124,10 +124,12 @@ fn bounds_match(expected: &WindowBounds, actual: &WindowBounds) -> bool {
         && (expected.height - actual.height).abs() <= WINDOW_MATCH_TOLERANCE
 }
 
-/// Revalidate a previously discovered window against a fresh
-/// CoreGraphics snapshot. Window IDs must be unique in the fresh snapshot.
+/// Revalidate stable window identity without requiring unchanged geometry.
+///
+/// Rollback must use this check because a failed position/size write can
+/// leave the window at an intermediate geometry.
 #[cfg(any(target_os = "macos", test))]
-fn verify_fresh_window_identity(
+fn verify_fresh_window_identity_only(
     expected: &DiscoveredWindow,
     current_windows: &[DiscoveredWindow],
 ) -> Result<(), AccessibilityError> {
@@ -160,6 +162,24 @@ fn verify_fresh_window_identity(
     if actual.title != expected.title {
         return Err(AccessibilityError::WindowIdentityChanged("title"));
     }
+
+    Ok(())
+}
+
+/// Revalidate a previously discovered window against a fresh
+/// CoreGraphics snapshot. Window IDs must be unique in the fresh snapshot.
+/// This variant also requires geometry to remain unchanged.
+#[cfg(any(target_os = "macos", test))]
+fn verify_fresh_window_identity(
+    expected: &DiscoveredWindow,
+    current_windows: &[DiscoveredWindow],
+) -> Result<(), AccessibilityError> {
+    verify_fresh_window_identity_only(expected, current_windows)?;
+
+    let actual = current_windows
+        .iter()
+        .find(|window| window.window_id == expected.window_id)
+        .ok_or(AccessibilityError::WindowNotFound)?;
 
     if !bounds_match(&expected.bounds, &actual.bounds) {
         return Err(AccessibilityError::WindowIdentityChanged("geometry"));
@@ -620,6 +640,209 @@ mod macos {
         Ok(())
     }
 
+    /// Reacquire the window through fresh CoreGraphics and Accessibility
+    /// snapshots before restoring its original geometry. Never reuse the
+    /// AXUIElementRef selected by the failed forward operation.
+    fn restore_bounds_safely(
+        pid: u32,
+        expected: &DiscoveredWindow,
+        old_position: CGPoint,
+        old_size: CGSize,
+    ) -> Result<(), &'static str> {
+        if pid == 0 || pid != expected.pid || pid > i32::MAX as u32 {
+            return Err("validating rollback PID");
+        }
+
+        let current_windows = crate::window_discovery::discover_windows()
+            .map_err(|_| "rediscovering window before rollback")?;
+
+        verify_fresh_window_identity_only(expected, &current_windows)
+            .map_err(|_| "revalidating window identity before rollback")?;
+
+        let fresh_window = current_windows
+            .iter()
+            .find(|window| window.window_id == expected.window_id)
+            .ok_or("finding window before rollback")?;
+
+        let application = unsafe { OwnedCf::from_raw(AXUIElementCreateApplication(pid as i32)) }
+            .ok_or("creating Accessibility application for rollback")?;
+
+        let windows_attribute =
+            create_attribute(b"AXWindows\0").ok_or("creating AXWindows attribute")?;
+        let title_attribute = create_attribute(b"AXTitle\0").ok_or("creating AXTitle attribute")?;
+        let position_attribute =
+            create_attribute(b"AXPosition\0").ok_or("creating AXPosition attribute")?;
+        let size_attribute = create_attribute(b"AXSize\0").ok_or("creating AXSize attribute")?;
+
+        // Keep this fresh array alive for the complete rollback operation.
+        let windows = copy_attribute(
+            application.as_ptr(),
+            &windows_attribute,
+            "AXWindows before rollback",
+        )
+        .map_err(|_| "reading AXWindows before rollback")?;
+
+        unsafe {
+            if CFGetTypeID(windows.as_ptr()) != CFArrayGetTypeID() {
+                return Err("validating AXWindows before rollback");
+            }
+        }
+
+        let count = unsafe { CFArrayGetCount(windows.as_ptr()) };
+        if count < 0 {
+            return Err("counting AXWindows before rollback");
+        }
+
+        let mut candidates = Vec::with_capacity(count as usize);
+
+        for index in 0..count {
+            let element =
+                unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), index) as AXUIElementRef };
+
+            if element.is_null() {
+                continue;
+            }
+
+            let title = copy_attribute(element, &title_attribute, "AXTitle before rollback")
+                .ok()
+                .and_then(|value| cf_string_to_string(value.as_ptr()));
+
+            let position =
+                copy_attribute(element, &position_attribute, "AXPosition before rollback")
+                    .ok()
+                    .and_then(|value| read_point(value.as_ptr()));
+
+            let size = copy_attribute(element, &size_attribute, "AXSize before rollback")
+                .ok()
+                .and_then(|value| read_size(value.as_ptr()));
+
+            let bounds = match (position, size) {
+                (Some(position), Some(size)) => Some(WindowBounds {
+                    x: position.x,
+                    y: position.y,
+                    width: size.width,
+                    height: size.height,
+                }),
+                _ => None,
+            };
+
+            candidates.push(AccessibilityWindow {
+                index: index as usize,
+                title,
+                bounds,
+            });
+        }
+
+        let selected_index = match_accessibility_window(fresh_window, &candidates)
+            .map_err(|_| "matching fresh Accessibility window for rollback")?;
+
+        if selected_index >= count as usize {
+            return Err("validating rollback Accessibility index");
+        }
+
+        let element = unsafe {
+            CFArrayGetValueAtIndex(windows.as_ptr(), selected_index as CFIndex) as AXUIElementRef
+        };
+
+        if element.is_null() {
+            return Err("getting fresh Accessibility element for rollback");
+        }
+
+        // Revalidate stable identity once more immediately before restoration.
+        let latest_windows = crate::window_discovery::discover_windows()
+            .map_err(|_| "rechecking window identity before rollback")?;
+
+        verify_fresh_window_identity_only(expected, &latest_windows)
+            .map_err(|_| "rechecking window identity before rollback")?;
+
+        let latest_window = latest_windows
+            .iter()
+            .find(|window| window.window_id == expected.window_id)
+            .ok_or("finding latest window before rollback")?;
+
+        let current_title_value = copy_attribute(
+            element,
+            &title_attribute,
+            "rechecking AXTitle before rollback",
+        )
+        .map_err(|_| "reading AXTitle before rollback")?;
+
+        let current_title = cf_string_to_string(current_title_value.as_ptr())
+            .ok_or("decoding AXTitle before rollback")?;
+
+        if Some(current_title.as_str()) != latest_window.title.as_deref() {
+            return Err("revalidating Accessibility title before rollback");
+        }
+
+        let current_position_value = copy_attribute(
+            element,
+            &position_attribute,
+            "rechecking AXPosition before rollback",
+        )
+        .map_err(|_| "reading AXPosition before rollback")?;
+
+        let current_size_value = copy_attribute(
+            element,
+            &size_attribute,
+            "rechecking AXSize before rollback",
+        )
+        .map_err(|_| "reading AXSize before rollback")?;
+
+        let current_position = read_point(current_position_value.as_ptr())
+            .ok_or("decoding AXPosition before rollback")?;
+        let current_size =
+            read_size(current_size_value.as_ptr()).ok_or("decoding AXSize before rollback")?;
+
+        let current_bounds = WindowBounds {
+            x: current_position.x,
+            y: current_position.y,
+            width: current_size.width,
+            height: current_size.height,
+        };
+
+        if !bounds_match(&latest_window.bounds, &current_bounds) {
+            return Err("revalidating Accessibility geometry before rollback");
+        }
+
+        attribute_is_settable(element, &position_attribute, "AXPosition")
+            .map_err(|_| "checking AXPosition settable before rollback")?;
+        attribute_is_settable(element, &size_attribute, "AXSize")
+            .map_err(|_| "checking AXSize settable before rollback")?;
+
+        restore_bounds(
+            element,
+            &position_attribute,
+            &size_attribute,
+            old_position,
+            old_size,
+        )?;
+
+        // Verify both stable identity and restored CoreGraphics geometry.
+        let restored_windows = crate::window_discovery::discover_windows()
+            .map_err(|_| "verifying window after rollback")?;
+
+        verify_fresh_window_identity_only(expected, &restored_windows)
+            .map_err(|_| "verifying window identity after rollback")?;
+
+        let restored_window = restored_windows
+            .iter()
+            .find(|window| window.window_id == expected.window_id)
+            .ok_or("finding window after rollback")?;
+
+        let original_bounds = WindowBounds {
+            x: old_position.x,
+            y: old_position.y,
+            width: old_size.width,
+            height: old_size.height,
+        };
+
+        if !bounds_match(&original_bounds, &restored_window.bounds) {
+            return Err("verifying restored CoreGraphics geometry");
+        }
+
+        Ok(())
+    }
+
     pub fn set_window_bounds(
         pid: u32,
         discovered: &DiscoveredWindow,
@@ -806,15 +1029,7 @@ mod macos {
 
                 Ok(())
             },
-            || {
-                restore_bounds(
-                    element,
-                    &position_attribute,
-                    &size_attribute,
-                    old_position,
-                    old_size,
-                )
-            },
+            || restore_bounds_safely(pid, discovered, old_position, old_size),
         )
     }
 
@@ -1224,6 +1439,34 @@ mod matching_tests {
         actual.bounds.width -= 1.5;
 
         assert_eq!(verify_fresh_window_identity(&target, &[actual]), Ok(()));
+    }
+
+    #[test]
+    fn identity_only_accepts_intermediate_geometry() {
+        let target = discovered();
+        let mut actual = target.clone();
+        actual.bounds.x += 40.0;
+        actual.bounds.width -= 80.0;
+
+        assert_eq!(
+            verify_fresh_window_identity_only(&target, &[actual]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn identity_only_rejects_pid_change() {
+        let target = discovered();
+        let mut actual = target.clone();
+        actual.pid += 1;
+
+        assert_eq!(
+            verify_fresh_window_identity_only(&target, &[actual]),
+            Err(AccessibilityError::ProcessMismatch {
+                expected: target.pid,
+                actual: target.pid + 1,
+            })
+        );
     }
 
     #[test]

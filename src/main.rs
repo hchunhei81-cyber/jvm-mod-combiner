@@ -7,6 +7,7 @@ mod window_integration;
 mod window_layout;
 mod window_manager;
 mod window_transaction;
+mod window_transaction_adapter;
 
 use jni::jni_sig;
 use jni::jni_str;

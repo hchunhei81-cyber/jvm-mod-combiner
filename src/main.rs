@@ -3,6 +3,7 @@ mod display_topology;
 mod window_accessibility;
 mod window_discovery;
 mod window_integration;
+mod window_layout;
 mod window_manager;
 
 use jni::jni_sig;
@@ -2024,6 +2025,109 @@ fn start_data_bus() -> std::io::Result<()> {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+
+    let is_window_layout = args
+        .windows(2)
+        .any(|pair| pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("window-layout"))
+        || args.iter().any(|arg| {
+            arg.eq_ignore_ascii_case("window-layout")
+                || arg.eq_ignore_ascii_case("--mode=window-layout")
+        });
+
+    if is_window_layout {
+        use window_layout::{
+            LayoutConstraints, LayoutDirection, plan_on_display_id, plan_on_main_display,
+        };
+
+        println!("=== Window Layout Planner (read-only) ===");
+
+        let parse_option = |name: &str| -> Option<&str> {
+            args.windows(2)
+                .find(|pair| pair[0] == name)
+                .map(|pair| pair[1].as_str())
+                .or_else(|| {
+                    args.iter()
+                        .find_map(|arg| arg.strip_prefix(&format!("{name}=")))
+                })
+        };
+
+        let window_count = match parse_option("--count") {
+            Some(value) => match value.parse::<usize>() {
+                Ok(count) if count > 0 => count,
+                _ => {
+                    eprintln!("[WindowLayout] Invalid --count. Expected a positive integer.");
+                    std::process::exit(2);
+                }
+            },
+            None => 2,
+        };
+
+        let direction = match parse_option("--direction").unwrap_or("horizontal") {
+            value if value.eq_ignore_ascii_case("horizontal") => LayoutDirection::Horizontal,
+            value if value.eq_ignore_ascii_case("vertical") => LayoutDirection::Vertical,
+            _ => {
+                eprintln!("[WindowLayout] Invalid --direction. Use horizontal or vertical.");
+                std::process::exit(2);
+            }
+        };
+
+        let display_id = match parse_option("--display-id") {
+            Some(value) => match value.parse::<u32>() {
+                Ok(id) if id > 0 => Some(id),
+                _ => {
+                    eprintln!("[WindowLayout] Invalid --display-id.");
+                    std::process::exit(2);
+                }
+            },
+            None => None,
+        };
+
+        let displays = match display_geometry::discover_displays() {
+            Ok(displays) => displays,
+            Err(error) => {
+                eprintln!("[WindowLayout] Display discovery failed: {error}");
+                std::process::exit(1);
+            }
+        };
+
+        let constraints = LayoutConstraints::default();
+
+        println!("[WindowLayout] Direction: {direction}");
+        println!("[WindowLayout] Window count: {window_count}");
+        println!(
+            "[WindowLayout] Constraints: margin=({}, {}) gap={} min={}x{}",
+            constraints.margin_x,
+            constraints.margin_y,
+            constraints.gap,
+            constraints.min_width,
+            constraints.min_height
+        );
+
+        let result = match display_id {
+            Some(id) => plan_on_display_id(&displays, id, window_count, direction, constraints),
+            None => plan_on_main_display(&displays, window_count, direction, constraints),
+        };
+
+        match result {
+            Ok(plan) => {
+                println!("[WindowLayout] Target display: {}", plan.display_id);
+                for placement in &plan.placements {
+                    let b = &placement.bounds;
+                    println!(
+                        "[Placement {}] x={:.2} y={:.2} width={:.2} height={:.2}",
+                        placement.index, b.x, b.y, b.width, b.height
+                    );
+                }
+                println!("[WindowLayout] Planning completed. No windows were modified.");
+            }
+            Err(error) => {
+                eprintln!("[WindowLayout] Planning failed: {error}");
+                std::process::exit(1);
+            }
+        }
+
+        return;
+    }
 
     let is_window_display = args
         .windows(2)

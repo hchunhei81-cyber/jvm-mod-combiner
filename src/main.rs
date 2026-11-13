@@ -134,11 +134,15 @@ fn resolve_classpath_recursive(
                 }
             }
 
-            let before = classpath.len();
+            // Track successful resolution independently from classpath
+            // insertion: an artifact may already be present via another
+            // dependency, but this Maven coordinate must still be claimed.
+            let mut resolved = false;
 
             if let Some(art) = lib.pointer("/downloads/artifact") {
                 if let Some(path) = art.get("path").and_then(Value::as_str) {
                     if let Some(found) = find_local(path, search_dirs) {
+                        resolved = true;
                         if classpath_seen.insert(found.clone()) {
                             classpath.push(found);
                         }
@@ -151,6 +155,7 @@ fn resolve_classpath_recursive(
                     if let Some(c) = classifiers.get(key) {
                         if let Some(path) = c.get("path").and_then(Value::as_str) {
                             if let Some(found) = find_local(path, search_dirs) {
+                                resolved = true;
                                 if classpath_seen.insert(found.clone()) {
                                     classpath.push(found);
                                 }
@@ -160,10 +165,10 @@ fn resolve_classpath_recursive(
                 }
             }
 
-            // Only claim the Maven coordinate when at least one artifact
-            // was actually resolved. This permits a parent fallback if the
-            // child dependency is unavailable locally.
-            if classpath.len() > before {
+            // Claim the Maven coordinate when at least one artifact exists,
+            // even if its path was already inserted by another dependency.
+            // Missing child artifacts still permit a parent fallback.
+            if resolved {
                 if let Some(key) = coordinate {
                     selected_coordinates.insert(key);
                 }
@@ -2745,6 +2750,33 @@ mod classpath_resolver_tests {
         let result = resolve_classpath(&child_json, &tree.search_dirs());
 
         assert_eq!(result, vec![child_artifact]);
+    }
+
+    #[test]
+    fn child_dependency_overrides_parent_even_when_artifact_path_is_deduplicated() {
+        let tree = TestTree::new();
+
+        let shared_artifact = tree.artifact("libraries/shared/library.jar");
+        tree.artifact("libraries/example/parent.jar");
+
+        tree.version(
+            "parent",
+            None,
+            &[("example:library:1.0", "libraries/example/parent.jar")],
+        );
+
+        let child_json = tree.version(
+            "child",
+            Some("parent"),
+            &[
+                ("example:other:1.0", "libraries/shared/library.jar"),
+                ("example:library:2.0", "libraries/shared/library.jar"),
+            ],
+        );
+
+        let result = resolve_classpath(&child_json, &tree.search_dirs());
+
+        assert_eq!(result, vec![shared_artifact]);
     }
 
     #[test]

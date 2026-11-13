@@ -183,6 +183,33 @@ fn geometry_matches(actual: &WindowBounds, expected: &WindowBounds) -> bool {
         && (actual.height - expected.height).abs() <= VERIFY_TOLERANCE
 }
 
+/// Execute the window geometry mutation as one recoverable transaction.
+///
+/// Every operation failure triggers rollback, including a failed first
+/// setter, because a failed system call does not prove that no mutation
+/// occurred.
+#[cfg(any(target_os = "macos", test))]
+fn run_window_transaction(
+    mut set_position: impl FnMut() -> Result<(), AccessibilityError>,
+    mut set_size: impl FnMut() -> Result<(), AccessibilityError>,
+    mut verify: impl FnMut() -> Result<(), AccessibilityError>,
+    mut rollback: impl FnMut() -> Result<(), &'static str>,
+) -> Result<(), AccessibilityError> {
+    let operation = (|| {
+        set_position()?;
+        set_size()?;
+        verify()
+    })();
+
+    match operation {
+        Ok(()) => Ok(()),
+        Err(error) => match rollback() {
+            Ok(()) => Err(error),
+            Err(operation) => Err(AccessibilityError::RollbackFailed(operation)),
+        },
+    }
+}
+
 /// Match a CoreGraphics-discovered window to the current Accessibility
 /// enumeration for the same process.
 ///
@@ -754,70 +781,41 @@ mod macos {
         let old_position = current_position;
         let old_size = current_size;
 
-        if let Err(error) = set_point(element, &position_attribute, new_position) {
-            if let Err(operation) = restore_bounds(
-                element,
-                &position_attribute,
-                &size_attribute,
-                old_position,
-                old_size,
-            ) {
-                return Err(AccessibilityError::RollbackFailed(operation));
-            }
-            return Err(error);
-        }
+        run_window_transaction(
+            || set_point(element, &position_attribute, new_position),
+            || set_size(element, &size_attribute, new_size),
+            || {
+                let position_value = copy_attribute(element, &position_attribute, "AXPosition")?;
+                let size_value = copy_attribute(element, &size_attribute, "AXSize")?;
 
-        if let Err(error) = set_size(element, &size_attribute, new_size) {
-            if let Err(operation) = restore_bounds(
-                element,
-                &position_attribute,
-                &size_attribute,
-                old_position,
-                old_size,
-            ) {
-                return Err(AccessibilityError::RollbackFailed(operation));
-            }
-            return Err(error);
-        }
+                let position = read_point(position_value.as_ptr())
+                    .ok_or(AccessibilityError::InvalidReturnedType("AXPosition"))?;
+                let size = read_size(size_value.as_ptr())
+                    .ok_or(AccessibilityError::InvalidReturnedType("AXSize"))?;
 
-        let verification = (|| {
-            let position_value = copy_attribute(element, &position_attribute, "AXPosition")?;
-            let size_value = copy_attribute(element, &size_attribute, "AXSize")?;
+                let actual = WindowBounds {
+                    x: position.x,
+                    y: position.y,
+                    width: size.width,
+                    height: size.height,
+                };
 
-            let position = read_point(position_value.as_ptr())
-                .ok_or(AccessibilityError::InvalidReturnedType("AXPosition"))?;
-            let size = read_size(size_value.as_ptr())
-                .ok_or(AccessibilityError::InvalidReturnedType("AXSize"))?;
+                if !geometry_matches(&actual, desired) {
+                    return Err(AccessibilityError::VerificationFailed);
+                }
 
-            let actual = WindowBounds {
-                x: position.x,
-                y: position.y,
-                width: size.width,
-                height: size.height,
-            };
-
-            if !geometry_matches(&actual, desired) {
-                return Err(AccessibilityError::VerificationFailed);
-            }
-
-            Ok(())
-        })();
-
-        if let Err(error) = verification {
-            if let Err(operation) = restore_bounds(
-                element,
-                &position_attribute,
-                &size_attribute,
-                old_position,
-                old_size,
-            ) {
-                return Err(AccessibilityError::RollbackFailed(operation));
-            }
-
-            return Err(error);
-        }
-
-        Ok(())
+                Ok(())
+            },
+            || {
+                restore_bounds(
+                    element,
+                    &position_attribute,
+                    &size_attribute,
+                    old_position,
+                    old_size,
+                )
+            },
+        )
     }
 
     pub fn is_trusted() -> bool {
@@ -979,6 +977,166 @@ mod matching_tests {
             title: Some(title.to_owned()),
             bounds: Some(geometry),
         }
+    }
+
+    #[test]
+    fn transaction_success_runs_all_steps_in_order() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+
+        let result = run_window_transaction(
+            || {
+                events.borrow_mut().push("position");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("size");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("verify");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("rollback");
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(*events.borrow(), vec!["position", "size", "verify"]);
+    }
+
+    #[test]
+    fn transaction_position_failure_triggers_rollback() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+        let expected_error = AccessibilityError::AxCall {
+            operation: "test position",
+            code: -1,
+        };
+
+        let result = run_window_transaction(
+            || {
+                events.borrow_mut().push("position");
+                Err(expected_error.clone())
+            },
+            || {
+                events.borrow_mut().push("size");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("verify");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("rollback");
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Err(expected_error));
+        assert_eq!(*events.borrow(), vec!["position", "rollback"]);
+    }
+
+    #[test]
+    fn transaction_size_failure_triggers_rollback() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+        let expected_error = AccessibilityError::AxCall {
+            operation: "test size",
+            code: -2,
+        };
+
+        let result = run_window_transaction(
+            || {
+                events.borrow_mut().push("position");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("size");
+                Err(expected_error.clone())
+            },
+            || {
+                events.borrow_mut().push("verify");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("rollback");
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Err(expected_error));
+        assert_eq!(*events.borrow(), vec!["position", "size", "rollback"]);
+    }
+
+    #[test]
+    fn transaction_verification_failure_triggers_rollback() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+        let expected_error = AccessibilityError::VerificationFailed;
+
+        let result = run_window_transaction(
+            || {
+                events.borrow_mut().push("position");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("size");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("verify");
+                Err(expected_error.clone())
+            },
+            || {
+                events.borrow_mut().push("rollback");
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Err(expected_error));
+        assert_eq!(
+            *events.borrow(),
+            vec!["position", "size", "verify", "rollback"]
+        );
+    }
+
+    #[test]
+    fn transaction_rollback_failure_overrides_operation_error() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+
+        let result = run_window_transaction(
+            || {
+                events.borrow_mut().push("position");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("size");
+                Err(AccessibilityError::VerificationFailed)
+            },
+            || {
+                events.borrow_mut().push("verify");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("rollback");
+                Err("test rollback failure")
+            },
+        );
+
+        assert_eq!(
+            result,
+            Err(AccessibilityError::RollbackFailed("test rollback failure"))
+        );
+        assert_eq!(*events.borrow(), vec!["position", "size", "rollback"]);
     }
 
     #[test]

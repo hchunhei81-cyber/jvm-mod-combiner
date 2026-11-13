@@ -2,6 +2,7 @@ mod display_geometry;
 mod display_topology;
 mod window_accessibility;
 mod window_discovery;
+mod window_dry_run;
 mod window_integration;
 mod window_layout;
 mod window_manager;
@@ -2030,6 +2031,215 @@ fn start_data_bus() -> std::io::Result<()> {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+
+    let is_window_dry_run = args
+        .windows(2)
+        .any(|pair| pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("window-dry-run"))
+        || args.iter().any(|arg| {
+            arg.eq_ignore_ascii_case("window-dry-run")
+                || arg.eq_ignore_ascii_case("--mode=window-dry-run")
+        });
+
+    if is_window_dry_run {
+        use window_layout::{LayoutConstraints, LayoutDirection};
+
+        println!("=== Window Layout Dry Run (read-only) ===");
+
+        let invalid_argument = |message: &str| -> ! {
+            eprintln!("[WindowDryRun] {message}");
+            std::process::exit(2);
+        };
+
+        let mut window_ids: Option<Vec<u32>> = None;
+        let mut direction_value: Option<String> = None;
+        let mut display_id: Option<u32> = None;
+        let mut mode_seen = false;
+
+        let mut arg_index = 1;
+        while arg_index < args.len() {
+            let arg = args[arg_index].as_str();
+
+            if arg == "--mode" {
+                if mode_seen {
+                    invalid_argument("Duplicate mode selector.");
+                }
+
+                let Some(value) = args.get(arg_index + 1) else {
+                    invalid_argument("Missing value after --mode.");
+                };
+
+                if !value.eq_ignore_ascii_case("window-dry-run") {
+                    invalid_argument("Unexpected mode value.");
+                }
+
+                mode_seen = true;
+                arg_index += 2;
+                continue;
+            }
+
+            if let Some(value) = arg.strip_prefix("--mode=") {
+                if mode_seen {
+                    invalid_argument("Duplicate mode selector.");
+                }
+
+                if !value.eq_ignore_ascii_case("window-dry-run") {
+                    invalid_argument("Unexpected mode value.");
+                }
+
+                mode_seen = true;
+                arg_index += 1;
+                continue;
+            }
+
+            if arg.eq_ignore_ascii_case("window-dry-run") {
+                if mode_seen {
+                    invalid_argument("Duplicate mode selector.");
+                }
+
+                mode_seen = true;
+                arg_index += 1;
+                continue;
+            }
+
+            let (name, value, consumed) = if let Some((name, value)) = arg.split_once('=') {
+                (name, value, 1)
+            } else {
+                let Some(value) = args.get(arg_index + 1) else {
+                    invalid_argument("Missing value for option.");
+                };
+
+                if value.starts_with("--") {
+                    invalid_argument("Missing value before the next option.");
+                }
+
+                (arg, value.as_str(), 2)
+            };
+
+            if value.is_empty() {
+                invalid_argument("Option values must not be empty.");
+            }
+
+            match name {
+                "--window-ids" => {
+                    if window_ids.is_some() {
+                        invalid_argument("Duplicate --window-ids option.");
+                    }
+
+                    let parsed: Result<Vec<u32>, _> = value
+                        .split(',')
+                        .map(|part| part.trim().parse::<u32>())
+                        .collect();
+
+                    match parsed {
+                        Ok(ids) if ids.len() >= 2 && ids.iter().all(|id| *id > 0) => {
+                            window_ids = Some(ids);
+                        }
+                        _ => invalid_argument(
+                            "Invalid --window-ids. Provide at least two comma-separated positive IDs.",
+                        ),
+                    }
+                }
+                "--direction" => {
+                    if direction_value.is_some() {
+                        invalid_argument("Duplicate --direction option.");
+                    }
+
+                    if !value.eq_ignore_ascii_case("horizontal")
+                        && !value.eq_ignore_ascii_case("vertical")
+                    {
+                        invalid_argument("Invalid --direction. Expected horizontal or vertical.");
+                    }
+
+                    direction_value = Some(value.to_owned());
+                }
+                "--display-id" => {
+                    if display_id.is_some() {
+                        invalid_argument("Duplicate --display-id option.");
+                    }
+
+                    match value.parse::<u32>() {
+                        Ok(id) if id > 0 => display_id = Some(id),
+                        _ => invalid_argument(
+                            "Invalid --display-id. Expected a positive display ID.",
+                        ),
+                    }
+                }
+                _ => {
+                    invalid_argument("Unknown option.");
+                }
+            }
+
+            arg_index += consumed;
+        }
+
+        let window_ids = match window_ids {
+            Some(ids) => ids,
+            None => invalid_argument(
+                "Missing --window-ids. Provide at least two comma-separated window IDs.",
+            ),
+        };
+
+        let direction = match direction_value.as_deref().unwrap_or("horizontal") {
+            value if value.eq_ignore_ascii_case("horizontal") => LayoutDirection::Horizontal,
+            value if value.eq_ignore_ascii_case("vertical") => LayoutDirection::Vertical,
+            _ => unreachable!(),
+        };
+
+        let constraints = LayoutConstraints::default();
+
+        match window_dry_run::build_window_dry_run(&window_ids, direction, display_id, constraints)
+        {
+            Ok(report) => {
+                println!("[WindowDryRun] Target display: {}", report.display_id);
+                println!("[WindowDryRun] Direction: {}", report.direction);
+                println!("[WindowDryRun] Windows: {}", report.entries.len());
+                println!(
+                    "[WindowDryRun] Constraints: margin=({}, {}) gap={} min={}x{}",
+                    constraints.margin_x,
+                    constraints.margin_y,
+                    constraints.gap,
+                    constraints.min_width,
+                    constraints.min_height,
+                );
+
+                for entry in &report.entries {
+                    let current = &entry.current_bounds;
+                    let target = &entry.target_bounds;
+
+                    println!();
+                    println!(
+                        "[Window {}] pid={} owner={:?}",
+                        entry.window_id, entry.pid, entry.owner_name
+                    );
+                    println!("[Window {}] title={:?}", entry.window_id, entry.title);
+                    println!(
+                        "[Window {}] AX index={}",
+                        entry.window_id, entry.accessibility_index
+                    );
+                    println!(
+                        "[Window {}] current=({:.2}, {:.2}, {:.2}, {:.2})",
+                        entry.window_id, current.x, current.y, current.width, current.height,
+                    );
+                    println!(
+                        "[Window {}] target=({:.2}, {:.2}, {:.2}, {:.2})",
+                        entry.window_id, target.x, target.y, target.width, target.height,
+                    );
+                    println!("[Window {}] identity=VERIFIED", entry.window_id);
+                }
+
+                println!();
+                println!("[WindowDryRun] All selected windows passed verification.");
+                println!("[WindowDryRun] DRY RUN ONLY: no window properties were changed.");
+            }
+            Err(error) => {
+                eprintln!("[WindowDryRun] ABORTED: {error}");
+                eprintln!("[WindowDryRun] No window properties were changed.");
+                std::process::exit(1);
+            }
+        }
+
+        return;
+    }
 
     let is_window_verify = args
         .windows(2)

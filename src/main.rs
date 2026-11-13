@@ -2031,6 +2031,145 @@ fn start_data_bus() -> std::io::Result<()> {
 fn main() {
     let args: Vec<String> = env::args().collect();
 
+    let is_window_verify = args
+        .windows(2)
+        .any(|pair| pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("window-verify"))
+        || args.iter().any(|arg| {
+            arg.eq_ignore_ascii_case("window-verify")
+                || arg.eq_ignore_ascii_case("--mode=window-verify")
+        });
+
+    if is_window_verify {
+        println!("=== Window Identity Verification (read-only) ===");
+
+        let parse_option = |name: &str| -> Option<&str> {
+            args.windows(2)
+                .find(|pair| pair[0] == name)
+                .map(|pair| pair[1].as_str())
+                .or_else(|| {
+                    args.iter()
+                        .find_map(|arg| arg.strip_prefix(&format!("{name}=")))
+                })
+        };
+
+        let window_id =
+            match parse_option("--window-id").and_then(|value| value.parse::<u32>().ok()) {
+                Some(id) if id > 0 => id,
+                _ => {
+                    eprintln!("[WindowVerify] Usage: --mode window-verify --window-id <WINDOW_ID>");
+                    std::process::exit(2);
+                }
+            };
+
+        let verification = (|| -> Result<(), String> {
+            let discovered = window_discovery::discover_windows()
+                .map_err(|error| format!("CoreGraphics discovery failed: {error}"))?;
+
+            let initial_matches: Vec<_> = discovered
+                .iter()
+                .filter(|window| window.window_id == window_id)
+                .collect();
+
+            if initial_matches.len() != 1 {
+                return Err(format!(
+                    "expected exactly one CoreGraphics window with ID {window_id}, found {}",
+                    initial_matches.len()
+                ));
+            }
+
+            let target = initial_matches[0];
+
+            if target.pid == 0 {
+                return Err("target window has an invalid PID".to_owned());
+            }
+
+            if target.title.as_deref().is_none_or(str::is_empty) {
+                return Err("target window has no usable title".to_owned());
+            }
+
+            let bounds = &target.bounds;
+            if [bounds.x, bounds.y, bounds.width, bounds.height]
+                .iter()
+                .any(|value| !value.is_finite())
+                || bounds.width <= 0.0
+                || bounds.height <= 0.0
+            {
+                return Err("target window has invalid geometry".to_owned());
+            }
+
+            println!(
+                "[WindowVerify] Initial identity: id={} pid={} owner={:?} title={:?}",
+                target.window_id, target.pid, target.owner_name, target.title
+            );
+            println!(
+                "[WindowVerify] Initial bounds: ({:.1}, {:.1}, {:.1}, {:.1})",
+                bounds.x, bounds.y, bounds.width, bounds.height
+            );
+
+            let accessibility_windows =
+                window_accessibility::inspect_application_windows(target.pid)
+                    .map_err(|error| format!("Accessibility inspection failed: {error}"))?;
+
+            let accessibility_index =
+                window_accessibility::match_accessibility_window(target, &accessibility_windows)
+                    .map_err(|error| format!("Accessibility identity match failed: {error}"))?;
+
+            let refreshed = window_discovery::discover_windows()
+                .map_err(|error| format!("Final CoreGraphics discovery failed: {error}"))?;
+
+            let final_matches: Vec<_> = refreshed
+                .iter()
+                .filter(|window| window.window_id == window_id)
+                .collect();
+
+            if final_matches.len() != 1 {
+                return Err(format!(
+                    "target window changed or disappeared during verification; final matches: {}",
+                    final_matches.len()
+                ));
+            }
+
+            let current = final_matches[0];
+
+            if current.pid != target.pid || current.title != target.title {
+                return Err("target window identity changed during verification".to_owned());
+            }
+
+            let current_bounds = &current.bounds;
+            let geometry_stable = [
+                (current_bounds.x, bounds.x),
+                (current_bounds.y, bounds.y),
+                (current_bounds.width, bounds.width),
+                (current_bounds.height, bounds.height),
+            ]
+            .iter()
+            .all(|(actual, expected)| actual.is_finite() && (actual - expected).abs() <= 2.0)
+                && current_bounds.width > 0.0
+                && current_bounds.height > 0.0;
+
+            if !geometry_stable {
+                return Err("target window geometry changed during verification".to_owned());
+            }
+
+            println!("[WindowVerify] Accessibility match: AX index={accessibility_index}");
+            println!(
+                "[WindowVerify] Final bounds: ({:.1}, {:.1}, {:.1}, {:.1})",
+                current_bounds.x, current_bounds.y, current_bounds.width, current_bounds.height
+            );
+            println!("[WindowVerify] Identity and geometry remained stable.");
+            println!("[WindowVerify] READ-ONLY: no window properties were changed.");
+
+            Ok(())
+        })();
+
+        if let Err(error) = verification {
+            eprintln!("[WindowVerify] FAILED: {error}");
+            std::process::exit(1);
+        }
+
+        return;
+    }
+
     let is_window_layout = args
         .windows(2)
         .any(|pair| pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("window-layout"))

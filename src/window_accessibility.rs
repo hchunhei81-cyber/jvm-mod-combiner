@@ -627,7 +627,18 @@ mod macos {
             height: desired.height,
         };
 
-        set_point(element, &position_attribute, new_position)?;
+        if let Err(error) = set_point(element, &position_attribute, new_position) {
+            if let Err(operation) = restore_bounds(
+                element,
+                &position_attribute,
+                &size_attribute,
+                old_position,
+                old_size,
+            ) {
+                return Err(AccessibilityError::RollbackFailed(operation));
+            }
+            return Err(error);
+        }
 
         if let Err(error) = set_size(element, &size_attribute, new_size) {
             if let Err(operation) = restore_bounds(

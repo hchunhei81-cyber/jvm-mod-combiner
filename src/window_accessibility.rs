@@ -21,6 +21,8 @@ pub enum AccessibilityError {
     AxCall { operation: &'static str, code: i32 },
     InvalidReturnedType(&'static str),
     WindowIdentityUnavailable,
+    WindowIdentityChanged(&'static str),
+    WindowDiscoveryFailed,
     WindowNotFound,
     AmbiguousWindowMatch(usize),
     InvalidWindowBounds,
@@ -55,6 +57,12 @@ impl fmt::Display for AccessibilityError {
                     f,
                     "Window title or bounds are unavailable for safe matching"
                 )
+            }
+            Self::WindowIdentityChanged(field) => {
+                write!(f, "Window identity changed before modification: {field}")
+            }
+            Self::WindowDiscoveryFailed => {
+                write!(f, "Could not re-discover windows before modification")
             }
             Self::WindowNotFound => {
                 write!(f, "No Accessibility window matches the discovered window")
@@ -114,6 +122,50 @@ fn bounds_match(expected: &WindowBounds, actual: &WindowBounds) -> bool {
         && (expected.y - actual.y).abs() <= WINDOW_MATCH_TOLERANCE
         && (expected.width - actual.width).abs() <= WINDOW_MATCH_TOLERANCE
         && (expected.height - actual.height).abs() <= WINDOW_MATCH_TOLERANCE
+}
+
+/// Revalidate a previously discovered window against a fresh
+/// CoreGraphics snapshot. Window IDs must be unique in the fresh snapshot.
+#[cfg(any(target_os = "macos", test))]
+fn verify_fresh_window_identity(
+    expected: &DiscoveredWindow,
+    current_windows: &[DiscoveredWindow],
+) -> Result<(), AccessibilityError> {
+    let matches: Vec<&DiscoveredWindow> = current_windows
+        .iter()
+        .filter(|window| window.window_id == expected.window_id)
+        .collect();
+
+    if matches.is_empty() {
+        return Err(AccessibilityError::WindowNotFound);
+    }
+
+    if matches.len() != 1 {
+        return Err(AccessibilityError::AmbiguousWindowMatch(matches.len()));
+    }
+
+    let actual = matches[0];
+
+    if actual.pid != expected.pid {
+        return Err(AccessibilityError::ProcessMismatch {
+            expected: expected.pid,
+            actual: actual.pid,
+        });
+    }
+
+    if actual.owner_name != expected.owner_name {
+        return Err(AccessibilityError::WindowIdentityChanged("owner"));
+    }
+
+    if actual.title != expected.title {
+        return Err(AccessibilityError::WindowIdentityChanged("title"));
+    }
+
+    if !bounds_match(&expected.bounds, &actual.bounds) {
+        return Err(AccessibilityError::WindowIdentityChanged("geometry"));
+    }
+
+    Ok(())
 }
 
 /// Verify that a failed window operation was rolled back to its original
@@ -649,14 +701,6 @@ mod macos {
         attribute_is_settable(element, &position_attribute, "AXPosition")?;
         attribute_is_settable(element, &size_attribute, "AXSize")?;
 
-        let old_position_value = copy_attribute(element, &position_attribute, "AXPosition")?;
-        let old_size_value = copy_attribute(element, &size_attribute, "AXSize")?;
-
-        let old_position = read_point(old_position_value.as_ptr())
-            .ok_or(AccessibilityError::InvalidReturnedType("AXPosition"))?;
-        let old_size = read_size(old_size_value.as_ptr())
-            .ok_or(AccessibilityError::InvalidReturnedType("AXSize"))?;
-
         let new_position = CGPoint {
             x: desired.x,
             y: desired.y,
@@ -665,6 +709,50 @@ mod macos {
             width: desired.width,
             height: desired.height,
         };
+
+        // Re-discover immediately before the first write. This narrows the
+        // race between initial discovery and Accessibility mutation.
+        let current_windows = crate::window_discovery::discover_windows()
+            .map_err(|_| AccessibilityError::WindowDiscoveryFailed)?;
+        verify_fresh_window_identity(discovered, &current_windows)?;
+
+        // CoreGraphics validates the Window ID/PID/owner. Re-read the same
+        // selected AX element as a second, independent identity check.
+        let current_title_value = copy_attribute(element, &title_attribute, "rechecking AXTitle")?;
+        let current_title = cf_string_to_string(current_title_value.as_ptr())
+            .ok_or(AccessibilityError::WindowIdentityUnavailable)?;
+
+        if Some(current_title.as_str()) != discovered.title.as_deref() {
+            return Err(AccessibilityError::WindowIdentityChanged(
+                "Accessibility title",
+            ));
+        }
+
+        let current_position_value =
+            copy_attribute(element, &position_attribute, "rechecking AXPosition")?;
+        let current_size_value = copy_attribute(element, &size_attribute, "rechecking AXSize")?;
+
+        let current_position = read_point(current_position_value.as_ptr())
+            .ok_or(AccessibilityError::InvalidReturnedType("AXPosition"))?;
+        let current_size = read_size(current_size_value.as_ptr())
+            .ok_or(AccessibilityError::InvalidReturnedType("AXSize"))?;
+
+        let current_bounds = WindowBounds {
+            x: current_position.x,
+            y: current_position.y,
+            width: current_size.width,
+            height: current_size.height,
+        };
+
+        if !bounds_match(&discovered.bounds, &current_bounds) {
+            return Err(AccessibilityError::WindowIdentityChanged(
+                "Accessibility geometry",
+            ));
+        }
+
+        // Capture the final verified geometry as the rollback baseline.
+        let old_position = current_position;
+        let old_size = current_size;
 
         if let Err(error) = set_point(element, &position_attribute, new_position) {
             if let Err(operation) = restore_bounds(
@@ -891,6 +979,93 @@ mod matching_tests {
             title: Some(title.to_owned()),
             bounds: Some(geometry),
         }
+    }
+
+    #[test]
+    fn fresh_identity_accepts_unchanged_window() {
+        let target = discovered();
+        assert_eq!(
+            verify_fresh_window_identity(&target, &[target.clone()]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn fresh_identity_rejects_missing_window() {
+        assert_eq!(
+            verify_fresh_window_identity(&discovered(), &[]),
+            Err(AccessibilityError::WindowNotFound)
+        );
+    }
+
+    #[test]
+    fn fresh_identity_rejects_duplicate_window_id() {
+        let target = discovered();
+        assert_eq!(
+            verify_fresh_window_identity(&target, &[target.clone(), target.clone()]),
+            Err(AccessibilityError::AmbiguousWindowMatch(2))
+        );
+    }
+
+    #[test]
+    fn fresh_identity_rejects_pid_change() {
+        let target = discovered();
+        let mut actual = target.clone();
+        actual.pid += 1;
+
+        assert_eq!(
+            verify_fresh_window_identity(&target, &[actual]),
+            Err(AccessibilityError::ProcessMismatch {
+                expected: target.pid,
+                actual: target.pid + 1,
+            })
+        );
+    }
+
+    #[test]
+    fn fresh_identity_rejects_owner_change() {
+        let target = discovered();
+        let mut actual = target.clone();
+        actual.owner_name = Some("Different Application".to_owned());
+
+        assert_eq!(
+            verify_fresh_window_identity(&target, &[actual]),
+            Err(AccessibilityError::WindowIdentityChanged("owner"))
+        );
+    }
+
+    #[test]
+    fn fresh_identity_rejects_title_change() {
+        let target = discovered();
+        let mut actual = target.clone();
+        actual.title = Some("Different Window".to_owned());
+
+        assert_eq!(
+            verify_fresh_window_identity(&target, &[actual]),
+            Err(AccessibilityError::WindowIdentityChanged("title"))
+        );
+    }
+
+    #[test]
+    fn fresh_identity_rejects_geometry_change() {
+        let target = discovered();
+        let mut actual = target.clone();
+        actual.bounds.x += 3.0;
+
+        assert_eq!(
+            verify_fresh_window_identity(&target, &[actual]),
+            Err(AccessibilityError::WindowIdentityChanged("geometry"))
+        );
+    }
+
+    #[test]
+    fn fresh_identity_accepts_geometry_within_two_points() {
+        let target = discovered();
+        let mut actual = target.clone();
+        actual.bounds.x += 2.0;
+        actual.bounds.width -= 1.5;
+
+        assert_eq!(verify_fresh_window_identity(&target, &[actual]), Ok(()));
     }
 
     #[test]

@@ -1,3 +1,4 @@
+mod display_geometry;
 mod window_accessibility;
 mod window_discovery;
 mod window_integration;
@@ -2022,6 +2023,49 @@ fn start_data_bus() -> std::io::Result<()> {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+
+    let is_window_display = args
+        .windows(2)
+        .any(|pair| pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("window-display"))
+        || args.iter().any(|arg| {
+            arg.eq_ignore_ascii_case("window-display")
+                || arg.eq_ignore_ascii_case("--mode=window-display")
+        });
+
+    if is_window_display {
+        println!("=== macOS Display Geometry Probe (read-only) ===");
+
+        match display_geometry::discover_displays() {
+            Ok(displays) => {
+                println!("[DisplayGeometry] Found {} active displays", displays.len());
+
+                for (index, display) in displays.iter().enumerate() {
+                    println!(
+                        "[Display {}] id={} main={} logical=({:.1}, {:.1}, {:.1}, {:.1}) backing_pixels={}x{} cg_pixels={}x{} scale=({:.4}, {:.4})",
+                        index + 1,
+                        display.display_id,
+                        display.is_main,
+                        display.bounds.x,
+                        display.bounds.y,
+                        display.bounds.width,
+                        display.bounds.height,
+                        display.pixel_width,
+                        display.pixel_height,
+                        display.cg_pixel_width,
+                        display.cg_pixel_height,
+                        display.scale_x,
+                        display.scale_y,
+                    );
+                }
+            }
+            Err(error) => {
+                eprintln!("[DisplayGeometry] ERROR: {error}");
+                std::process::exit(1);
+            }
+        }
+
+        return;
+    }
 
     let is_window_accessibility = args
         .windows(2)

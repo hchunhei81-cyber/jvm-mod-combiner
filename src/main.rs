@@ -6,6 +6,7 @@ mod window_dry_run;
 mod window_integration;
 mod window_layout;
 mod window_manager;
+mod window_transaction;
 
 use jni::jni_sig;
 use jni::jni_str;

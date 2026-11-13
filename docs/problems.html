@@ -212,15 +212,34 @@
             <h3 data-i18n="p9Title">Cross-process rendering and window composition</h3>
             <p data-i18n="p9Text">
               The current prototype registers JVMs and observes window
-              metadata on macOS, but does not move, resize, embed, or compose
-              windows. Combining GPU resources across independent clients is
-              platform-specific and adds driver, synchronization, and lifetime
-              risks.
+              metadata on macOS; position/size transactions exist in source,
+              but live recovery remains unverified. Embedding and composition
+              are not implemented. Combining GPU resources across independent
+              clients is platform-specific and adds driver, synchronization,
+              and lifetime risks.
             </p>
             <p data-i18n="p9Direction">
               <strong>Solution direction:</strong> Keep independent windows
               and prioritize reliable state synchronization. Consider
               platform-native composition only after core behavior is stable.
+            </p>
+          </article>
+
+          <article class="doc-card">
+            <span class="doc-status open" data-i18n="p10Status">Unresolved · recovery unverified</span>
+            <h3 data-i18n="p10Title">Partial macOS window mutation and failed rollback</h3>
+            <p data-i18n="p10Text">
+              A real position/size operation partially changed a window, then
+              failed verification. Rollback could not safely reacquire a
+              matching Accessibility window, so recovery was not confirmed.
+              CoreGraphics and Accessibility observations can differ during
+              layout changes, and a title alone is not a reliable identity.
+            </p>
+            <p data-i18n="p10Direction">
+              <strong>Fix direction:</strong> Revalidate window identity before
+              every write, preserve specific API/read-back errors, and test
+              partial-write and rollback failures without touching live windows.
+              Do not treat source-level transaction support as verified recovery.
             </p>
           </article>
         </div>

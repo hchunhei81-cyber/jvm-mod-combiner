@@ -306,9 +306,9 @@ Linux 上的 `LD_PRELOAD`、macOS 上的 `DYLD_INSERT_LIBRARIES` 以及 Windows 
 
 **当前原型状态：** Rust Window Manager 与 Java Bridge 可注册 Fabric、
 Forge 和 NeoForge JVM 进程；测试覆盖注册、重连、拒绝及按 PID 关联。
-macOS 实现可枚举屏幕窗口，并提供只读 Accessibility API 探针读取标题
-和边界。这些测试不能证明功能已在真实 Minecraft 窗口中运行。当前代码不
-会移动、缩放、嵌入或合成窗口，也未实现 Windows/Linux 窗口发现。
+macOS 窗口发现和 Accessibility 检查已实现，Rust 源码也已加入位置/尺寸
+事务。但一次真实操作部分生效，回滚未能确认成功，因此安全恢复仍未解决。
+窗口嵌入/合成和 Windows/Linux 窗口发现尚未实现。
 
 **1. 独立客户端窗口**
 
@@ -652,9 +652,11 @@ Rust DataBus 源码已在消息路由边界强制执行单向状态策略。该�
 
 ### 阶段 5 — 提升兼容性和可移植性
 
-- [x] 添加进程注册、基于 PID 的窗口关联，以及只读 macOS 窗口发现/
-      Accessibility 检查。
+- [x] 添加进程注册、基于 PID 的窗口关联、macOS 窗口发现/
+      Accessibility 检查，以及源码级位置/尺寸事务。
 - [ ] 使用真实 Minecraft 窗口验证窗口发现和 macOS 权限流程。
+- [ ] 审查身份验证和错误诊断；在依赖窗口控制前解决并实测部分修改后的
+      回滚失败路径。
 - [ ] 确定预期用户体验后，再定义并实现窗口排列/嵌入。
 - [ ] 建立 Loader 专属适配器接口。
 - [ ] 实现基于能力的同步。

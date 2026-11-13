@@ -81,7 +81,11 @@ Fabric is the sole authoritative player-state publisher. NeoForge operates as a 
 - [x] Associate macOS on-screen windows with registered processes by PID.
 - [x] Implement read-only macOS window discovery and a read-only Accessibility API probe.
 - [ ] Validate discovery and Accessibility permission handling against live Minecraft windows.
-- [ ] Implement and test window arrangement/embedding only after defining the intended UX; no window manipulation is currently implemented.
+- [x] Implement position/size changes as a recoverable transaction in Rust source.
+- [ ] Investigate the observed partial-apply/failed-rollback case; live recovery is not verified.
+- [ ] Preserve specific errors across forward matching and all rollback stages; reject ambiguous window identities.
+- [ ] Add failure-injection tests before further live mutation attempts.
+- [ ] Define and test window arrangement/embedding UX separately from basic movement.
 - [ ] Add Windows and Linux support.
 
 ---
@@ -240,14 +244,15 @@ The TCP DataBus is already implemented. The next step is to evolve it from a bas
 
 ### 15. Rendering and Window Integration
 
-- [x] Prototype loader-process registration, PID-based window association, and read-only macOS window discovery/Accessibility inspection.
+- [x] Prototype loader-process registration, PID-based window association, macOS window discovery/Accessibility inspection, and source-level position/size transactions.
 - [ ] Validate discovery against live Minecraft windows and macOS permission behavior.
+- [ ] Resolve and safely validate partial mutation and rollback failure; do not assume recovery succeeded.
 - [ ] Investigate whether two Minecraft windows can be managed as one user-facing experience.
 - [ ] Research native window embedding and overlay approaches.
 - [ ] Evaluate platform-specific window composition.
 - [ ] Investigate shared rendering resources only after the process and gameplay synchronization layers are stable.
 
-**Limit:** The current window prototype observes windows only; it does not move, resize, embed, or compose them. **Priority:** Reliable gameplay synchronization comes before cross-process GPU sharing.
+**Limit:** Position/size mutation exists in source, but a real partial mutation was not successfully rolled back. Live recovery remains unresolved; embedding/composition is not implemented. **Priority:** Reliable gameplay synchronization comes before cross-process GPU sharing.
 
 ### 16. Advanced Mod Compatibility
 
@@ -309,6 +314,6 @@ Rust launcher, Fabric and NeoForge startup, Java Agent injection, TCP DataBus, a
 
 Rebuild/package the committed Java Agent sources, constrain the self-asserted DataBus registration identity, and runtime-test one-way sender authorization plus the hostile-mob mirror/ACK path.
 
-The next milestone also includes testing unauthorized reverse `player_move` rejection, reconnect behavior, and RemotePlayer lifecycle recovery. The DataBus policy exists in Rust source, but it is not a substitute for authenticating local clients or for runtime verification. Separately, validate the read-only window-registration/discovery path with live Minecraft windows before deciding whether window control is needed.
+The next milestone also includes testing unauthorized reverse `player_move` rejection, reconnect behavior, and RemotePlayer lifecycle recovery. The DataBus policy exists in Rust source, but it is not a substitute for authenticating local clients or for runtime verification. Separately, review window identity and error reporting, then validate safe recovery against live macOS windows after a partial operation failed.
 
 > The immediate objective is not to make every Fabric mod work with every NeoForge mod. It is to build a reliable, measurable foundation on which broader interoperability can be developed.

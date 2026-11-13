@@ -122,7 +122,8 @@ Tested primarily on macOS with Apple Silicon and Temurin JDK 21.
 - [ ] Improve synchronization behavior under latency and packet loss.
 - [ ] Rebuild and runtime-test the committed hostile-mob receiver, mirror, and ACK/retry implementation.
 - [ ] Implement reliable hostile-mob removal messages and verify reconnect/world-transition recovery.
-- [ ] Validate window registration and discovery against live Minecraft windows on macOS, then investigate actual window arrangement/integration. Window movement, resizing, embedding, composition, and Windows/Linux support are not implemented.
+- [ ] Resolve and live-validate the macOS window mutation path. Position/size transactions and guarded rollback exist in Rust source, but a real operation partially applied and rollback did not confirm recovery; do not treat it as reliable yet.
+- [ ] Investigate embedding/composition and Windows/Linux window support.
 
 **Current authority model:** Fabric is the sole authoritative source of player
 movement state. NeoForge receives Fabric state and maintains a remote-player
@@ -416,8 +417,9 @@ requests, diagnostics, or interaction messages.
 - [ ] Shared-memory or zero-copy DataBus.
 - [ ] Real-loader isolation in one JVM.
 - [ ] Dynamic dependency resolution.
-- [x] Initial local window registration, PID association, and read-only macOS window observation.
-- [ ] Window arrangement, embedding/composition, and live dual-Minecraft validation.
+- [x] Local window registration, PID association, and macOS window observation.
+- [ ] Verify the source-level macOS position/size transaction and safe recovery against live windows; a partial-apply/rollback failure remains unresolved.
+- [ ] Window embedding/composition and live dual-Minecraft validation.
 - [ ] Windows and Linux verification.
 - [ ] Performance and stability testing.
 

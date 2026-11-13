@@ -306,11 +306,11 @@ Start with ordinary operating-system window composition.
 
 **Current prototype status:** The Rust Window Manager and Java bridge register
 Fabric, Forge, and NeoForge JVM processes; tests cover registration,
-reconnection, rejection, and PID-based association. The macOS implementation
-enumerates on-screen windows and offers a read-only Accessibility API probe
-for titles and bounds. These tests do not establish operation against live
-Minecraft windows. The code does not move, resize, embed, or compose windows,
-and Windows/Linux discovery is not implemented.
+reconnection, rejection, and PID-based association. macOS window discovery and
+Accessibility inspection are implemented, and Rust source now includes
+transactional position/size changes. A real operation partially applied and
+could not confirm rollback, so safe live recovery remains unresolved. Window
+embedding/composition and Windows/Linux discovery are not implemented.
 
 **1. Independent Client Windows**
 
@@ -692,10 +692,13 @@ consistency requirements, and failure behavior before implementation.
 
 ### Phase 5 — Improve Compatibility and Portability
 
-- [x] Add process registration, PID-based window association, and read-only
-      macOS window discovery/Accessibility inspection.
+- [x] Add process registration, PID-based window association, macOS window
+      discovery/Accessibility inspection, and source-level position/size
+      transactions.
 - [ ] Validate discovery and macOS permission handling with live Minecraft
       windows.
+- [ ] Review identity checks and diagnostics; resolve and live-validate the
+      partial-mutation/failed-rollback path before relying on window control.
 - [ ] Define and implement window arrangement/embedding only after selecting
       the intended user experience.
 - [ ] Establish loader-specific adapter interfaces.

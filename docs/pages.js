@@ -217,9 +217,15 @@
         p9Status: "Not a current target",
         p9Title: "Cross-process rendering and window composition",
         p9Text:
-          "The prototype registers JVMs and observes window metadata on macOS, but does not move, resize, embed, or compose windows. Combining GPU resources across independent clients is platform-specific and adds driver, synchronization, and lifetime risks.",
+          "The prototype registers JVMs and observes window metadata on macOS; position/size transactions exist in source, but live recovery remains unverified. Embedding and composition are not implemented. Combining GPU resources across independent clients is platform-specific and adds driver, synchronization, and lifetime risks.",
         p9Direction:
           "<strong>Solution direction:</strong> Keep independent windows and prioritize reliable state synchronization. Consider platform-native composition only after core behavior is stable.",
+        p10Status: "Unresolved · recovery unverified",
+        p10Title: "Partial macOS window mutation and failed rollback",
+        p10Text:
+          "A real position/size operation partially changed a window, then failed verification. Rollback could not safely reacquire a matching Accessibility window, so recovery was not confirmed. CoreGraphics and Accessibility observations can differ during layout changes, and a title alone is not a reliable identity.",
+        p10Direction:
+          "<strong>Fix direction:</strong> Revalidate window identity before every write, preserve specific API/read-back errors, and test partial-write and rollback failures without touching live windows. Do not treat source-level transaction support as verified recovery.",
         historyLink: "Detailed issue history (problems.md)",
         architectureLink: "Proposed architecture (solve.md)",
         todoLink: "See current TODO priorities →",
@@ -286,9 +292,15 @@
         p9Status: "当前非目标",
         p9Title: "跨进程渲染与窗口合成",
         p9Text:
-          "当前原型可注册 JVM 并在 macOS 观察窗口元数据，但不会移动、缩放、嵌入或合成窗口。在独立客户端间共享 GPU 资源具有平台差异，并增加驱动、同步和资源生命周期风险。",
+          "当前原型可注册 JVM 并在 macOS 观察窗口元数据；源码已有位置/尺寸事务，但真实恢复尚未验证。窗口嵌入和合成尚未实现。在独立客户端间共享 GPU 资源具有平台差异，并增加驱动、同步和资源生命周期风险。",
         p9Direction:
           "<strong>解决方向：</strong> 保留独立窗口并优先保证状态同步可靠。核心行为稳定后，再考虑平台原生窗口合成。",
+        p10Status: "尚未解决 · 恢复未验证",
+        p10Title: "macOS 窗口修改部分生效与回滚失败",
+        p10Text:
+          "一次真实位置/尺寸操作只改变了部分窗口几何信息，随后验证失败。回滚无法安全地重新找到匹配的 Accessibility 窗口，因此恢复未获确认。布局变化期间 CoreGraphics 与 Accessibility 的观察可能不同步，标题也不足以单独确认窗口身份。",
+        p10Direction:
+          "<strong>修复方向：</strong> 每次写入前重新验证窗口身份，保留具体 API/读回错误，并通过不触碰真实窗口的测试覆盖部分写入和回滚失败。源码有事务实现不等于真实恢复已验证。",
         historyLink: "详细问题记录（problems.md）",
         architectureLink: "架构方案（solve.md）",
         todoLink: "查看当前待办优先级 →",
@@ -346,15 +358,15 @@
         later5: "Refactor launcher dependency resolution and child-process management",
         later6: "Expand beyond player coordinates through incremental entity/state adapters",
         later7: "Investigate Mixin compatibility, cross-platform support, and advanced mod integrations",
-        windowStatus: "Prototype implemented · live validation pending",
-        windowTitle: "Window registration and macOS observation",
+        windowStatus: "Transaction in source · recovery unresolved",
+        windowTitle: "macOS window transaction and recovery",
         windowIntro:
-          "A Rust Window Manager and Java bridge register loader JVMs and associate macOS windows by PID. Window discovery and Accessibility inspection are read-only; window control is not implemented.",
+          "A Rust Window Manager and Java bridge register loader JVMs and associate macOS windows by PID. Position/size transactions exist in source, but a real partial mutation was not successfully rolled back; live recovery remains unverified.",
         window1: "Test loader registration, reconnection, rejection, and client cleanup",
         window2: "Discover and associate on-screen macOS windows by PID (implementation/tests)",
-        window3: "Validate with live Minecraft windows and macOS Accessibility permissions",
-        window4: "Define any future arrangement, embedding, or composition behavior",
-        window5: "Investigate Windows and Linux platform support",
+        window3: "Review identity checks and preserve specific errors across every mutation/rollback stage",
+        window4: "Add failure-injection tests; validate safe recovery with live Minecraft windows only after review",
+        window5: "Investigate embedding/composition and Windows/Linux support separately",
         scopeLabel: "Scope guard:",
         scopeText:
           "A successful loader launch or visual entity mirror does not mean arbitrary mods, inventories, combat, worlds, or game logic are synchronized.",
@@ -413,15 +425,15 @@
         later5: "重构启动器依赖解析与子进程管理",
         later6: "通过渐进式实体/状态适配器扩展玩家坐标以外的同步",
         later7: "研究 Mixin 兼容性、跨平台支持和高级模组集成",
-        windowStatus: "原型已实现 · 真实环境验证待完成",
-        windowTitle: "窗口注册与 macOS 窗口观察",
+        windowStatus: "源码已有事务 · 恢复问题未解决",
+        windowTitle: "macOS 窗口事务与恢复",
         windowIntro:
-          "Rust Window Manager 和 Java Bridge 可注册 Loader JVM，并按 PID 关联 macOS 窗口。窗口发现和辅助功能检查均为只读；当前未实现窗口控制。",
+          "Rust Window Manager 和 Java Bridge 可注册 Loader JVM，并按 PID 关联 macOS 窗口。源码已有位置/尺寸事务，但一次真实部分修改未能成功回滚；真实恢复仍未验证。",
         window1: "测试 Loader 注册、重连、拒绝及客户端清理",
         window2: "按 PID 发现并关联 macOS 屏幕窗口（实现/测试）",
-        window3: "使用真实 Minecraft 窗口和 macOS 辅助功能权限验证",
-        window4: "定义未来的窗口排列、嵌入或合成行为",
-        window5: "研究 Windows 和 Linux 平台支持",
+        window3: "审查身份验证，并保留所有修改/回滚阶段的具体错误",
+        window4: "增加故障注入测试；审查完成后再用真实 Minecraft 窗口验证安全恢复",
+        window5: "分别研究窗口嵌入/合成以及 Windows/Linux 支持",
         scopeLabel: "范围说明：",
         scopeText:
           "成功启动加载器或显示实体镜像，不代表任意模组、物品栏、战斗、世界或游戏逻辑已经同步。",

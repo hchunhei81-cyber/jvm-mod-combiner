@@ -140,19 +140,20 @@
         </section>
 
         <section class="doc-group" aria-labelledby="window-title">
-          <span class="doc-status open" data-i18n="windowStatus">Prototype implemented · live validation pending</span>
-          <h3 id="window-title" data-i18n="windowTitle">Window registration and macOS observation</h3>
+          <span class="doc-status open" data-i18n="windowStatus">Transaction in source · recovery unresolved</span>
+          <h3 id="window-title" data-i18n="windowTitle">macOS window transaction and recovery</h3>
           <p data-i18n="windowIntro">
             A Rust Window Manager and Java bridge register loader JVMs and
-            associate macOS windows by PID. Window discovery and Accessibility
-            inspection are read-only; window control is not implemented.
+            associate macOS windows by PID. Position/size transactions exist
+            in source, but a real partial mutation was not successfully rolled
+            back; live recovery remains unverified.
           </p>
           <ul class="doc-checks">
             <li><input type="checkbox" checked disabled /><span data-i18n="window1">Test loader registration, reconnection, rejection, and client cleanup</span></li>
             <li><input type="checkbox" checked disabled /><span data-i18n="window2">Discover and associate on-screen macOS windows by PID (implementation/tests)</span></li>
-            <li><input type="checkbox" disabled /><span data-i18n="window3">Validate with live Minecraft windows and macOS Accessibility permissions</span></li>
-            <li><input type="checkbox" disabled /><span data-i18n="window4">Define any future arrangement, embedding, or composition behavior</span></li>
-            <li><input type="checkbox" disabled /><span data-i18n="window5">Investigate Windows and Linux platform support</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="window3">Review identity checks and preserve specific errors across every mutation/rollback stage</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="window4">Add failure-injection tests; validate safe recovery with live Minecraft windows only after review</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="window5">Investigate embedding/composition and Windows/Linux support separately</span></li>
           </ul>
         </section>
 

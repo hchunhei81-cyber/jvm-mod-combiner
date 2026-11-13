@@ -1524,19 +1524,54 @@ Forge, and NeoForge labels.
 
 On macOS, the project can enumerate on-screen windows and associate them with
 registered JVMs by PID. An optional Accessibility API probe reads window titles
-and bounds when the user has granted Accessibility permission. These operations
-are read-only: the prototype does not move, resize, embed, or compose windows.
-The test suite does not establish that the feature works with live Minecraft
-windows or that it is portable beyond macOS.
+and bounds when the user has granted Accessibility permission. A position/size
+transaction is now present in Rust source, but its live recovery behavior is
+unverified; see the partial-mutation incident below. Embedding and composition
+are not implemented, and the test suite does not establish portability beyond
+macOS.
 
 **Remaining work**
 
 - Verify process registration and window association with live Minecraft
   clients, including macOS permission handling.
-- Decide the intended user experience before implementing window control,
-  embedding, or composition.
+- Resolve and validate the existing window mutation/recovery path before
+  relying on it; decide the intended UX before pursuing embedding or composition.
 - Investigate Windows and Linux separately; their window APIs are not
   implemented by this macOS probe.
+
+## 8.8 Partial macOS Window Mutation and Failed Rollback
+
+<badge color="danger">Unresolved; do not treat window recovery as verified</badge>
+
+A real macOS window operation changed some geometry, then failed its read-back
+verification. The transaction attempted to restore the original bounds, but
+could not safely reacquire a matching Accessibility (AX) window. The requested
+change therefore did not complete, and successful recovery was not confirmed.
+
+This is harder than a normal setter error: CoreGraphics window discovery and
+the Accessibility API are separate observations and may briefly disagree
+during a layout change. A title alone is also insufficient to identify a
+window. Treating every failed AX read as a missing value can obscure whether
+the cause was an API error, invalid returned data, or an absent/ambiguous
+candidate.
+
+The Rust source now has a recoverable position/size transaction and emits
+candidate-level diagnostics when rollback matching fails. This is not proof
+that a live window can be restored. Other failure stages still need clearer
+diagnostics, and the forward candidate scan still suppresses individual AX
+read errors.
+
+**Resolution direction**
+
+- Preserve and revalidate window identity independently from geometry before
+  any write or rollback; refuse mutation when identity is ambiguous.
+- Report the specific failing stage and AX read/decode result instead of
+  collapsing failures into “window not found.”
+- Add non-destructive tests for partial writes, mismatches, and rollback
+  failures; validate live-window behavior separately before relying on it.
+
+Until that work and live verification are complete, do not consider rollback
+reliable or retry window mutations blindly.
 
 # 9. ClassLoader Isolation and Mixin Compatibility
 
@@ -1824,7 +1859,8 @@ Validate the same launch pipeline on:
 | Hostile-mob ACK/retry delivery | <badge color="warning">Committed source; packaged-agent/runtime verification pending</badge> |
 | Rust Window Manager and Java bridge lifecycle | <badge color="success">Unit and bridge-harness tests pass</badge> |
 | macOS window discovery and PID association | <badge color="warning">Implemented; live Minecraft validation pending</badge> |
-| Window movement, embedding, or composition | <badge color="warning">Not implemented</badge> |
+| macOS window position/size transaction | <badge color="danger">Implemented in source; live recovery unresolved</badge> |
+| Window embedding or composition | <badge color="warning">Not implemented</badge> |
 | Bidirectional player mirroring | <badge color="warning">Not a current goal</badge> |
 | Cross-version world consistency | <badge color="warning">Under investigation</badge> |
 | Same-JVM real-loader isolation | <badge color="warning">Not solved</badge> |
@@ -1911,7 +1947,7 @@ The intended implementation order is:
 
 ## Current Development Focus
 
-The current focus is validating the Rust source-level one-way state policy at runtime, constraining registration identity, and rebuilding/testing the committed Java Agent changes for player and hostile-mob mirror lifecycle. The new window-management prototype also needs validation against live macOS Minecraft windows; it currently observes windows only.
+The current focus is validating the Rust source-level one-way state policy at runtime, constraining registration identity, and rebuilding/testing the committed Java Agent changes for player and hostile-mob mirror lifecycle. Separately, a macOS window mutation partially applied and its rollback could not reacquire a safe AX target. The source now contains transaction and rollback diagnostics, but the live recovery path remains unverified and needs identity/error-path review before further mutation attempts.
 
 **Next milestone:**
 

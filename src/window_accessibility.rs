@@ -18,7 +18,10 @@ pub enum AccessibilityError {
     PermissionDenied,
     InvalidPid,
     ApplicationUnavailable,
-    AxCall { operation: &'static str, code: i32 },
+    AxCall {
+        operation: &'static str,
+        code: i32,
+    },
     InvalidReturnedType(&'static str),
     WindowIdentityUnavailable,
     WindowIdentityChanged(&'static str),
@@ -26,11 +29,21 @@ pub enum AccessibilityError {
     WindowNotFound,
     AmbiguousWindowMatch(usize),
     InvalidWindowBounds,
-    ProcessMismatch { expected: u32, actual: u32 },
+    ProcessMismatch {
+        expected: u32,
+        actual: u32,
+    },
     AttributeNotSettable(&'static str),
     ValueCreationFailed(&'static str),
     VerificationFailed,
-    RollbackFailed(&'static str),
+    VerificationMismatch {
+        actual: String,
+        expected: String,
+    },
+    RollbackFailed {
+        operation: Box<AccessibilityError>,
+        rollback: &'static str,
+    },
 }
 
 impl fmt::Display for AccessibilityError {
@@ -91,10 +104,19 @@ impl fmt::Display for AccessibilityError {
                     "Window geometry did not match the requested bounds after update"
                 )
             }
-            Self::RollbackFailed(operation) => {
+            Self::VerificationMismatch { actual, expected } => {
                 write!(
                     f,
-                    "Window geometry update failed and rollback also failed: {operation}"
+                    "Window geometry verification failed: {actual}; expected {expected}"
+                )
+            }
+            Self::RollbackFailed {
+                operation,
+                rollback,
+            } => {
+                write!(
+                    f,
+                    "Window operation failed: {operation}; rollback also failed: {rollback}"
                 )
             }
         }
@@ -225,8 +247,50 @@ fn run_window_transaction(
         Ok(()) => Ok(()),
         Err(error) => match rollback() {
             Ok(()) => Err(error),
-            Err(operation) => Err(AccessibilityError::RollbackFailed(operation)),
+            Err(rollback) => Err(AccessibilityError::RollbackFailed {
+                operation: Box::new(error),
+                rollback,
+            }),
         },
+    }
+}
+
+/// Match a window during rollback using its unique title within the
+/// already-scoped process AXWindows collection.
+///
+/// Unlike normal forward matching, rollback cannot require AX geometry to
+/// match CoreGraphics geometry: a failed setter may have partially changed
+/// the window. The caller must independently revalidate the CoreGraphics
+/// Window ID, PID, owner and title before using the returned transient index.
+/// Duplicate titles and invalid AX geometry are still rejected.
+fn match_accessibility_window_for_rollback(
+    expected_title: Option<&str>,
+    candidates: &[AccessibilityWindow],
+) -> Result<usize, AccessibilityError> {
+    let title = expected_title
+        .filter(|title| !title.is_empty())
+        .ok_or(AccessibilityError::WindowIdentityUnavailable)?;
+
+    let matches: Vec<&AccessibilityWindow> = candidates
+        .iter()
+        .filter(|candidate| candidate.title.as_deref() == Some(title))
+        .collect();
+
+    match matches.as_slice() {
+        [] => Err(AccessibilityError::WindowNotFound),
+        [candidate] => {
+            let bounds = candidate
+                .bounds
+                .as_ref()
+                .ok_or(AccessibilityError::InvalidWindowBounds)?;
+
+            if !valid_window_bounds(bounds) {
+                return Err(AccessibilityError::InvalidWindowBounds);
+            }
+
+            Ok(candidate.index)
+        }
+        _ => Err(AccessibilityError::AmbiguousWindowMatch(matches.len())),
     }
 }
 
@@ -694,27 +758,53 @@ mod macos {
         }
 
         let mut candidates = Vec::with_capacity(count as usize);
+        let mut rollback_candidate_diagnostics = Vec::with_capacity(count as usize);
 
         for index in 0..count {
             let element =
                 unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), index) as AXUIElementRef };
 
             if element.is_null() {
+                rollback_candidate_diagnostics.push(format!("index={index} element=null"));
                 continue;
             }
 
-            let title = copy_attribute(element, &title_attribute, "AXTitle before rollback")
-                .ok()
-                .and_then(|value| cf_string_to_string(value.as_ptr()));
+            let title_result = copy_attribute(element, &title_attribute, "AXTitle before rollback");
+            let (title, title_diagnostic) = match title_result {
+                Ok(value) => match cf_string_to_string(value.as_ptr()) {
+                    Some(title) => {
+                        let diagnostic = format!("title={title:?}");
+                        (Some(title), diagnostic)
+                    }
+                    None => (None, "title_decode_failed".to_owned()),
+                },
+                Err(error) => (None, format!("title_read_error={error}")),
+            };
 
-            let position =
-                copy_attribute(element, &position_attribute, "AXPosition before rollback")
-                    .ok()
-                    .and_then(|value| read_point(value.as_ptr()));
+            let position_result =
+                copy_attribute(element, &position_attribute, "AXPosition before rollback");
+            let (position, position_diagnostic) = match position_result {
+                Ok(value) => match read_point(value.as_ptr()) {
+                    Some(position) => (
+                        Some(position),
+                        format!("position=({:.1},{:.1})", position.x, position.y),
+                    ),
+                    None => (None, "position_decode_failed".to_owned()),
+                },
+                Err(error) => (None, format!("position_read_error={error}")),
+            };
 
-            let size = copy_attribute(element, &size_attribute, "AXSize before rollback")
-                .ok()
-                .and_then(|value| read_size(value.as_ptr()));
+            let size_result = copy_attribute(element, &size_attribute, "AXSize before rollback");
+            let (size, size_diagnostic) = match size_result {
+                Ok(value) => match read_size(value.as_ptr()) {
+                    Some(size) => (
+                        Some(size),
+                        format!("size=({:.1},{:.1})", size.width, size.height),
+                    ),
+                    None => (None, "size_decode_failed".to_owned()),
+                },
+                Err(error) => (None, format!("size_read_error={error}")),
+            };
 
             let bounds = match (position, size) {
                 (Some(position), Some(size)) => Some(WindowBounds {
@@ -726,6 +816,11 @@ mod macos {
                 _ => None,
             };
 
+            rollback_candidate_diagnostics.push(format!(
+                "index={} {} {} {}",
+                index, title_diagnostic, position_diagnostic, size_diagnostic
+            ));
+
             candidates.push(AccessibilityWindow {
                 index: index as usize,
                 title,
@@ -733,8 +828,39 @@ mod macos {
             });
         }
 
-        let selected_index = match_accessibility_window(fresh_window, &candidates)
-            .map_err(|_| "matching fresh Accessibility window for rollback")?;
+        let selected_index = match_accessibility_window_for_rollback(
+            fresh_window.title.as_deref(),
+            &candidates,
+        )
+        .map_err(|error| {
+            eprintln!(
+                "[RollbackDiagnostic] expected_title={:?} AX_count={} candidate_count={} match_error={}",
+                fresh_window.title,
+                count,
+                candidates.len(),
+                error
+            );
+
+            for diagnostic in &rollback_candidate_diagnostics {
+                eprintln!("[RollbackDiagnostic] {diagnostic}");
+            }
+
+            match error {
+                AccessibilityError::WindowNotFound => {
+                    "rollback AX matching failed: no candidate has the expected title"
+                }
+                AccessibilityError::AmbiguousWindowMatch(_) => {
+                    "rollback AX matching failed: multiple candidates have the expected title"
+                }
+                AccessibilityError::InvalidWindowBounds => {
+                    "rollback AX matching failed: matching candidate has missing or invalid bounds"
+                }
+                AccessibilityError::WindowIdentityUnavailable => {
+                    "rollback AX matching failed: expected title is missing or empty"
+                }
+                _ => "rollback AX matching failed: unexpected matching error",
+            }
+        })?;
 
         if selected_index >= count as usize {
             return Err("validating rollback Accessibility index");
@@ -800,8 +926,12 @@ mod macos {
             height: current_size.height,
         };
 
-        if !bounds_match(&latest_window.bounds, &current_bounds) {
-            return Err("revalidating Accessibility geometry before rollback");
+        // During rollback, AX and CoreGraphics may temporarily report
+        // different geometries after a partially applied setter. Identity
+        // has been revalidated independently; require readable, valid AX
+        // geometry, but do not require it to match the CG snapshot here.
+        if !valid_window_bounds(&current_bounds) {
+            return Err("validating Accessibility geometry before rollback");
         }
 
         attribute_is_settable(element, &position_attribute, "AXPosition")
@@ -1024,7 +1154,26 @@ mod macos {
                 };
 
                 if !geometry_matches(&actual, desired) {
-                    return Err(AccessibilityError::VerificationFailed);
+                    let diagnostic = format!(
+                        "actual=({:.2}, {:.2}, {:.2}, {:.2}), expected=({:.2}, {:.2}, {:.2}, {:.2}), delta=({:.2}, {:.2}, {:.2}, {:.2})",
+                        actual.x,
+                        actual.y,
+                        actual.width,
+                        actual.height,
+                        desired.x,
+                        desired.y,
+                        desired.width,
+                        desired.height,
+                        actual.x - desired.x,
+                        actual.y - desired.y,
+                        actual.width - desired.width,
+                        actual.height - desired.height,
+                    );
+
+                    return Err(AccessibilityError::VerificationMismatch {
+                        actual: diagnostic,
+                        expected: "tolerance <= 1.00 logical point per component".to_owned(),
+                    });
                 }
 
                 Ok(())
@@ -1323,7 +1472,7 @@ mod matching_tests {
     }
 
     #[test]
-    fn transaction_rollback_failure_overrides_operation_error() {
+    fn transaction_rollback_failure_preserves_operation_error() {
         use std::cell::RefCell;
 
         let events = RefCell::new(Vec::new());
@@ -1349,7 +1498,10 @@ mod matching_tests {
 
         assert_eq!(
             result,
-            Err(AccessibilityError::RollbackFailed("test rollback failure"))
+            Err(AccessibilityError::RollbackFailed {
+                operation: Box::new(AccessibilityError::VerificationFailed),
+                rollback: "test rollback failure",
+            })
         );
         assert_eq!(*events.borrow(), vec!["position", "size", "rollback"]);
     }
@@ -1501,6 +1653,72 @@ mod matching_tests {
         let actual = bounds(100.0, 80.0, 1280.0, 720.0);
         let expected = bounds(100.0, 80.0, 0.0, 720.0);
         assert!(!geometry_matches(&actual, &expected));
+    }
+
+    #[test]
+    fn rollback_match_accepts_unique_title_with_intermediate_geometry() {
+        let candidates = vec![candidate(
+            4,
+            "Minecraft 1.21.4",
+            bounds(0.0, 464.0, 735.0, 492.0),
+        )];
+
+        assert_eq!(
+            match_accessibility_window_for_rollback(Some("Minecraft 1.21.4"), &candidates),
+            Ok(4)
+        );
+    }
+
+    #[test]
+    fn rollback_match_rejects_duplicate_titles() {
+        let candidates = vec![
+            candidate(0, "Minecraft 1.21.4", bounds(0.0, 0.0, 800.0, 600.0)),
+            candidate(1, "Minecraft 1.21.4", bounds(10.0, 10.0, 800.0, 600.0)),
+        ];
+
+        assert_eq!(
+            match_accessibility_window_for_rollback(Some("Minecraft 1.21.4"), &candidates),
+            Err(AccessibilityError::AmbiguousWindowMatch(2))
+        );
+    }
+
+    #[test]
+    fn rollback_match_rejects_missing_or_invalid_geometry() {
+        let missing_geometry = vec![AccessibilityWindow {
+            index: 0,
+            title: Some("Minecraft 1.21.4".to_owned()),
+            bounds: None,
+        }];
+
+        assert_eq!(
+            match_accessibility_window_for_rollback(Some("Minecraft 1.21.4"), &missing_geometry),
+            Err(AccessibilityError::InvalidWindowBounds)
+        );
+
+        let invalid_geometry = vec![candidate(
+            1,
+            "Minecraft 1.21.4",
+            bounds(0.0, 0.0, f64::NAN, 600.0),
+        )];
+
+        assert_eq!(
+            match_accessibility_window_for_rollback(Some("Minecraft 1.21.4"), &invalid_geometry),
+            Err(AccessibilityError::InvalidWindowBounds)
+        );
+    }
+
+    #[test]
+    fn rollback_match_rejects_missing_title() {
+        let candidates = vec![candidate(
+            0,
+            "Minecraft 1.21.4",
+            bounds(0.0, 0.0, 800.0, 600.0),
+        )];
+
+        assert_eq!(
+            match_accessibility_window_for_rollback(None, &candidates),
+            Err(AccessibilityError::WindowIdentityUnavailable)
+        );
     }
 
     #[test]

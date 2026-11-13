@@ -2031,8 +2031,751 @@ fn start_data_bus() -> std::io::Result<()> {
     Ok(())
 }
 
+const FABRIC_RESTORE_WINDOW_ID: u32 = 10868;
+const FABRIC_RESTORE_PID: u32 = 53223;
+const FABRIC_RESTORE_CONFIRMATION: &str = "I_UNDERSTAND_FABRIC_WINDOW_WILL_BE_RESTORED";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowRestoreOptions {
+    window_id: u32,
+}
+
+fn parse_window_restore_args(args: &[String]) -> Result<WindowRestoreOptions, String> {
+    let mut mode_seen = false;
+    let mut window_id: Option<u32> = None;
+    let mut confirmation_seen = false;
+    let mut confirmed = false;
+
+    let mut i = 1;
+    while i < args.len() {
+        let arg = &args[i];
+
+        if arg == "--mode" {
+            if mode_seen {
+                return Err("duplicate --mode".to_owned());
+            }
+            i += 1;
+            let value = args.get(i).ok_or("missing value for --mode")?;
+            if !value.eq_ignore_ascii_case("window-restore") {
+                return Err("mode must be window-restore".to_owned());
+            }
+            mode_seen = true;
+        } else if let Some(value) = arg.strip_prefix("--mode=") {
+            if mode_seen {
+                return Err("duplicate --mode".to_owned());
+            }
+            if !value.eq_ignore_ascii_case("window-restore") {
+                return Err("mode must be window-restore".to_owned());
+            }
+            mode_seen = true;
+        } else if arg.eq_ignore_ascii_case("window-restore") {
+            if mode_seen {
+                return Err("duplicate mode".to_owned());
+            }
+            mode_seen = true;
+        } else if arg == "--window-id" {
+            if window_id.is_some() {
+                return Err("duplicate --window-id".to_owned());
+            }
+            i += 1;
+            let value = args.get(i).ok_or("missing value for --window-id")?;
+            window_id = Some(
+                value
+                    .parse::<u32>()
+                    .map_err(|_| "invalid --window-id".to_owned())?,
+            );
+        } else if let Some(value) = arg.strip_prefix("--window-id=") {
+            if window_id.is_some() {
+                return Err("duplicate --window-id".to_owned());
+            }
+            window_id = Some(
+                value
+                    .parse::<u32>()
+                    .map_err(|_| "invalid --window-id".to_owned())?,
+            );
+        } else if arg == "--confirm-window-restore" {
+            if confirmation_seen {
+                return Err("duplicate confirmation".to_owned());
+            }
+            confirmation_seen = true;
+            i += 1;
+            let value = args.get(i).ok_or("missing restore confirmation")?;
+            confirmed = value == FABRIC_RESTORE_CONFIRMATION;
+        } else if let Some(value) = arg.strip_prefix("--confirm-window-restore=") {
+            if confirmation_seen {
+                return Err("duplicate confirmation".to_owned());
+            }
+            confirmation_seen = true;
+            confirmed = value == FABRIC_RESTORE_CONFIRMATION;
+        } else {
+            return Err(format!("unknown argument: {arg}"));
+        }
+
+        i += 1;
+    }
+
+    if !mode_seen {
+        return Err("missing window-restore mode".to_owned());
+    }
+
+    let window_id = window_id.ok_or("missing --window-id")?;
+    if window_id != FABRIC_RESTORE_WINDOW_ID {
+        return Err(format!(
+            "restore is restricted to Fabric window ID {FABRIC_RESTORE_WINDOW_ID}"
+        ));
+    }
+
+    if !confirmation_seen || !confirmed {
+        return Err("explicit restore confirmation is required".to_owned());
+    }
+
+    Ok(WindowRestoreOptions { window_id })
+}
+
+fn is_window_restore_invocation(args: &[String]) -> bool {
+    args.windows(2)
+        .any(|pair| pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("window-restore"))
+        || args.iter().any(|arg| {
+            arg.eq_ignore_ascii_case("window-restore")
+                || arg
+                    .strip_prefix("--mode=")
+                    .is_some_and(|value| value.eq_ignore_ascii_case("window-restore"))
+        })
+}
+
+fn restore_bounds_match(
+    actual: &window_discovery::WindowBounds,
+    expected: &window_discovery::WindowBounds,
+) -> bool {
+    const TOLERANCE: f64 = 2.0;
+
+    [
+        (actual.x, expected.x),
+        (actual.y, expected.y),
+        (actual.width, expected.width),
+        (actual.height, expected.height),
+    ]
+    .iter()
+    .all(|(a, e)| a.is_finite() && e.is_finite() && (a - e).abs() <= TOLERANCE)
+}
+
+fn validate_fabric_restore_precondition(
+    window: &window_discovery::DiscoveredWindow,
+) -> Result<(), String> {
+    if window.window_id != FABRIC_RESTORE_WINDOW_ID {
+        return Err("window ID does not match the approved Fabric target".to_owned());
+    }
+    if window.pid != FABRIC_RESTORE_PID {
+        return Err(format!(
+            "PID mismatch: expected {FABRIC_RESTORE_PID}, found {}",
+            window.pid
+        ));
+    }
+    if window.owner_name.as_deref() != Some("jvm-mod-combiner") {
+        return Err("window owner mismatch".to_owned());
+    }
+    if window.title.as_deref() != Some("Minecraft* 1.21.4") {
+        return Err("window title mismatch".to_owned());
+    }
+
+    let expected_current = window_discovery::WindowBounds {
+        x: 0.0,
+        y: 464.0,
+        width: 735.0,
+        height: 492.0,
+    };
+
+    if !restore_bounds_match(&window.bounds, &expected_current) {
+        return Err(format!(
+            "current geometry changed; refusing mutation: ({}, {}, {}, {})",
+            window.bounds.x, window.bounds.y, window.bounds.width, window.bounds.height
+        ));
+    }
+
+    Ok(())
+}
+
+fn run_fabric_window_restore(options: &WindowRestoreOptions) -> Result<(), String> {
+    let windows = window_discovery::discover_windows()
+        .map_err(|error| format!("window discovery failed: {error:?}"))?;
+
+    let matches: Vec<_> = windows
+        .iter()
+        .filter(|window| window.window_id == options.window_id)
+        .collect();
+
+    if matches.len() != 1 {
+        return Err(format!(
+            "expected exactly one matching window, found {}",
+            matches.len()
+        ));
+    }
+
+    let discovered = matches[0];
+    validate_fabric_restore_precondition(discovered)?;
+
+    let target = window_discovery::WindowBounds {
+        x: 24.0,
+        y: 33.0,
+        width: 1422.0,
+        height: 860.0,
+    };
+
+    println!(
+        "[Restore] Approved target: id={} pid={} title={:?}",
+        discovered.window_id, discovered.pid, discovered.title
+    );
+    println!(
+        "[Restore] Current: ({}, {}, {}, {})",
+        discovered.bounds.x, discovered.bounds.y, discovered.bounds.width, discovered.bounds.height
+    );
+    println!(
+        "[Restore] Target: ({}, {}, {}, {})",
+        target.x, target.y, target.width, target.height
+    );
+    println!("[Restore] NeoForge window will not be touched.");
+
+    window_accessibility::set_application_window_bounds(discovered.pid, discovered, &target)
+        .map_err(|error| format!("window setter failed: {error:?}"))?;
+
+    let final_windows = window_discovery::discover_windows()
+        .map_err(|error| format!("post-restore discovery failed: {error:?}"))?;
+
+    let final_matches: Vec<_> = final_windows
+        .iter()
+        .filter(|window| window.window_id == options.window_id)
+        .collect();
+
+    if final_matches.len() != 1 {
+        return Err(format!(
+            "post-restore verification expected one window, found {}",
+            final_matches.len()
+        ));
+    }
+
+    let final_window = final_matches[0];
+
+    if final_window.pid != FABRIC_RESTORE_PID
+        || final_window.owner_name.as_deref() != Some("jvm-mod-combiner")
+        || final_window.title.as_deref() != Some("Minecraft* 1.21.4")
+    {
+        return Err("post-restore window identity verification failed".to_owned());
+    }
+
+    if !restore_bounds_match(&final_window.bounds, &target) {
+        return Err(format!(
+            "post-restore geometry mismatch: actual ({}, {}, {}, {})",
+            final_window.bounds.x,
+            final_window.bounds.y,
+            final_window.bounds.width,
+            final_window.bounds.height
+        ));
+    }
+
+    println!("[Restore] SUCCESS: Fabric window identity and geometry verified.");
+    Ok(())
+}
+
+#[cfg(test)]
+mod window_restore_cli_tests {
+    use super::*;
+
+    fn valid_args() -> Vec<String> {
+        vec![
+            "jvm-mod-combiner".to_owned(),
+            "window-restore".to_owned(),
+            "--window-id=10868".to_owned(),
+            format!("--confirm-window-restore={FABRIC_RESTORE_CONFIRMATION}"),
+        ]
+    }
+
+    fn fabric_window() -> window_discovery::DiscoveredWindow {
+        window_discovery::DiscoveredWindow {
+            window_id: 10868,
+            pid: 53223,
+            owner_name: Some("jvm-mod-combiner".to_owned()),
+            title: Some("Minecraft* 1.21.4".to_owned()),
+            bounds: window_discovery::WindowBounds {
+                x: 0.0,
+                y: 464.0,
+                width: 735.0,
+                height: 492.0,
+            },
+        }
+    }
+
+    #[test]
+    fn accepts_exact_fabric_restore_request() {
+        assert_eq!(
+            parse_window_restore_args(&valid_args()),
+            Ok(WindowRestoreOptions { window_id: 10868 })
+        );
+    }
+
+    #[test]
+    fn accepts_both_mode_argument_forms() {
+        let mut args = vec![
+            "jvm-mod-combiner".to_owned(),
+            "--mode".to_owned(),
+            "window-restore".to_owned(),
+            "--window-id".to_owned(),
+            "10868".to_owned(),
+            "--confirm-window-restore".to_owned(),
+            FABRIC_RESTORE_CONFIRMATION.to_owned(),
+        ];
+        assert!(parse_window_restore_args(&args).is_ok());
+
+        args[1] = format!("--mode=window-restore");
+        args.remove(2);
+        assert!(parse_window_restore_args(&args).is_ok());
+    }
+
+    #[test]
+    fn rejects_missing_confirmation() {
+        let mut args = valid_args();
+        args.pop();
+        assert!(parse_window_restore_args(&args).is_err());
+    }
+
+    #[test]
+    fn rejects_wrong_window_id() {
+        let mut args = valid_args();
+        args[2] = "--window-id=10859".to_owned();
+        assert!(parse_window_restore_args(&args).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_window_id() {
+        let mut args = valid_args();
+        args.push("--window-id=10868".to_owned());
+        assert!(parse_window_restore_args(&args).is_err());
+    }
+
+    #[test]
+    fn rejects_wrong_confirmation() {
+        let mut args = valid_args();
+        *args.last_mut().unwrap() = "--confirm-window-restore=WRONG".to_owned();
+        assert!(parse_window_restore_args(&args).is_err());
+    }
+
+    #[test]
+    fn rejects_wrong_pid_or_identity() {
+        let mut window = fabric_window();
+        window.pid += 1;
+        assert!(validate_fabric_restore_precondition(&window).is_err());
+
+        let mut window = fabric_window();
+        window.title = Some("Different window".to_owned());
+        assert!(validate_fabric_restore_precondition(&window).is_err());
+    }
+
+    #[test]
+    fn rejects_unexpected_current_geometry() {
+        let mut window = fabric_window();
+        window.bounds.x = 10.0;
+        assert!(validate_fabric_restore_precondition(&window).is_err());
+    }
+
+    #[test]
+    fn restore_geometry_comparison_rejects_nan() {
+        let actual = window_discovery::WindowBounds {
+            x: f64::NAN,
+            y: 33.0,
+            width: 1422.0,
+            height: 860.0,
+        };
+        let expected = window_discovery::WindowBounds {
+            x: 24.0,
+            y: 33.0,
+            width: 1422.0,
+            height: 860.0,
+        };
+        assert!(!restore_bounds_match(&actual, &expected));
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowApplyOptions {
+    window_ids: Vec<u32>,
+    display_id: Option<u32>,
+}
+
+fn parse_window_apply_args(args: &[String]) -> Result<WindowApplyOptions, String> {
+    const CONFIRMATION: &str = "I_UNDERSTAND_WINDOWS_WILL_MOVE";
+
+    let mut mode_seen = false;
+    let mut ids: Option<Vec<u32>> = None;
+    let mut direction: Option<String> = None;
+    let mut display_id: Option<u32> = None;
+    let mut confirmation_seen = false;
+
+    let mut index = 1;
+    while index < args.len() {
+        let arg = args[index].as_str();
+
+        if arg == "--mode" {
+            if mode_seen {
+                return Err("Duplicate mode selector.".into());
+            }
+            let value = args.get(index + 1).ok_or("Missing value after --mode.")?;
+            if !value.eq_ignore_ascii_case("window-apply") {
+                return Err("Unexpected mode value.".into());
+            }
+            mode_seen = true;
+            index += 2;
+            continue;
+        }
+
+        if let Some(value) = arg.strip_prefix("--mode=") {
+            if mode_seen {
+                return Err("Duplicate mode selector.".into());
+            }
+            if !value.eq_ignore_ascii_case("window-apply") {
+                return Err("Unexpected mode value.".into());
+            }
+            mode_seen = true;
+            index += 1;
+            continue;
+        }
+
+        if arg.eq_ignore_ascii_case("window-apply") {
+            if mode_seen {
+                return Err("Duplicate mode selector.".into());
+            }
+            mode_seen = true;
+            index += 1;
+            continue;
+        }
+
+        let (name, value, consumed) = if let Some((name, value)) = arg.split_once('=') {
+            (name, value, 1)
+        } else {
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| format!("Missing value for {arg}."))?;
+            if value.starts_with("--") {
+                return Err(format!("Missing value for {arg}."));
+            }
+            (arg, value.as_str(), 2)
+        };
+
+        if value.is_empty() {
+            return Err(format!("Empty value for {name}."));
+        }
+
+        match name {
+            "--window-ids" => {
+                if ids.is_some() {
+                    return Err("Duplicate --window-ids option.".into());
+                }
+
+                let parsed: Result<Vec<u32>, _> = value
+                    .split(',')
+                    .map(|part| part.trim().parse::<u32>())
+                    .collect();
+
+                let parsed = parsed.map_err(|_| "Invalid --window-ids value.")?;
+
+                if parsed.len() != 2 || parsed.iter().any(|id| *id == 0) {
+                    return Err("Exactly two positive Window IDs are required.".into());
+                }
+                if parsed[0] == parsed[1] {
+                    return Err("Window IDs must be distinct.".into());
+                }
+
+                ids = Some(parsed);
+            }
+            "--direction" => {
+                if direction.is_some() {
+                    return Err("Duplicate --direction option.".into());
+                }
+                if !value.eq_ignore_ascii_case("overlap") {
+                    return Err("window-apply only accepts --direction overlap.".into());
+                }
+                direction = Some(value.to_owned());
+            }
+            "--display-id" => {
+                if display_id.is_some() {
+                    return Err("Duplicate --display-id option.".into());
+                }
+                let parsed = value
+                    .parse::<u32>()
+                    .map_err(|_| "Invalid --display-id value.")?;
+                if parsed == 0 {
+                    return Err("--display-id must be positive.".into());
+                }
+                display_id = Some(parsed);
+            }
+            "--confirm-window-mutation" => {
+                if confirmation_seen {
+                    return Err("Duplicate confirmation option.".into());
+                }
+                if value != CONFIRMATION {
+                    return Err("Confirmation phrase does not match.".into());
+                }
+                confirmation_seen = true;
+            }
+            _ => return Err(format!("Unknown option: {name}.")),
+        }
+
+        index += consumed;
+    }
+
+    if !mode_seen {
+        return Err("Missing window-apply mode selector.".into());
+    }
+    if ids.is_none() {
+        return Err("Missing --window-ids; exactly two IDs are required.".into());
+    }
+    if direction.is_none() {
+        return Err("Missing required --direction overlap.".into());
+    }
+    if !confirmation_seen {
+        return Err(
+            "Missing explicit confirmation. Supply --confirm-window-mutation=I_UNDERSTAND_WINDOWS_WILL_MOVE."
+                .into()
+        );
+    }
+
+    Ok(WindowApplyOptions {
+        window_ids: ids.unwrap(),
+        display_id,
+    })
+}
+
+#[cfg(test)]
+mod window_apply_cli_tests {
+    use super::*;
+
+    fn valid_args() -> Vec<String> {
+        [
+            "jvm-mod-combiner",
+            "window-apply",
+            "--window-ids=101,202",
+            "--direction",
+            "overlap",
+            "--confirm-window-mutation=I_UNDERSTAND_WINDOWS_WILL_MOVE",
+        ]
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect()
+    }
+
+    #[test]
+    fn recognizes_apply_mode_case_insensitively_in_all_supported_forms() {
+        for args in [
+            vec!["bin".into(), "window-apply".into()],
+            vec!["bin".into(), "WINDOW-APPLY".into()],
+            vec!["bin".into(), "--mode".into(), "WINDOW-APPLY".into()],
+            vec!["bin".into(), "--mode=WINDOW-APPLY".into()],
+        ] {
+            assert!(is_window_apply_invocation(&args), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn does_not_misclassify_other_modes_as_apply() {
+        let args = vec!["bin".into(), "--mode=window-dry-run".into()];
+        assert!(!is_window_apply_invocation(&args));
+    }
+
+    #[test]
+    fn accepts_explicit_overlap_apply_arguments() {
+        let parsed = parse_window_apply_args(&valid_args()).unwrap();
+        assert_eq!(parsed.window_ids, vec![101, 202]);
+        assert_eq!(parsed.display_id, None);
+    }
+
+    #[test]
+    fn accepts_explicit_mode_and_display_id() {
+        let args = vec![
+            "jvm-mod-combiner".into(),
+            "--mode".into(),
+            "window-apply".into(),
+            "--window-ids".into(),
+            "101,202".into(),
+            "--direction=overlap".into(),
+            "--display-id=1".into(),
+            "--confirm-window-mutation=I_UNDERSTAND_WINDOWS_WILL_MOVE".into(),
+        ];
+
+        let parsed = parse_window_apply_args(&args).unwrap();
+        assert_eq!(parsed.display_id, Some(1));
+    }
+
+    #[test]
+    fn rejects_missing_confirmation() {
+        let mut args = valid_args();
+        args.pop();
+        assert!(parse_window_apply_args(&args).is_err());
+    }
+
+    #[test]
+    fn rejects_non_overlap_direction() {
+        let mut args = valid_args();
+        let index = args.iter().position(|arg| arg == "overlap").unwrap();
+        args[index] = "horizontal".into();
+        assert!(parse_window_apply_args(&args).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_window_ids() {
+        let mut args = valid_args();
+        args[2] = "--window-ids=101,101".into();
+        assert!(parse_window_apply_args(&args).is_err());
+    }
+
+    #[test]
+    fn rejects_more_than_two_windows() {
+        let mut args = valid_args();
+        args[2] = "--window-ids=101,202,303".into();
+        assert!(parse_window_apply_args(&args).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_options() {
+        let mut args = valid_args();
+        args.push("--direction=overlap".into());
+        assert!(parse_window_apply_args(&args).is_err());
+    }
+}
+
+fn is_window_apply_invocation(args: &[String]) -> bool {
+    args.windows(2)
+        .any(|pair| pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("window-apply"))
+        || args.iter().any(|arg| {
+            arg.eq_ignore_ascii_case("window-apply")
+                || arg
+                    .strip_prefix("--mode=")
+                    .is_some_and(|value| value.eq_ignore_ascii_case("window-apply"))
+        })
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
+
+    let is_window_restore = is_window_restore_invocation(&args);
+    if is_window_restore {
+        println!("=== Fabric Window Restore ===");
+
+        let options = match parse_window_restore_args(&args) {
+            Ok(options) => options,
+            Err(error) => {
+                eprintln!("[Restore] Invalid arguments: {error}");
+                std::process::exit(2);
+            }
+        };
+
+        if let Err(error) = run_fabric_window_restore(&options) {
+            eprintln!("[Restore] FAILED: {error}");
+            std::process::exit(1);
+        }
+
+        return;
+    }
+
+    let is_window_apply = is_window_apply_invocation(&args);
+
+    if is_window_apply {
+        println!("=== Window Apply (explicit mutation mode) ===");
+
+        let options = match parse_window_apply_args(&args) {
+            Ok(options) => options,
+            Err(error) => {
+                eprintln!("[WindowApply] Invalid arguments: {error}");
+                eprintln!("[WindowApply] No window properties were changed.");
+                std::process::exit(2);
+            }
+        };
+
+        use window_layout::{LayoutConstraints, LayoutDirection};
+
+        let constraints = LayoutConstraints::default();
+
+        println!("[WindowApply] Requested direction: overlap");
+        println!(
+            "[WindowApply] Requested Window IDs: {:?}",
+            options.window_ids
+        );
+        println!("[WindowApply] Building a fresh identity-verified dry run...");
+
+        let report = match window_dry_run::build_window_dry_run(
+            &options.window_ids,
+            LayoutDirection::Overlap,
+            options.display_id,
+            constraints,
+        ) {
+            Ok(report) => report,
+            Err(error) => {
+                eprintln!("[WindowApply] Dry-run verification failed: {error}");
+                eprintln!("[WindowApply] No window properties were changed.");
+                std::process::exit(1);
+            }
+        };
+
+        if report.entries.len() != 2 {
+            eprintln!(
+                "[WindowApply] Expected exactly two verified windows, got {}.",
+                report.entries.len()
+            );
+            eprintln!("[WindowApply] No window properties were changed.");
+            std::process::exit(1);
+        }
+
+        println!("[WindowApply] Fresh dry-run verification passed.");
+        println!("[WindowApply] Target display: {}", report.display_id);
+
+        for entry in &report.entries {
+            let target = &entry.target_bounds;
+            println!(
+                "[Window {}] pid={} title={:?} target=({:.2}, {:.2}, {:.2}, {:.2})",
+                entry.window_id,
+                entry.pid,
+                entry.title,
+                target.x,
+                target.y,
+                target.width,
+                target.height
+            );
+        }
+
+        let snapshots = match window_transaction_adapter::snapshots_from_dry_run(&report) {
+            Ok(snapshots) => snapshots,
+            Err(error) => {
+                eprintln!("[WindowApply] Snapshot conversion failed: {error:?}");
+                eprintln!("[WindowApply] No window properties were changed.");
+                std::process::exit(1);
+            }
+        };
+
+        println!("[WindowApply] Starting recoverable multi-window transaction.");
+
+        let result = window_transaction_adapter::execute_window_snapshots(
+            &snapshots,
+            || window_discovery::discover_windows(),
+            |pid, discovered, desired| {
+                window_accessibility::set_application_window_bounds(pid, discovered, desired)
+            },
+        );
+
+        match result {
+            Ok(()) => {
+                println!(
+                    "[WindowApply] SUCCESS: both windows reached and passed target verification."
+                );
+            }
+            Err(error) => {
+                eprintln!("[WindowApply] TRANSACTION FAILED: {error:#?}");
+                eprintln!(
+                    "[WindowApply] Review the error and rollback_failures above; \
+                     do not assume every window was restored."
+                );
+                std::process::exit(1);
+            }
+        }
+
+        return;
+    }
 
     let is_window_dry_run = args
         .windows(2)
@@ -2148,8 +2891,11 @@ fn main() {
 
                     if !value.eq_ignore_ascii_case("horizontal")
                         && !value.eq_ignore_ascii_case("vertical")
+                        && !value.eq_ignore_ascii_case("overlap")
                     {
-                        invalid_argument("Invalid --direction. Expected horizontal or vertical.");
+                        invalid_argument(
+                            "Invalid --direction. Expected horizontal, vertical, or overlap.",
+                        );
                     }
 
                     direction_value = Some(value.to_owned());
@@ -2184,6 +2930,7 @@ fn main() {
         let direction = match direction_value.as_deref().unwrap_or("horizontal") {
             value if value.eq_ignore_ascii_case("horizontal") => LayoutDirection::Horizontal,
             value if value.eq_ignore_ascii_case("vertical") => LayoutDirection::Vertical,
+            value if value.eq_ignore_ascii_case("overlap") => LayoutDirection::Overlap,
             _ => unreachable!(),
         };
 
@@ -2322,6 +3069,29 @@ fn main() {
                 window_accessibility::inspect_application_windows(target.pid)
                     .map_err(|error| format!("Accessibility inspection failed: {error}"))?;
 
+            println!(
+                "[WindowVerify] AX candidate count: {}",
+                accessibility_windows.len()
+            );
+
+            for candidate in &accessibility_windows {
+                match &candidate.bounds {
+                    Some(bounds) => println!(
+                        "[WindowVerify] AX candidate index={} title={:?} bounds=Some(({:.1}, {:.1}, {:.1}, {:.1}))",
+                        candidate.index,
+                        candidate.title,
+                        bounds.x,
+                        bounds.y,
+                        bounds.width,
+                        bounds.height
+                    ),
+                    None => println!(
+                        "[WindowVerify] AX candidate index={} title={:?} bounds=None",
+                        candidate.index, candidate.title
+                    ),
+                }
+            }
+
             let accessibility_index =
                 window_accessibility::match_accessibility_window(target, &accessibility_windows)
                     .map_err(|error| format!("Accessibility identity match failed: {error}"))?;
@@ -2421,8 +3191,11 @@ fn main() {
         let direction = match parse_option("--direction").unwrap_or("horizontal") {
             value if value.eq_ignore_ascii_case("horizontal") => LayoutDirection::Horizontal,
             value if value.eq_ignore_ascii_case("vertical") => LayoutDirection::Vertical,
+            value if value.eq_ignore_ascii_case("overlap") => LayoutDirection::Overlap,
             _ => {
-                eprintln!("[WindowLayout] Invalid --direction. Use horizontal or vertical.");
+                eprintln!(
+                    "[WindowLayout] Invalid --direction. Use horizontal, vertical, or overlap."
+                );
                 std::process::exit(2);
             }
         };

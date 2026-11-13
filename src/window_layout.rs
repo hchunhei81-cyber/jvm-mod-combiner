@@ -8,6 +8,7 @@ use crate::window_discovery::WindowBounds;
 pub enum LayoutDirection {
     Horizontal,
     Vertical,
+    Overlap,
 }
 
 impl fmt::Display for LayoutDirection {
@@ -15,6 +16,7 @@ impl fmt::Display for LayoutDirection {
         match self {
             Self::Horizontal => write!(f, "horizontal"),
             Self::Vertical => write!(f, "vertical"),
+            Self::Overlap => write!(f, "overlap"),
         }
     }
 }
@@ -23,6 +25,8 @@ impl fmt::Display for LayoutDirection {
 pub struct LayoutConstraints {
     pub margin_x: f64,
     pub margin_y: f64,
+    /// Additional top inset applied only to overlapping layouts.
+    pub overlap_top_inset: f64,
     pub gap: f64,
     pub min_width: f64,
     pub min_height: f64,
@@ -33,6 +37,7 @@ impl Default for LayoutConstraints {
         Self {
             margin_x: 24.0,
             margin_y: 24.0,
+            overlap_top_inset: 33.0,
             gap: 16.0,
             min_width: 480.0,
             min_height: 320.0,
@@ -94,11 +99,19 @@ impl fmt::Display for LayoutError {
 impl Error for LayoutError {}
 
 fn validate_constraints(c: LayoutConstraints) -> Result<(), LayoutError> {
-    let values = [c.margin_x, c.margin_y, c.gap, c.min_width, c.min_height];
+    let values = [
+        c.margin_x,
+        c.margin_y,
+        c.overlap_top_inset,
+        c.gap,
+        c.min_width,
+        c.min_height,
+    ];
 
     if values.iter().any(|v| !v.is_finite())
         || c.margin_x < 0.0
         || c.margin_y < 0.0
+        || c.overlap_top_inset < 0.0
         || c.gap < 0.0
         || c.min_width <= 0.0
         || c.min_height <= 0.0
@@ -156,34 +169,38 @@ pub fn plan_layout(
 
     let horizontal_margins = c.margin_x * 2.0;
     let vertical_margins = c.margin_y * 2.0;
-    let total_gaps = c.gap * (count - 1.0);
 
-    if !horizontal_margins.is_finite() || !vertical_margins.is_finite() || !total_gaps.is_finite() {
+    if !horizontal_margins.is_finite() || !vertical_margins.is_finite() {
         return Err(LayoutError::CalculationOverflow);
     }
 
     let usable_width = b.width - horizontal_margins;
     let usable_height = b.height - vertical_margins;
+    let overlap_usable_height = usable_height - c.overlap_top_inset;
 
-    if !usable_width.is_finite() || !usable_height.is_finite() {
+    if !usable_width.is_finite() || !usable_height.is_finite() || !overlap_usable_height.is_finite()
+    {
         return Err(LayoutError::CalculationOverflow);
     }
 
     let (slot_width, slot_height) = match direction {
         LayoutDirection::Horizontal => {
+            let total_gaps = c.gap * (count - 1.0);
             let distributable = usable_width - total_gaps;
-            if !distributable.is_finite() {
+            if !total_gaps.is_finite() || !distributable.is_finite() {
                 return Err(LayoutError::CalculationOverflow);
             }
             (distributable / count, usable_height)
         }
         LayoutDirection::Vertical => {
+            let total_gaps = c.gap * (count - 1.0);
             let distributable = usable_height - total_gaps;
-            if !distributable.is_finite() {
+            if !total_gaps.is_finite() || !distributable.is_finite() {
                 return Err(LayoutError::CalculationOverflow);
             }
             (usable_width, distributable / count)
         }
+        LayoutDirection::Overlap => (usable_width, overlap_usable_height),
     };
 
     if !slot_width.is_finite() || !slot_height.is_finite() {
@@ -207,6 +224,7 @@ pub fn plan_layout(
                 b.x + c.margin_x,
                 b.y + c.margin_y + offset * (slot_height + c.gap),
             ),
+            LayoutDirection::Overlap => (b.x + c.margin_x, b.y + c.margin_y + c.overlap_top_inset),
         };
 
         let right = x + slot_width;
@@ -302,6 +320,7 @@ mod tests {
         LayoutConstraints {
             margin_x: 10.0,
             margin_y: 10.0,
+            overlap_top_inset: 0.0,
             gap: 20.0,
             min_width: 100.0,
             min_height: 100.0,
@@ -329,6 +348,76 @@ mod tests {
         assert_eq!(plan.placements[0].bounds.height, 380.0);
         assert_eq!(plan.placements[1].bounds.y, 410.0);
         assert_eq!(plan.placements[1].bounds.width, 980.0);
+    }
+
+    #[test]
+    fn overlap_applies_top_inset_and_preserves_bottom_margin() {
+        let d = display(1, true, 0.0, 0.0, 1470.0, 956.0);
+        let mut c = LayoutConstraints::default();
+        c.overlap_top_inset = 33.0;
+
+        let plan = plan_layout(&d, 2, LayoutDirection::Overlap, c).unwrap();
+        let bounds = &plan.placements[0].bounds;
+
+        assert_eq!(plan.placements[1].bounds, *bounds);
+        assert_eq!(bounds.x, 24.0);
+        assert_eq!(bounds.y, 57.0);
+        assert_eq!(bounds.width, 1422.0);
+        assert_eq!(bounds.height, 875.0);
+        assert_eq!(bounds.y + bounds.height, 932.0);
+        assert_eq!(956.0 - (bounds.y + bounds.height), 24.0);
+    }
+
+    #[test]
+    fn overlap_rejects_invalid_top_inset() {
+        let d = display(1, true, 0.0, 0.0, 1470.0, 956.0);
+
+        let mut negative = LayoutConstraints::default();
+        negative.overlap_top_inset = -1.0;
+        assert_eq!(
+            plan_layout(&d, 2, LayoutDirection::Overlap, negative),
+            Err(LayoutError::InvalidConstraints)
+        );
+
+        let mut non_finite = LayoutConstraints::default();
+        non_finite.overlap_top_inset = f64::NAN;
+        assert_eq!(
+            plan_layout(&d, 2, LayoutDirection::Overlap, non_finite),
+            Err(LayoutError::InvalidConstraints)
+        );
+    }
+
+    #[test]
+    fn overlap_two_windows_share_identical_bounds() {
+        let d = display(1, true, 0.0, 0.0, 1000.0, 800.0);
+        let plan = plan_layout(&d, 2, LayoutDirection::Overlap, constraints()).unwrap();
+
+        assert_eq!(plan.placements.len(), 2);
+        assert_eq!(plan.placements[0].bounds, plan.placements[1].bounds);
+        assert_eq!(plan.placements[0].bounds.x, 10.0);
+        assert_eq!(plan.placements[0].bounds.y, 10.0);
+        assert_eq!(plan.placements[0].bounds.width, 980.0);
+        assert_eq!(plan.placements[0].bounds.height, 780.0);
+    }
+
+    #[test]
+    fn overlap_supports_more_than_two_windows() {
+        let d = display(1, true, 0.0, 0.0, 1600.0, 900.0);
+        let plan = plan_layout(&d, 4, LayoutDirection::Overlap, constraints()).unwrap();
+
+        assert_eq!(plan.placements.len(), 4);
+        for placement in plan.placements.iter().skip(1) {
+            assert_eq!(placement.bounds, plan.placements[0].bounds);
+        }
+    }
+
+    #[test]
+    fn overlap_rejects_insufficient_display_space() {
+        let d = display(1, true, 0.0, 0.0, 100.0, 800.0);
+        assert_eq!(
+            plan_layout(&d, 2, LayoutDirection::Overlap, constraints()),
+            Err(LayoutError::InsufficientDisplaySpace)
+        );
     }
 
     #[test]

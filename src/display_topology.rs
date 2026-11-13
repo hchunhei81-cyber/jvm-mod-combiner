@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fmt;
 
 use crate::display_geometry::DisplayGeometry;
+use crate::window_discovery::WindowBounds;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelativePosition {
@@ -31,9 +32,18 @@ pub struct DisplayPairRelation {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct DisplayOffset {
+    pub display_id: u32,
+    pub offset_x: f64,
+    pub offset_y: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct DisplayTopology {
     pub main_display_id: u32,
     pub relations: Vec<DisplayPairRelation>,
+    pub virtual_bounds: WindowBounds,
+    pub main_relative_offsets: Vec<DisplayOffset>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +52,7 @@ pub enum TopologyError {
     DuplicateDisplayId(u32),
     InvalidDisplayGeometry(u32),
     InvalidMainDisplayCount(usize),
+    VirtualBoundsOverflow,
 }
 
 impl fmt::Display for TopologyError {
@@ -56,6 +67,9 @@ impl fmt::Display for TopologyError {
             }
             Self::InvalidMainDisplayCount(count) => {
                 write!(f, "expected exactly one main display, found {count}")
+            }
+            Self::VirtualBoundsOverflow => {
+                write!(f, "virtual desktop bounds overflowed")
             }
         }
     }
@@ -145,6 +159,57 @@ fn validate_display(display: &DisplayGeometry) -> Result<(), TopologyError> {
     Ok(())
 }
 
+/// Calculate the union of all display bounds in global logical coordinates.
+fn calculate_virtual_bounds(displays: &[&DisplayGeometry]) -> Result<WindowBounds, TopologyError> {
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+
+    for display in displays {
+        let bounds = &display.bounds;
+        min_x = min_x.min(bounds.x);
+        min_y = min_y.min(bounds.y);
+        max_x = max_x.max(bounds.x + bounds.width);
+        max_y = max_y.max(bounds.y + bounds.height);
+    }
+
+    let width = max_x - min_x;
+    let height = max_y - min_y;
+
+    if !min_x.is_finite()
+        || !min_y.is_finite()
+        || !width.is_finite()
+        || !height.is_finite()
+        || width <= 0.0
+        || height <= 0.0
+    {
+        return Err(TopologyError::VirtualBoundsOverflow);
+    }
+
+    Ok(WindowBounds {
+        x: min_x,
+        y: min_y,
+        width,
+        height,
+    })
+}
+
+/// Calculate each display's origin relative to the main display's origin.
+fn calculate_main_relative_offsets(
+    displays: &[&DisplayGeometry],
+    main_display: &DisplayGeometry,
+) -> Vec<DisplayOffset> {
+    displays
+        .iter()
+        .map(|display| DisplayOffset {
+            display_id: display.display_id,
+            offset_x: display.bounds.x - main_display.bounds.x,
+            offset_y: display.bounds.y - main_display.bounds.y,
+        })
+        .collect()
+}
+
 /// Analyze display relationships using global logical coordinates.
 ///
 /// Negative coordinates are valid. Pixel dimensions and per-display scale
@@ -175,7 +240,10 @@ pub fn analyze_displays(displays: &[DisplayGeometry]) -> Result<DisplayTopology,
         return Err(TopologyError::InvalidMainDisplayCount(main_displays.len()));
     }
 
-    let main_display_id = main_displays[0].display_id;
+    let main_display = main_displays[0];
+    let main_display_id = main_display.display_id;
+    let virtual_bounds = calculate_virtual_bounds(&ordered)?;
+    let main_relative_offsets = calculate_main_relative_offsets(&ordered, main_display);
     let mut relations = Vec::new();
 
     for first_index in 0..ordered.len() {
@@ -226,6 +294,8 @@ pub fn analyze_displays(displays: &[DisplayGeometry]) -> Result<DisplayTopology,
     Ok(DisplayTopology {
         main_display_id,
         relations,
+        virtual_bounds,
+        main_relative_offsets,
     })
 }
 
@@ -432,6 +502,97 @@ mod tests {
         assert_eq!(
             analyze_displays(&displays),
             Err(TopologyError::InvalidDisplayGeometry(1))
+        );
+    }
+
+    #[test]
+    fn calculates_virtual_bounds_with_negative_coordinates() {
+        let displays = [
+            display(1, 0.0, 0.0, 1470.0, 956.0, 2.0, 2.0, true),
+            display(2, -1920.0, 0.0, 1920.0, 1080.0, 1.0, 1.0, false),
+            display(3, 1470.0, -200.0, 1600.0, 900.0, 1.0, 1.0, false),
+        ];
+
+        let topology = analyze_displays(&displays).unwrap();
+
+        assert_eq!(topology.virtual_bounds.x, -1920.0);
+        assert_eq!(topology.virtual_bounds.y, -200.0);
+        assert_eq!(topology.virtual_bounds.width, 4990.0);
+        assert_eq!(topology.virtual_bounds.height, 1280.0);
+    }
+
+    #[test]
+    fn calculates_offsets_relative_to_main_display() {
+        let displays = [
+            display(1, 100.0, 200.0, 1000.0, 800.0, 2.0, 2.0, true),
+            display(2, -1820.0, 200.0, 1920.0, 1080.0, 1.0, 1.0, false),
+            display(3, 100.0, -700.0, 1200.0, 900.0, 1.0, 1.0, false),
+            display(4, 1100.0, 200.0, 1600.0, 900.0, 1.0, 1.0, false),
+        ];
+
+        let topology = analyze_displays(&displays).unwrap();
+
+        let offset = |id| {
+            topology
+                .main_relative_offsets
+                .iter()
+                .find(|item| item.display_id == id)
+                .unwrap()
+        };
+
+        assert_eq!((offset(1).offset_x, offset(1).offset_y), (0.0, 0.0));
+        assert_eq!((offset(2).offset_x, offset(2).offset_y), (-1920.0, 0.0));
+        assert_eq!((offset(3).offset_x, offset(3).offset_y), (0.0, -900.0));
+        assert_eq!((offset(4).offset_x, offset(4).offset_y), (1000.0, 0.0));
+    }
+
+    #[test]
+    fn single_display_virtual_bounds_match_display_bounds() {
+        let displays = [display(1, 0.0, 0.0, 1470.0, 956.0, 2.0, 2.0, true)];
+
+        let topology = analyze_displays(&displays).unwrap();
+
+        assert_eq!(topology.virtual_bounds.x, 0.0);
+        assert_eq!(topology.virtual_bounds.y, 0.0);
+        assert_eq!(topology.virtual_bounds.width, 1470.0);
+        assert_eq!(topology.virtual_bounds.height, 956.0);
+        assert_eq!(topology.main_relative_offsets.len(), 1);
+        assert_eq!(topology.main_relative_offsets[0].offset_x, 0.0);
+        assert_eq!(topology.main_relative_offsets[0].offset_y, 0.0);
+    }
+
+    #[test]
+    fn rejects_virtual_bounds_width_overflow() {
+        let displays = [
+            display(1, -f64::MAX, 0.0, f64::MAX, 100.0, 1.0, 1.0, true),
+            display(
+                2,
+                f64::MAX / 2.0,
+                0.0,
+                f64::MAX / 2.0,
+                100.0,
+                1.0,
+                1.0,
+                false,
+            ),
+        ];
+
+        assert_eq!(
+            analyze_displays(&displays),
+            Err(TopologyError::VirtualBoundsOverflow)
+        );
+    }
+
+    #[test]
+    fn rejects_layout_when_virtual_bounds_width_overflows() {
+        let displays = [
+            display(1, -f64::MAX, 0.0, 1.0, 100.0, 1.0, 1.0, true),
+            display(2, f64::MAX / 2.0, 0.0, 1.0, 100.0, 1.0, 1.0, false),
+        ];
+
+        assert_eq!(
+            analyze_displays(&displays),
+            Err(TopologyError::VirtualBoundsOverflow)
         );
     }
 }

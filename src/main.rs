@@ -2067,6 +2067,19 @@ fn main() {
                 match display_topology::analyze_displays(&displays) {
                     Ok(topology) => {
                         println!("[Topology] Main display ID: {}", topology.main_display_id);
+                        println!(
+                            "[VirtualDesktop] bounds=({:.1}, {:.1}, {:.1}, {:.1})",
+                            topology.virtual_bounds.x,
+                            topology.virtual_bounds.y,
+                            topology.virtual_bounds.width,
+                            topology.virtual_bounds.height,
+                        );
+                        for offset in &topology.main_relative_offsets {
+                            println!(
+                                "[DisplayOffset] id={} relative_to_main=({:+.1}, {:+.1})",
+                                offset.display_id, offset.offset_x, offset.offset_y,
+                            );
+                        }
 
                         if topology.relations.is_empty() {
                             println!("[Topology] No display pairs to analyze");

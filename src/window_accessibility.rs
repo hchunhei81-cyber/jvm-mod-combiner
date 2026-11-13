@@ -116,6 +116,21 @@ fn bounds_match(expected: &WindowBounds, actual: &WindowBounds) -> bool {
         && (expected.height - actual.height).abs() <= WINDOW_MATCH_TOLERANCE
 }
 
+/// Verify that a failed window operation was rolled back to its original
+/// geometry. Accessibility read-back can differ slightly, so use a
+/// one-logical-point tolerance.
+#[cfg(any(target_os = "macos", test))]
+fn geometry_matches(actual: &WindowBounds, expected: &WindowBounds) -> bool {
+    const VERIFY_TOLERANCE: f64 = 1.0;
+
+    valid_window_bounds(actual)
+        && valid_window_bounds(expected)
+        && (actual.x - expected.x).abs() <= VERIFY_TOLERANCE
+        && (actual.y - expected.y).abs() <= VERIFY_TOLERANCE
+        && (actual.width - expected.width).abs() <= VERIFY_TOLERANCE
+        && (actual.height - expected.height).abs() <= VERIFY_TOLERANCE
+}
+
 /// Match a CoreGraphics-discovered window to the current Accessibility
 /// enumeration for the same process.
 ///
@@ -484,22 +499,46 @@ mod macos {
         let position_result = set_point(element, position_attribute, old_position);
 
         match (size_result.is_err(), position_result.is_err()) {
-            (false, false) => Ok(()),
-            (true, false) => Err("restoring AXSize"),
-            (false, true) => Err("restoring AXPosition"),
-            (true, true) => Err("restoring AXSize and AXPosition"),
+            (true, true) => return Err("restoring AXSize and AXPosition"),
+            (true, false) => return Err("restoring AXSize"),
+            (false, true) => return Err("restoring AXPosition"),
+            (false, false) => {}
         }
-    }
 
-    fn geometry_matches(actual: &WindowBounds, expected: &WindowBounds) -> bool {
-        const VERIFY_TOLERANCE: f64 = 1.0;
+        // Setter success is not proof that macOS applied the requested
+        // geometry. Read both attributes back before reporting rollback
+        // success.
+        let restored_position =
+            copy_attribute(element, position_attribute, "verifying restored AXPosition")
+                .map_err(|_| "reading restored AXPosition")?;
 
-        valid_window_bounds(actual)
-            && valid_window_bounds(expected)
-            && (actual.x - expected.x).abs() <= VERIFY_TOLERANCE
-            && (actual.y - expected.y).abs() <= VERIFY_TOLERANCE
-            && (actual.width - expected.width).abs() <= VERIFY_TOLERANCE
-            && (actual.height - expected.height).abs() <= VERIFY_TOLERANCE
+        let restored_position =
+            read_point(restored_position.as_ptr()).ok_or("decoding restored AXPosition")?;
+
+        let restored_size = copy_attribute(element, size_attribute, "verifying restored AXSize")
+            .map_err(|_| "reading restored AXSize")?;
+
+        let restored_size = read_size(restored_size.as_ptr()).ok_or("decoding restored AXSize")?;
+
+        let actual = WindowBounds {
+            x: restored_position.x,
+            y: restored_position.y,
+            width: restored_size.width,
+            height: restored_size.height,
+        };
+
+        let expected = WindowBounds {
+            x: old_position.x,
+            y: old_position.y,
+            width: old_size.width,
+            height: old_size.height,
+        };
+
+        if !geometry_matches(&actual, &expected) {
+            return Err("verifying restored geometry");
+        }
+
+        Ok(())
     }
 
     pub fn set_window_bounds(
@@ -852,6 +891,40 @@ mod matching_tests {
             title: Some(title.to_owned()),
             bounds: Some(geometry),
         }
+    }
+
+    #[test]
+    fn rollback_geometry_accepts_exact_match() {
+        let expected = bounds(100.0, 80.0, 1280.0, 720.0);
+        assert!(geometry_matches(&expected, &expected));
+    }
+
+    #[test]
+    fn rollback_geometry_accepts_one_point_difference() {
+        let expected = bounds(100.0, 80.0, 1280.0, 720.0);
+        let actual = bounds(101.0, 79.0, 1281.0, 719.0);
+        assert!(geometry_matches(&actual, &expected));
+    }
+
+    #[test]
+    fn rollback_geometry_rejects_difference_over_one_point() {
+        let expected = bounds(100.0, 80.0, 1280.0, 720.0);
+        let actual = bounds(101.01, 80.0, 1280.0, 720.0);
+        assert!(!geometry_matches(&actual, &expected));
+    }
+
+    #[test]
+    fn rollback_geometry_rejects_invalid_actual_geometry() {
+        let expected = bounds(100.0, 80.0, 1280.0, 720.0);
+        let actual = bounds(f64::NAN, 80.0, 1280.0, 720.0);
+        assert!(!geometry_matches(&actual, &expected));
+    }
+
+    #[test]
+    fn rollback_geometry_rejects_invalid_expected_geometry() {
+        let actual = bounds(100.0, 80.0, 1280.0, 720.0);
+        let expected = bounds(100.0, 80.0, 0.0, 720.0);
+        assert!(!geometry_matches(&actual, &expected));
     }
 
     #[test]

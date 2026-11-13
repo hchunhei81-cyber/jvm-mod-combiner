@@ -1,4 +1,4 @@
-use crate::window_discovery::WindowBounds;
+use crate::window_discovery::{DiscoveredWindow, WindowBounds};
 use std::error::Error;
 use std::ffi::{CStr, c_char, c_void};
 use std::fmt;
@@ -20,6 +20,15 @@ pub enum AccessibilityError {
     ApplicationUnavailable,
     AxCall { operation: &'static str, code: i32 },
     InvalidReturnedType(&'static str),
+    WindowIdentityUnavailable,
+    WindowNotFound,
+    AmbiguousWindowMatch(usize),
+    InvalidWindowBounds,
+    ProcessMismatch { expected: u32, actual: u32 },
+    AttributeNotSettable(&'static str),
+    ValueCreationFailed(&'static str),
+    VerificationFailed,
+    RollbackFailed(&'static str),
 }
 
 impl fmt::Display for AccessibilityError {
@@ -41,11 +50,110 @@ impl fmt::Display for AccessibilityError {
             Self::InvalidReturnedType(attribute) => {
                 write!(f, "Unexpected CoreFoundation type for {attribute}")
             }
+            Self::WindowIdentityUnavailable => {
+                write!(
+                    f,
+                    "Window title or bounds are unavailable for safe matching"
+                )
+            }
+            Self::WindowNotFound => {
+                write!(f, "No Accessibility window matches the discovered window")
+            }
+            Self::AmbiguousWindowMatch(count) => {
+                write!(
+                    f,
+                    "Window identity is ambiguous: {count} Accessibility windows match"
+                )
+            }
+            Self::InvalidWindowBounds => {
+                write!(f, "Window bounds contain invalid or non-positive geometry")
+            }
+            Self::ProcessMismatch { expected, actual } => {
+                write!(f, "Window PID mismatch: expected {expected}, got {actual}")
+            }
+            Self::AttributeNotSettable(attribute) => {
+                write!(f, "Accessibility attribute {attribute} is not settable")
+            }
+            Self::ValueCreationFailed(operation) => {
+                write!(f, "Could not create Accessibility value for {operation}")
+            }
+            Self::VerificationFailed => {
+                write!(
+                    f,
+                    "Window geometry did not match the requested bounds after update"
+                )
+            }
+            Self::RollbackFailed(operation) => {
+                write!(
+                    f,
+                    "Window geometry update failed and rollback also failed: {operation}"
+                )
+            }
         }
     }
 }
 
 impl Error for AccessibilityError {}
+
+/// Maximum difference, in logical screen points, accepted when matching
+/// CoreGraphics geometry against Accessibility geometry.
+const WINDOW_MATCH_TOLERANCE: f64 = 2.0;
+
+fn valid_window_bounds(bounds: &WindowBounds) -> bool {
+    [bounds.x, bounds.y, bounds.width, bounds.height]
+        .iter()
+        .all(|value| value.is_finite())
+        && bounds.width > 0.0
+        && bounds.height > 0.0
+}
+
+fn bounds_match(expected: &WindowBounds, actual: &WindowBounds) -> bool {
+    valid_window_bounds(expected)
+        && valid_window_bounds(actual)
+        && (expected.x - actual.x).abs() <= WINDOW_MATCH_TOLERANCE
+        && (expected.y - actual.y).abs() <= WINDOW_MATCH_TOLERANCE
+        && (expected.width - actual.width).abs() <= WINDOW_MATCH_TOLERANCE
+        && (expected.height - actual.height).abs() <= WINDOW_MATCH_TOLERANCE
+}
+
+/// Match a CoreGraphics-discovered window to the current Accessibility
+/// enumeration for the same process.
+///
+/// The returned index is transient and must never be persisted across
+/// Accessibility enumerations. Matching requires an exact, non-empty title
+/// and geometry within the configured logical-point tolerance.
+///
+/// Ambiguous matches are rejected rather than guessed.
+pub fn match_accessibility_window(
+    discovered: &DiscoveredWindow,
+    candidates: &[AccessibilityWindow],
+) -> Result<usize, AccessibilityError> {
+    if discovered.title.as_deref().is_none_or(str::is_empty)
+        || !valid_window_bounds(&discovered.bounds)
+    {
+        return Err(AccessibilityError::WindowIdentityUnavailable);
+    }
+
+    let title = discovered.title.as_deref().unwrap();
+
+    let matches: Vec<usize> = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.title.as_deref() == Some(title)
+                && candidate
+                    .bounds
+                    .as_ref()
+                    .is_some_and(|bounds| bounds_match(&discovered.bounds, bounds))
+        })
+        .map(|candidate| candidate.index)
+        .collect();
+
+    match matches.as_slice() {
+        [index] => Ok(*index),
+        [] => Err(AccessibilityError::WindowNotFound),
+        _ => Err(AccessibilityError::AmbiguousWindowMatch(matches.len())),
+    }
+}
 
 #[cfg(target_os = "macos")]
 mod macos {
@@ -90,6 +198,17 @@ mod macos {
             attribute: CFStringRef,
             value: *mut CFTypeRef,
         ) -> i32;
+        fn AXUIElementIsAttributeSettable(
+            element: AXUIElementRef,
+            attribute: CFStringRef,
+            settable: *mut u8,
+        ) -> i32;
+        fn AXUIElementSetAttributeValue(
+            element: AXUIElementRef,
+            attribute: CFStringRef,
+            value: CFTypeRef,
+        ) -> i32;
+        fn AXValueCreate(value_type: u32, value: *const c_void) -> AXValueRef;
 
         fn AXValueGetType(value: AXValueRef) -> u32;
 
@@ -278,6 +397,291 @@ mod macos {
         }
     }
 
+    fn attribute_is_settable(
+        element: AXUIElementRef,
+        attribute: &OwnedCf,
+        name: &'static str,
+    ) -> Result<(), AccessibilityError> {
+        let mut settable = 0u8;
+        let result =
+            unsafe { AXUIElementIsAttributeSettable(element, attribute.as_ptr(), &mut settable) };
+
+        if result != 0 {
+            return Err(AccessibilityError::AxCall {
+                operation: name,
+                code: result,
+            });
+        }
+
+        if settable == 0 {
+            return Err(AccessibilityError::AttributeNotSettable(name));
+        }
+
+        Ok(())
+    }
+
+    fn set_ax_value(
+        element: AXUIElementRef,
+        attribute: &OwnedCf,
+        value_type: u32,
+        value: *const c_void,
+        operation: &'static str,
+    ) -> Result<(), AccessibilityError> {
+        let value = unsafe { OwnedCf::from_raw(AXValueCreate(value_type, value)) }
+            .ok_or(AccessibilityError::ValueCreationFailed(operation))?;
+
+        let result =
+            unsafe { AXUIElementSetAttributeValue(element, attribute.as_ptr(), value.as_ptr()) };
+
+        if result != 0 {
+            return Err(AccessibilityError::AxCall {
+                operation,
+                code: result,
+            });
+        }
+
+        Ok(())
+    }
+
+    fn set_point(
+        element: AXUIElementRef,
+        attribute: &OwnedCf,
+        point: CGPoint,
+    ) -> Result<(), AccessibilityError> {
+        set_ax_value(
+            element,
+            attribute,
+            K_AX_VALUE_TYPE_CG_POINT,
+            &point as *const CGPoint as *const c_void,
+            "AXPosition",
+        )
+    }
+
+    fn set_size(
+        element: AXUIElementRef,
+        attribute: &OwnedCf,
+        size: CGSize,
+    ) -> Result<(), AccessibilityError> {
+        set_ax_value(
+            element,
+            attribute,
+            K_AX_VALUE_TYPE_CG_SIZE,
+            &size as *const CGSize as *const c_void,
+            "AXSize",
+        )
+    }
+
+    fn restore_bounds(
+        element: AXUIElementRef,
+        position_attribute: &OwnedCf,
+        size_attribute: &OwnedCf,
+        old_position: CGPoint,
+        old_size: CGSize,
+    ) -> Result<(), &'static str> {
+        // Attempt both restorations independently. A failure to restore
+        // size must not prevent us from attempting to restore position.
+        let size_result = set_size(element, size_attribute, old_size);
+        let position_result = set_point(element, position_attribute, old_position);
+
+        match (size_result.is_err(), position_result.is_err()) {
+            (false, false) => Ok(()),
+            (true, false) => Err("restoring AXSize"),
+            (false, true) => Err("restoring AXPosition"),
+            (true, true) => Err("restoring AXSize and AXPosition"),
+        }
+    }
+
+    fn geometry_matches(actual: &WindowBounds, expected: &WindowBounds) -> bool {
+        const VERIFY_TOLERANCE: f64 = 1.0;
+
+        valid_window_bounds(actual)
+            && valid_window_bounds(expected)
+            && (actual.x - expected.x).abs() <= VERIFY_TOLERANCE
+            && (actual.y - expected.y).abs() <= VERIFY_TOLERANCE
+            && (actual.width - expected.width).abs() <= VERIFY_TOLERANCE
+            && (actual.height - expected.height).abs() <= VERIFY_TOLERANCE
+    }
+
+    pub fn set_window_bounds(
+        pid: u32,
+        discovered: &DiscoveredWindow,
+        desired: &WindowBounds,
+    ) -> Result<(), AccessibilityError> {
+        if pid == 0 || pid > i32::MAX as u32 {
+            return Err(AccessibilityError::InvalidPid);
+        }
+
+        if discovered.pid != pid {
+            return Err(AccessibilityError::ProcessMismatch {
+                expected: discovered.pid,
+                actual: pid,
+            });
+        }
+
+        if !valid_window_bounds(desired) {
+            return Err(AccessibilityError::InvalidWindowBounds);
+        }
+
+        if !is_trusted() {
+            return Err(AccessibilityError::PermissionDenied);
+        }
+
+        let application = unsafe { OwnedCf::from_raw(AXUIElementCreateApplication(pid as i32)) }
+            .ok_or(AccessibilityError::ApplicationUnavailable)?;
+
+        let windows_attribute =
+            create_attribute(b"AXWindows\0").ok_or(AccessibilityError::ApplicationUnavailable)?;
+        let title_attribute =
+            create_attribute(b"AXTitle\0").ok_or(AccessibilityError::ApplicationUnavailable)?;
+        let position_attribute =
+            create_attribute(b"AXPosition\0").ok_or(AccessibilityError::ApplicationUnavailable)?;
+        let size_attribute =
+            create_attribute(b"AXSize\0").ok_or(AccessibilityError::ApplicationUnavailable)?;
+
+        // Keep this AXWindows array alive until all operations on the
+        // selected borrowed AXUIElement have completed.
+        let windows = copy_attribute(application.as_ptr(), &windows_attribute, "AXWindows")?;
+
+        unsafe {
+            if CFGetTypeID(windows.as_ptr()) != CFArrayGetTypeID() {
+                return Err(AccessibilityError::InvalidReturnedType("AXWindows"));
+            }
+        }
+
+        let count = unsafe { CFArrayGetCount(windows.as_ptr()) };
+        if count < 0 {
+            return Err(AccessibilityError::InvalidReturnedType("AXWindows"));
+        }
+
+        let mut candidates = Vec::with_capacity(count as usize);
+
+        for index in 0..count {
+            let element =
+                unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), index) as AXUIElementRef };
+
+            if element.is_null() {
+                continue;
+            }
+
+            let title = copy_attribute(element, &title_attribute, "AXTitle")
+                .ok()
+                .and_then(|value| cf_string_to_string(value.as_ptr()));
+
+            let position = copy_attribute(element, &position_attribute, "AXPosition")
+                .ok()
+                .and_then(|value| read_point(value.as_ptr()));
+
+            let size = copy_attribute(element, &size_attribute, "AXSize")
+                .ok()
+                .and_then(|value| read_size(value.as_ptr()));
+
+            let bounds = match (position, size) {
+                (Some(position), Some(size)) => Some(WindowBounds {
+                    x: position.x,
+                    y: position.y,
+                    width: size.width,
+                    height: size.height,
+                }),
+                _ => None,
+            };
+
+            candidates.push(AccessibilityWindow {
+                index: index as usize,
+                title,
+                bounds,
+            });
+        }
+
+        let selected_index = match_accessibility_window(discovered, &candidates)?;
+
+        if selected_index >= count as usize {
+            return Err(AccessibilityError::WindowNotFound);
+        }
+
+        let element = unsafe {
+            CFArrayGetValueAtIndex(windows.as_ptr(), selected_index as CFIndex) as AXUIElementRef
+        };
+
+        if element.is_null() {
+            return Err(AccessibilityError::WindowNotFound);
+        }
+
+        // Check both attributes before changing either one.
+        attribute_is_settable(element, &position_attribute, "AXPosition")?;
+        attribute_is_settable(element, &size_attribute, "AXSize")?;
+
+        let old_position_value = copy_attribute(element, &position_attribute, "AXPosition")?;
+        let old_size_value = copy_attribute(element, &size_attribute, "AXSize")?;
+
+        let old_position = read_point(old_position_value.as_ptr())
+            .ok_or(AccessibilityError::InvalidReturnedType("AXPosition"))?;
+        let old_size = read_size(old_size_value.as_ptr())
+            .ok_or(AccessibilityError::InvalidReturnedType("AXSize"))?;
+
+        let new_position = CGPoint {
+            x: desired.x,
+            y: desired.y,
+        };
+        let new_size = CGSize {
+            width: desired.width,
+            height: desired.height,
+        };
+
+        set_point(element, &position_attribute, new_position)?;
+
+        if let Err(error) = set_size(element, &size_attribute, new_size) {
+            if let Err(operation) = restore_bounds(
+                element,
+                &position_attribute,
+                &size_attribute,
+                old_position,
+                old_size,
+            ) {
+                return Err(AccessibilityError::RollbackFailed(operation));
+            }
+            return Err(error);
+        }
+
+        let verification = (|| {
+            let position_value = copy_attribute(element, &position_attribute, "AXPosition")?;
+            let size_value = copy_attribute(element, &size_attribute, "AXSize")?;
+
+            let position = read_point(position_value.as_ptr())
+                .ok_or(AccessibilityError::InvalidReturnedType("AXPosition"))?;
+            let size = read_size(size_value.as_ptr())
+                .ok_or(AccessibilityError::InvalidReturnedType("AXSize"))?;
+
+            let actual = WindowBounds {
+                x: position.x,
+                y: position.y,
+                width: size.width,
+                height: size.height,
+            };
+
+            if !geometry_matches(&actual, desired) {
+                return Err(AccessibilityError::VerificationFailed);
+            }
+
+            Ok(())
+        })();
+
+        if let Err(error) = verification {
+            if let Err(operation) = restore_bounds(
+                element,
+                &position_attribute,
+                &size_attribute,
+                old_position,
+                old_size,
+            ) {
+                return Err(AccessibilityError::RollbackFailed(operation));
+            }
+
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
     pub fn is_trusted() -> bool {
         unsafe { AXIsProcessTrusted() != 0 }
     }
@@ -375,6 +779,23 @@ pub fn is_accessibility_trusted() -> Result<bool, AccessibilityError> {
     }
 }
 
+pub fn set_application_window_bounds(
+    pid: u32,
+    discovered: &DiscoveredWindow,
+    desired: &WindowBounds,
+) -> Result<(), AccessibilityError> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::set_window_bounds(pid, discovered, desired)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (pid, discovered, desired);
+        Err(AccessibilityError::UnsupportedPlatform)
+    }
+}
+
 pub fn inspect_application_windows(
     pid: u32,
 ) -> Result<Vec<AccessibilityWindow>, AccessibilityError> {
@@ -387,5 +808,146 @@ pub fn inspect_application_windows(
     {
         let _ = pid;
         Err(AccessibilityError::UnsupportedPlatform)
+    }
+}
+
+#[cfg(test)]
+mod matching_tests {
+    use super::*;
+    use crate::window_discovery::WindowBounds;
+
+    fn bounds(x: f64, y: f64, width: f64, height: f64) -> WindowBounds {
+        WindowBounds {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn discovered() -> DiscoveredWindow {
+        DiscoveredWindow {
+            window_id: 123,
+            pid: 456,
+            owner_name: Some("Minecraft".to_owned()),
+            title: Some("Minecraft 1.21.4".to_owned()),
+            bounds: bounds(100.0, 80.0, 1280.0, 720.0),
+        }
+    }
+
+    fn candidate(index: usize, title: &str, geometry: WindowBounds) -> AccessibilityWindow {
+        AccessibilityWindow {
+            index,
+            title: Some(title.to_owned()),
+            bounds: Some(geometry),
+        }
+    }
+
+    #[test]
+    fn matches_exact_title_and_geometry() {
+        let candidates = vec![candidate(
+            3,
+            "Minecraft 1.21.4",
+            bounds(100.0, 80.0, 1280.0, 720.0),
+        )];
+
+        assert_eq!(
+            match_accessibility_window(&discovered(), &candidates),
+            Ok(3)
+        );
+    }
+
+    #[test]
+    fn accepts_small_geometry_difference() {
+        let candidates = vec![candidate(
+            2,
+            "Minecraft 1.21.4",
+            bounds(101.5, 79.0, 1281.0, 718.5),
+        )];
+
+        assert_eq!(
+            match_accessibility_window(&discovered(), &candidates),
+            Ok(2)
+        );
+    }
+
+    #[test]
+    fn rejects_different_title() {
+        let candidates = vec![candidate(
+            0,
+            "Minecraft",
+            bounds(100.0, 80.0, 1280.0, 720.0),
+        )];
+
+        assert_eq!(
+            match_accessibility_window(&discovered(), &candidates),
+            Err(AccessibilityError::WindowNotFound)
+        );
+    }
+
+    #[test]
+    fn rejects_geometry_outside_tolerance() {
+        let candidates = vec![candidate(
+            0,
+            "Minecraft 1.21.4",
+            bounds(103.0, 80.0, 1280.0, 720.0),
+        )];
+
+        assert_eq!(
+            match_accessibility_window(&discovered(), &candidates),
+            Err(AccessibilityError::WindowNotFound)
+        );
+    }
+
+    #[test]
+    fn rejects_ambiguous_matches() {
+        let candidates = vec![
+            candidate(0, "Minecraft 1.21.4", bounds(100.0, 80.0, 1280.0, 720.0)),
+            candidate(1, "Minecraft 1.21.4", bounds(101.0, 80.0, 1280.0, 720.0)),
+        ];
+
+        assert_eq!(
+            match_accessibility_window(&discovered(), &candidates),
+            Err(AccessibilityError::AmbiguousWindowMatch(2))
+        );
+    }
+
+    #[test]
+    fn rejects_missing_title() {
+        let mut target = discovered();
+        target.title = None;
+
+        assert_eq!(
+            match_accessibility_window(&target, &[]),
+            Err(AccessibilityError::WindowIdentityUnavailable)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_target_geometry() {
+        let mut target = discovered();
+        target.bounds.width = f64::NAN;
+
+        assert_eq!(
+            match_accessibility_window(&target, &[]),
+            Err(AccessibilityError::WindowIdentityUnavailable)
+        );
+    }
+
+    #[test]
+    fn ignores_candidates_without_bounds() {
+        let candidates = vec![
+            AccessibilityWindow {
+                index: 0,
+                title: Some("Minecraft 1.21.4".to_owned()),
+                bounds: None,
+            },
+            candidate(1, "Minecraft 1.21.4", bounds(100.0, 80.0, 1280.0, 720.0)),
+        ];
+
+        assert_eq!(
+            match_accessibility_window(&discovered(), &candidates),
+            Ok(1)
+        );
     }
 }

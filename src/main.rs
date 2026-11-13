@@ -1,4 +1,5 @@
 mod display_geometry;
+mod display_topology;
 mod window_accessibility;
 mod window_discovery;
 mod window_integration;
@@ -2041,10 +2042,12 @@ fn main() {
 
                 for (index, display) in displays.iter().enumerate() {
                     println!(
-                        "[Display {}] id={} main={} logical=({:.1}, {:.1}, {:.1}, {:.1}) backing_pixels={}x{} cg_pixels={}x{} scale=({:.4}, {:.4})",
+                        "[Display {}] id={} main={} builtin={} rotation={:.1}deg logical=({:.1}, {:.1}, {:.1}, {:.1}) backing_pixels={}x{} cg_pixels={}x{} scale=({:.4}, {:.4})",
                         index + 1,
                         display.display_id,
                         display.is_main,
+                        display.is_builtin,
+                        display.rotation_degrees,
                         display.bounds.x,
                         display.bounds.y,
                         display.bounds.width,
@@ -2056,6 +2059,44 @@ fn main() {
                         display.scale_x,
                         display.scale_y,
                     );
+                }
+
+                println!();
+                println!("=== Display Topology ===");
+
+                match display_topology::analyze_displays(&displays) {
+                    Ok(topology) => {
+                        println!("[Topology] Main display ID: {}", topology.main_display_id);
+
+                        if topology.relations.is_empty() {
+                            println!("[Topology] No display pairs to analyze");
+                        }
+
+                        for relation in &topology.relations {
+                            let position = match relation.relative_position {
+                                display_topology::RelativePosition::Left => "Left",
+                                display_topology::RelativePosition::Right => "Right",
+                                display_topology::RelativePosition::Above => "Above",
+                                display_topology::RelativePosition::Below => "Below",
+                                display_topology::RelativePosition::Diagonal => "Diagonal",
+                                display_topology::RelativePosition::Overlapping => "Overlapping",
+                            };
+
+                            println!(
+                                "[Pair {} -> {}] position={} horizontal_gap={:+.1} vertical_gap={:+.1} overlap={}x{}",
+                                relation.first_id,
+                                relation.second_id,
+                                position,
+                                relation.horizontal_gap,
+                                relation.vertical_gap,
+                                relation.overlap_width,
+                                relation.overlap_height,
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("[Topology] ERROR: {error}");
+                    }
                 }
             }
             Err(error) => {

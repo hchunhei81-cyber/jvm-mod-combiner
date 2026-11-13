@@ -19,6 +19,8 @@ pub struct DisplayGeometry {
     pub scale_x: f64,
     pub scale_y: f64,
     pub is_main: bool,
+    pub is_builtin: bool,
+    pub rotation_degrees: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +75,7 @@ pub fn discover_displays() -> Result<Vec<DisplayGeometry>, DisplayGeometryError>
 mod macos {
     use super::{DisplayGeometry, DisplayGeometryError};
     use crate::window_discovery::WindowBounds;
-    use std::ffi::c_void;
+    use std::ffi::{c_int, c_void};
 
     type CGDirectDisplayID = u32;
     type CGError = i32;
@@ -111,6 +113,10 @@ mod macos {
         ) -> CGError;
 
         fn CGDisplayBounds(display: CGDirectDisplayID) -> CGRect;
+
+        fn CGDisplayIsBuiltin(display: CGDirectDisplayID) -> c_int;
+
+        fn CGDisplayRotation(display: CGDirectDisplayID) -> f64;
 
         fn CGDisplayPixelsWide(display: CGDirectDisplayID) -> usize;
 
@@ -194,6 +200,8 @@ mod macos {
 
         for display_id in display_ids {
             let rect = unsafe { CGDisplayBounds(display_id) };
+            let is_builtin = unsafe { CGDisplayIsBuiltin(display_id) } != 0;
+            let rotation_degrees = unsafe { CGDisplayRotation(display_id) };
 
             // Preserve these values independently. They are not assumed to
             // represent the current HiDPI backing pixel dimensions.
@@ -222,6 +230,7 @@ mod macos {
                 || !rect.origin.y.is_finite()
                 || !logical_width.is_finite()
                 || !logical_height.is_finite()
+                || !rotation_degrees.is_finite()
                 || logical_width <= 0.0
                 || logical_height <= 0.0
                 || pixel_width == 0
@@ -256,6 +265,8 @@ mod macos {
                 scale_x,
                 scale_y,
                 is_main: display_id == main_display_id,
+                is_builtin,
+                rotation_degrees,
             });
         }
 

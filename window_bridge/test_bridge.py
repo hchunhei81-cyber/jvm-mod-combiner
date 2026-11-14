@@ -56,16 +56,15 @@ def run_loader_test(loader, harness_dir):
     print()
     print(f"========== Testing {loader} ==========")
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind(("127.0.0.1", 0))
+    socket_path = Path(harness_dir) / f"{loader}.sock"
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.bind(str(socket_path))
         server.listen(4)
         server.settimeout(8)
 
-        port = server.getsockname()[1]
-
         env = os.environ.copy()
-        env["JVM_COMBINER_WINDOW_ADDR"] = f"127.0.0.1:{port}"
+        env["JVM_COMBINER_WINDOW_SOCKET"] = str(socket_path)
 
         command = [
             "java",
@@ -168,16 +167,15 @@ def run_rejection_test(harness_dir):
     print()
     print("========== Testing registration rejection ==========")
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind(("127.0.0.1", 0))
+    socket_path = Path(harness_dir) / "rejection.sock"
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.bind(str(socket_path))
         server.listen(2)
         server.settimeout(2)
 
-        port = server.getsockname()[1]
-
         env = os.environ.copy()
-        env["JVM_COMBINER_WINDOW_ADDR"] = f"127.0.0.1:{port}"
+        env["JVM_COMBINER_WINDOW_SOCKET"] = str(socket_path)
 
         command = [
             "java",

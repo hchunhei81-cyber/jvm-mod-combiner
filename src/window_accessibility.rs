@@ -13,7 +13,34 @@ pub struct AccessibilityWindow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RollbackError {
+    pub stage: &'static str,
+    pub detail: String,
+}
+
+impl RollbackError {
+    fn new(stage: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            stage,
+            detail: detail.into(),
+        }
+    }
+
+    fn from_accessibility(stage: &'static str, error: AccessibilityError) -> Self {
+        Self::new(stage, error.to_string())
+    }
+}
+
+impl fmt::Display for RollbackError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.stage, self.detail)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccessibilityError {
+    /// All window mutations are disabled until identity authorization is complete.
+    WindowMutationDisabled,
     UnsupportedPlatform,
     PermissionDenied,
     InvalidPid,
@@ -42,13 +69,17 @@ pub enum AccessibilityError {
     },
     RollbackFailed {
         operation: Box<AccessibilityError>,
-        rollback: &'static str,
+        rollback: RollbackError,
     },
 }
 
 impl fmt::Display for AccessibilityError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::WindowMutationDisabled => write!(
+                f,
+                "Window mutations are disabled: identity authorization and transaction safety are not yet approved"
+            ),
             Self::UnsupportedPlatform => {
                 write!(f, "Accessibility API is only available on macOS")
             }
@@ -235,7 +266,7 @@ fn run_window_transaction(
     mut set_position: impl FnMut() -> Result<(), AccessibilityError>,
     mut set_size: impl FnMut() -> Result<(), AccessibilityError>,
     mut verify: impl FnMut() -> Result<(), AccessibilityError>,
-    mut rollback: impl FnMut() -> Result<(), &'static str>,
+    mut rollback: impl FnMut() -> Result<(), RollbackError>,
 ) -> Result<(), AccessibilityError> {
     let operation = (|| {
         set_position()?;
@@ -252,6 +283,102 @@ fn run_window_transaction(
                 rollback,
             }),
         },
+    }
+}
+
+/// Execute a forward window transaction with an independent identity check
+/// immediately before each Accessibility write.
+#[cfg(any(target_os = "macos", test))]
+fn run_guarded_window_transaction(
+    mut verify_target: impl FnMut(&'static str) -> Result<(), AccessibilityError>,
+    mut set_position: impl FnMut() -> Result<(), AccessibilityError>,
+    mut set_size: impl FnMut() -> Result<(), AccessibilityError>,
+    mut verify_geometry: impl FnMut() -> Result<(), AccessibilityError>,
+    mut rollback: impl FnMut() -> Result<(), RollbackError>,
+) -> Result<(), AccessibilityError> {
+    // No write has been attempted yet. If the initial identity check fails,
+    // return immediately without invoking rollback.
+    verify_target("before AXPosition")?;
+
+    // From this point onward, a setter may partially mutate the window,
+    // even if the setter itself returns an error.
+    let operation = (|| {
+        set_position()?;
+        verify_target("before AXSize")?;
+        set_size()?;
+        verify_geometry()
+    })();
+
+    match operation {
+        Ok(()) => Ok(()),
+        Err(error) => match rollback() {
+            Ok(()) => Err(error),
+            Err(rollback) => Err(AccessibilityError::RollbackFailed {
+                operation: Box::new(error),
+                rollback,
+            }),
+        },
+    }
+}
+
+/// Execute rollback setters only after independently revalidating the target.
+///
+/// Setter failures do not suppress the next identity check. Identity failures
+/// do suppress all subsequent writes. The caller remains responsible for
+/// readback, even when this function returns an error.
+#[cfg(any(target_os = "macos", test))]
+fn run_guarded_rollback_setters(
+    mut verify_target: impl FnMut(&'static str) -> Result<(), RollbackError>,
+    mut set_size: impl FnMut() -> Result<(), AccessibilityError>,
+    mut set_position: impl FnMut() -> Result<(), AccessibilityError>,
+) -> Result<(), RollbackError> {
+    let mut failures = Vec::new();
+
+    if let Err(error) = verify_target("before AXSize rollback") {
+        return Err(RollbackError::new(
+            "guarding rollback setters",
+            format!(
+                "AXSize=not_attempted; AXPosition=not_attempted; identity validation failed before first write: {error}"
+            ),
+        ));
+    }
+
+    match set_size() {
+        Ok(()) => {}
+        Err(error) => failures.push(format!("AXSize setter failed: {error}")),
+    }
+
+    // Revalidate independently after the first setter. A successful check
+    // before AXSize is not authorization to write AXPosition later.
+    if let Err(error) = verify_target("before AXPosition rollback") {
+        failures.push(format!(
+            "AXPosition=not_attempted; identity validation failed: {error}"
+        ));
+
+        return Err(RollbackError::new(
+            "guarding rollback setters",
+            format!(
+                "AXSize=attempted; AXPosition=not_attempted; {}",
+                failures.join("; ")
+            ),
+        ));
+    }
+
+    match set_position() {
+        Ok(()) => {}
+        Err(error) => failures.push(format!("AXPosition setter failed: {error}")),
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(RollbackError::new(
+            "guarding rollback setters",
+            format!(
+                "AXSize=attempted; AXPosition=attempted; {}",
+                failures.join("; ")
+            ),
+        ))
     }
 }
 
@@ -655,50 +782,100 @@ mod macos {
         size_attribute: &OwnedCf,
         old_position: CGPoint,
         old_size: CGSize,
-    ) -> Result<(), &'static str> {
-        // Attempt both restorations independently. A failure to restore
-        // size must not prevent us from attempting to restore position.
-        let size_result = set_size(element, size_attribute, old_size);
-        let position_result = set_point(element, position_attribute, old_position);
+        verify_target: impl FnMut(&'static str) -> Result<(), RollbackError>,
+    ) -> Result<(), RollbackError> {
+        let mut failures = Vec::new();
 
-        match (size_result.is_err(), position_result.is_err()) {
-            (true, true) => return Err("restoring AXSize and AXPosition"),
-            (true, false) => return Err("restoring AXSize"),
-            (false, true) => return Err("restoring AXPosition"),
-            (false, false) => {}
+        // Each write has its own identity gate. A setter failure still allows
+        // the next write to be considered, but an identity failure is a hard
+        // stop. Readbacks below remain read-only and are always attempted.
+        if let Err(error) = run_guarded_rollback_setters(
+            verify_target,
+            || set_size(element, size_attribute, old_size),
+            || set_point(element, position_attribute, old_position),
+        ) {
+            failures.push(error.to_string());
         }
 
-        // Setter success is not proof that macOS applied the requested
-        // geometry. Read both attributes back before reporting rollback
-        // success.
+        // Always attempt both readbacks, even if a setter failed or was
+        // skipped because the target identity could not be revalidated.
         let restored_position =
-            copy_attribute(element, position_attribute, "verifying restored AXPosition")
-                .map_err(|_| "reading restored AXPosition")?;
+            match copy_attribute(element, position_attribute, "verifying restored AXPosition") {
+                Ok(value) => match read_point(value.as_ptr()) {
+                    Some(position) => Some(position),
+                    None => {
+                        failures.push(
+                            "AXPosition readback returned an invalid or unexpected AXValue"
+                                .to_owned(),
+                        );
+                        None
+                    }
+                },
+                Err(error) => {
+                    failures.push(format!("AXPosition readback failed: {error}"));
+                    None
+                }
+            };
 
-        let restored_position =
-            read_point(restored_position.as_ptr()).ok_or("decoding restored AXPosition")?;
+        let restored_size =
+            match copy_attribute(element, size_attribute, "verifying restored AXSize") {
+                Ok(value) => match read_size(value.as_ptr()) {
+                    Some(size) => Some(size),
+                    None => {
+                        failures.push(
+                            "AXSize readback returned an invalid or unexpected AXValue".to_owned(),
+                        );
+                        None
+                    }
+                },
+                Err(error) => {
+                    failures.push(format!("AXSize readback failed: {error}"));
+                    None
+                }
+            };
 
-        let restored_size = copy_attribute(element, size_attribute, "verifying restored AXSize")
-            .map_err(|_| "reading restored AXSize")?;
+        // Geometry can only be compared when both components were read.
+        if let (Some(position), Some(size)) = (restored_position, restored_size) {
+            let actual = WindowBounds {
+                x: position.x,
+                y: position.y,
+                width: size.width,
+                height: size.height,
+            };
 
-        let restored_size = read_size(restored_size.as_ptr()).ok_or("decoding restored AXSize")?;
+            let expected = WindowBounds {
+                x: old_position.x,
+                y: old_position.y,
+                width: old_size.width,
+                height: old_size.height,
+            };
 
-        let actual = WindowBounds {
-            x: restored_position.x,
-            y: restored_position.y,
-            width: restored_size.width,
-            height: restored_size.height,
-        };
+            if !geometry_matches(&actual, &expected) {
+                failures.push(format!(
+                    "geometry mismatch: actual=({:.2},{:.2},{:.2},{:.2}), \
+                     expected=({:.2},{:.2},{:.2},{:.2}), \
+                     delta=({:.2},{:.2},{:.2},{:.2})",
+                    actual.x,
+                    actual.y,
+                    actual.width,
+                    actual.height,
+                    expected.x,
+                    expected.y,
+                    expected.width,
+                    expected.height,
+                    actual.x - expected.x,
+                    actual.y - expected.y,
+                    actual.width - expected.width,
+                    actual.height - expected.height,
+                ));
+            }
+        }
 
-        let expected = WindowBounds {
-            x: old_position.x,
-            y: old_position.y,
-            width: old_size.width,
-            height: old_size.height,
-        };
-
-        if !geometry_matches(&actual, &expected) {
-            return Err("verifying restored geometry");
+        if !failures.is_empty() {
+            return Err(RollbackError::new(
+                "restoring and verifying AX bounds",
+                failures.join("; "),
+            ));
         }
 
         Ok(())
@@ -712,130 +889,215 @@ mod macos {
         expected: &DiscoveredWindow,
         old_position: CGPoint,
         old_size: CGSize,
-    ) -> Result<(), &'static str> {
-        if pid == 0 || pid != expected.pid || pid > i32::MAX as u32 {
-            return Err("validating rollback PID");
-        }
+    ) -> Result<(), RollbackError> {
+        run_ax_then_always_verify_cg(
+            || -> Result<(), RollbackError> {
+                if pid == 0 {
+                    return Err(RollbackError::new(
+                        "validating rollback PID",
+                        "PID must be greater than zero",
+                    ));
+                }
 
-        let current_windows = crate::window_discovery::discover_windows()
-            .map_err(|_| "rediscovering window before rollback")?;
+                if pid > i32::MAX as u32 {
+                    return Err(RollbackError::new(
+                        "validating rollback PID",
+                        format!("PID {pid} exceeds the supported macOS process ID range"),
+                    ));
+                }
 
-        verify_fresh_window_identity_only(expected, &current_windows)
-            .map_err(|_| "revalidating window identity before rollback")?;
+                if pid != expected.pid {
+                    return Err(RollbackError::new(
+                        "validating rollback PID",
+                        format!("PID mismatch: supplied={pid}, expected={}", expected.pid),
+                    ));
+                }
 
-        let fresh_window = current_windows
-            .iter()
-            .find(|window| window.window_id == expected.window_id)
-            .ok_or("finding window before rollback")?;
+                let current_windows =
+                    crate::window_discovery::discover_windows().map_err(|error| {
+                        RollbackError::new(
+                            "rediscovering window before rollback",
+                            error.to_string(),
+                        )
+                    })?;
 
-        let application = unsafe { OwnedCf::from_raw(AXUIElementCreateApplication(pid as i32)) }
-            .ok_or("creating Accessibility application for rollback")?;
+                verify_fresh_window_identity_only(expected, &current_windows).map_err(|error| {
+                    RollbackError::new(
+                        "revalidating window identity before rollback",
+                        error.to_string(),
+                    )
+                })?;
 
-        let windows_attribute =
-            create_attribute(b"AXWindows\0").ok_or("creating AXWindows attribute")?;
-        let title_attribute = create_attribute(b"AXTitle\0").ok_or("creating AXTitle attribute")?;
-        let position_attribute =
-            create_attribute(b"AXPosition\0").ok_or("creating AXPosition attribute")?;
-        let size_attribute = create_attribute(b"AXSize\0").ok_or("creating AXSize attribute")?;
+                let application =
+                    unsafe { OwnedCf::from_raw(AXUIElementCreateApplication(pid as i32)) }
+                        .ok_or_else(|| {
+                            RollbackError::new(
+                                "creating Accessibility application for rollback",
+                                "required value was unavailable",
+                            )
+                        })?;
 
-        // Keep this fresh array alive for the complete rollback operation.
-        let windows = copy_attribute(
-            application.as_ptr(),
-            &windows_attribute,
-            "AXWindows before rollback",
-        )
-        .map_err(|_| "reading AXWindows before rollback")?;
+                let windows_attribute = create_attribute(b"AXWindows\0").ok_or_else(|| {
+                    RollbackError::new(
+                        "creating AXWindows attribute",
+                        "required value was unavailable",
+                    )
+                })?;
+                let title_attribute = create_attribute(b"AXTitle\0").ok_or_else(|| {
+                    RollbackError::new(
+                        "creating AXTitle attribute",
+                        "required value was unavailable",
+                    )
+                })?;
+                let position_attribute = create_attribute(b"AXPosition\0").ok_or_else(|| {
+                    RollbackError::new(
+                        "creating AXPosition attribute",
+                        "required value was unavailable",
+                    )
+                })?;
+                let size_attribute = create_attribute(b"AXSize\0").ok_or_else(|| {
+                    RollbackError::new(
+                        "creating AXSize attribute",
+                        "required value was unavailable",
+                    )
+                })?;
 
-        unsafe {
-            if CFGetTypeID(windows.as_ptr()) != CFArrayGetTypeID() {
-                return Err("validating AXWindows before rollback");
-            }
-        }
+                // Revalidate stable identity once more immediately before restoration.
+                let latest_windows =
+                    crate::window_discovery::discover_windows().map_err(|error| {
+                        RollbackError::new(
+                            "rechecking window identity before rollback",
+                            error.to_string(),
+                        )
+                    })?;
 
-        let count = unsafe { CFArrayGetCount(windows.as_ptr()) };
-        if count < 0 {
-            return Err("counting AXWindows before rollback");
-        }
+                verify_fresh_window_identity_only(expected, &latest_windows).map_err(|error| {
+                    RollbackError::new(
+                        "rechecking window identity before rollback",
+                        error.to_string(),
+                    )
+                })?;
 
-        let mut candidates = Vec::with_capacity(count as usize);
-        let mut rollback_candidate_diagnostics = Vec::with_capacity(count as usize);
+                let latest_window = latest_windows
+                    .iter()
+                    .find(|window| window.window_id == expected.window_id)
+                    .ok_or_else(|| {
+                        RollbackError::new(
+                            "finding latest window before rollback",
+                            "required value was unavailable",
+                        )
+                    })?;
 
-        for index in 0..count {
-            let element =
-                unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), index) as AXUIElementRef };
+                // Acquire AXWindows only after the latest CoreGraphics identity check.
+                // Keep this array alive while using its borrowed AXUIElement.
+                let windows = copy_attribute(
+                    application.as_ptr(),
+                    &windows_attribute,
+                    "AXWindows before rollback",
+                )
+                .map_err(|error| {
+                    RollbackError::new("reading AXWindows before rollback", error.to_string())
+                })?;
 
-            if element.is_null() {
-                rollback_candidate_diagnostics.push(format!("index={index} element=null"));
-                continue;
-            }
-
-            let title_result = copy_attribute(element, &title_attribute, "AXTitle before rollback");
-            let (title, title_diagnostic) = match title_result {
-                Ok(value) => match cf_string_to_string(value.as_ptr()) {
-                    Some(title) => {
-                        let diagnostic = format!("title={title:?}");
-                        (Some(title), diagnostic)
+                unsafe {
+                    if CFGetTypeID(windows.as_ptr()) != CFArrayGetTypeID() {
+                        return Err(RollbackError::new(
+                            "validating AXWindows before rollback",
+                            "validating AXWindows before rollback",
+                        ));
                     }
-                    None => (None, "title_decode_failed".to_owned()),
-                },
-                Err(error) => (None, format!("title_read_error={error}")),
-            };
+                }
 
-            let position_result =
-                copy_attribute(element, &position_attribute, "AXPosition before rollback");
-            let (position, position_diagnostic) = match position_result {
-                Ok(value) => match read_point(value.as_ptr()) {
-                    Some(position) => (
-                        Some(position),
-                        format!("position=({:.1},{:.1})", position.x, position.y),
-                    ),
-                    None => (None, "position_decode_failed".to_owned()),
-                },
-                Err(error) => (None, format!("position_read_error={error}")),
-            };
+                let count = unsafe { CFArrayGetCount(windows.as_ptr()) };
+                if count < 0 {
+                    return Err(RollbackError::new(
+                        "counting AXWindows before rollback",
+                        "counting AXWindows before rollback",
+                    ));
+                }
 
-            let size_result = copy_attribute(element, &size_attribute, "AXSize before rollback");
-            let (size, size_diagnostic) = match size_result {
-                Ok(value) => match read_size(value.as_ptr()) {
-                    Some(size) => (
-                        Some(size),
-                        format!("size=({:.1},{:.1})", size.width, size.height),
-                    ),
-                    None => (None, "size_decode_failed".to_owned()),
-                },
-                Err(error) => (None, format!("size_read_error={error}")),
-            };
+                let mut candidates = Vec::with_capacity(count as usize);
+                let mut rollback_candidate_diagnostics = Vec::with_capacity(count as usize);
 
-            let bounds = match (position, size) {
-                (Some(position), Some(size)) => Some(WindowBounds {
-                    x: position.x,
-                    y: position.y,
-                    width: size.width,
-                    height: size.height,
-                }),
-                _ => None,
-            };
+                for index in 0..count {
+                    let element = unsafe {
+                        CFArrayGetValueAtIndex(windows.as_ptr(), index) as AXUIElementRef
+                    };
 
-            rollback_candidate_diagnostics.push(format!(
-                "index={} {} {} {}",
-                index, title_diagnostic, position_diagnostic, size_diagnostic
-            ));
+                    if element.is_null() {
+                        rollback_candidate_diagnostics.push(format!("index={index} element=null"));
+                        continue;
+                    }
 
-            candidates.push(AccessibilityWindow {
-                index: index as usize,
-                title,
-                bounds,
-            });
-        }
+                    let title_result =
+                        copy_attribute(element, &title_attribute, "AXTitle before rollback");
+                    let (title, title_diagnostic) = match title_result {
+                        Ok(value) => match cf_string_to_string(value.as_ptr()) {
+                            Some(title) => {
+                                let diagnostic = format!("title={title:?}");
+                                (Some(title), diagnostic)
+                            }
+                            None => (None, "title_decode_failed".to_owned()),
+                        },
+                        Err(error) => (None, format!("title_read_error={error}")),
+                    };
 
-        let selected_index = match_accessibility_window_for_rollback(
-            fresh_window.title.as_deref(),
+                    let position_result =
+                        copy_attribute(element, &position_attribute, "AXPosition before rollback");
+                    let (position, position_diagnostic) = match position_result {
+                        Ok(value) => match read_point(value.as_ptr()) {
+                            Some(position) => (
+                                Some(position),
+                                format!("position=({:.1},{:.1})", position.x, position.y),
+                            ),
+                            None => (None, "position_decode_failed".to_owned()),
+                        },
+                        Err(error) => (None, format!("position_read_error={error}")),
+                    };
+
+                    let size_result =
+                        copy_attribute(element, &size_attribute, "AXSize before rollback");
+                    let (size, size_diagnostic) = match size_result {
+                        Ok(value) => match read_size(value.as_ptr()) {
+                            Some(size) => (
+                                Some(size),
+                                format!("size=({:.1},{:.1})", size.width, size.height),
+                            ),
+                            None => (None, "size_decode_failed".to_owned()),
+                        },
+                        Err(error) => (None, format!("size_read_error={error}")),
+                    };
+
+                    let bounds = match (position, size) {
+                        (Some(position), Some(size)) => Some(WindowBounds {
+                            x: position.x,
+                            y: position.y,
+                            width: size.width,
+                            height: size.height,
+                        }),
+                        _ => None,
+                    };
+
+                    rollback_candidate_diagnostics.push(format!(
+                        "index={} {} {} {}",
+                        index, title_diagnostic, position_diagnostic, size_diagnostic
+                    ));
+
+                    candidates.push(AccessibilityWindow {
+                        index: index as usize,
+                        title,
+                        bounds,
+                    });
+                }
+
+                let selected_index = match_accessibility_window_for_rollback(
+            latest_window.title.as_deref(),
             &candidates,
         )
         .map_err(|error| {
             eprintln!(
                 "[RollbackDiagnostic] expected_title={:?} AX_count={} candidate_count={} match_error={}",
-                fresh_window.title,
+                latest_window.title,
                 count,
                 candidates.len(),
                 error
@@ -845,132 +1107,213 @@ mod macos {
                 eprintln!("[RollbackDiagnostic] {diagnostic}");
             }
 
-            match error {
-                AccessibilityError::WindowNotFound => {
-                    "rollback AX matching failed: no candidate has the expected title"
-                }
-                AccessibilityError::AmbiguousWindowMatch(_) => {
-                    "rollback AX matching failed: multiple candidates have the expected title"
-                }
-                AccessibilityError::InvalidWindowBounds => {
-                    "rollback AX matching failed: matching candidate has missing or invalid bounds"
-                }
-                AccessibilityError::WindowIdentityUnavailable => {
-                    "rollback AX matching failed: expected title is missing or empty"
-                }
-                _ => "rollback AX matching failed: unexpected matching error",
-            }
+            RollbackError::from_accessibility(
+                "matching rollback Accessibility window",
+                error,
+            )
         })?;
 
-        if selected_index >= count as usize {
-            return Err("validating rollback Accessibility index");
-        }
+                if selected_index >= count as usize {
+                    return Err(RollbackError::new(
+                        "validating rollback Accessibility index",
+                        "validating rollback Accessibility index",
+                    ));
+                }
 
-        let element = unsafe {
-            CFArrayGetValueAtIndex(windows.as_ptr(), selected_index as CFIndex) as AXUIElementRef
-        };
+                let element = unsafe {
+                    CFArrayGetValueAtIndex(windows.as_ptr(), selected_index as CFIndex)
+                        as AXUIElementRef
+                };
 
-        if element.is_null() {
-            return Err("getting fresh Accessibility element for rollback");
-        }
+                if element.is_null() {
+                    return Err(RollbackError::new(
+                        "getting fresh Accessibility element for rollback",
+                        "getting fresh Accessibility element for rollback",
+                    ));
+                }
 
-        // Revalidate stable identity once more immediately before restoration.
-        let latest_windows = crate::window_discovery::discover_windows()
-            .map_err(|_| "rechecking window identity before rollback")?;
+                let current_title_value = copy_attribute(
+                    element,
+                    &title_attribute,
+                    "rechecking AXTitle before rollback",
+                )
+                .map_err(|error| {
+                    RollbackError::new("reading AXTitle before rollback", error.to_string())
+                })?;
 
-        verify_fresh_window_identity_only(expected, &latest_windows)
-            .map_err(|_| "rechecking window identity before rollback")?;
+                let current_title =
+                    cf_string_to_string(current_title_value.as_ptr()).ok_or_else(|| {
+                        RollbackError::new(
+                            "decoding AXTitle before rollback",
+                            "required value was unavailable",
+                        )
+                    })?;
 
-        let latest_window = latest_windows
-            .iter()
-            .find(|window| window.window_id == expected.window_id)
-            .ok_or("finding latest window before rollback")?;
+                if Some(current_title.as_str()) != latest_window.title.as_deref() {
+                    return Err(RollbackError::new(
+                        "revalidating Accessibility title before rollback",
+                        "revalidating Accessibility title before rollback",
+                    ));
+                }
 
-        let current_title_value = copy_attribute(
-            element,
-            &title_attribute,
-            "rechecking AXTitle before rollback",
+                let current_position_value = copy_attribute(
+                    element,
+                    &position_attribute,
+                    "rechecking AXPosition before rollback",
+                )
+                .map_err(|error| {
+                    RollbackError::new("reading AXPosition before rollback", error.to_string())
+                })?;
+
+                let current_size_value = copy_attribute(
+                    element,
+                    &size_attribute,
+                    "rechecking AXSize before rollback",
+                )
+                .map_err(|error| {
+                    RollbackError::new("reading AXSize before rollback", error.to_string())
+                })?;
+
+                let current_position =
+                    read_point(current_position_value.as_ptr()).ok_or_else(|| {
+                        RollbackError::new(
+                            "decoding AXPosition before rollback",
+                            "required value was unavailable",
+                        )
+                    })?;
+                let current_size = read_size(current_size_value.as_ptr()).ok_or_else(|| {
+                    RollbackError::new(
+                        "decoding AXSize before rollback",
+                        "required value was unavailable",
+                    )
+                })?;
+
+                let current_bounds = WindowBounds {
+                    x: current_position.x,
+                    y: current_position.y,
+                    width: current_size.width,
+                    height: current_size.height,
+                };
+
+                // During rollback, AX and CoreGraphics may temporarily report
+                // different geometries after a partially applied setter. Identity
+                // has been revalidated independently; require readable, valid AX
+                // geometry, but do not require it to match the CG snapshot here.
+                if !valid_window_bounds(&current_bounds) {
+                    return Err(RollbackError::new(
+                        "validating Accessibility geometry before rollback",
+                        "validating Accessibility geometry before rollback",
+                    ));
+                }
+
+                attribute_is_settable(element, &position_attribute, "AXPosition").map_err(
+                    |error| {
+                        RollbackError::new(
+                            "checking AXPosition settable before rollback",
+                            error.to_string(),
+                        )
+                    },
+                )?;
+                attribute_is_settable(element, &size_attribute, "AXSize").map_err(|error| {
+                    RollbackError::new(
+                        "checking AXSize settable before rollback",
+                        error.to_string(),
+                    )
+                })?;
+
+                let verify_rollback_target = |stage: &'static str| -> Result<(), RollbackError> {
+                    // CoreGraphics has no direct stable identifier that maps to
+                    // this AXUIElement. Recheck the discovered Window ID, PID,
+                    // owner and title, then independently re-read this element's
+                    // title. This narrows, but cannot eliminate, the cross-API
+                    // time-of-check/time-of-use race.
+                    let fresh_windows = crate::window_discovery::discover_windows()
+                        .map_err(|error| RollbackError::new(stage, error.to_string()))?;
+
+                    verify_fresh_window_identity_only(expected, &fresh_windows)
+                        .map_err(|error| RollbackError::from_accessibility(stage, error))?;
+
+                    let title_value = copy_attribute(
+                        element,
+                        &title_attribute,
+                        "revalidating AXTitle immediately before rollback write",
+                    )
+                    .map_err(|error| RollbackError::new(stage, error.to_string()))?;
+
+                    let title = cf_string_to_string(title_value.as_ptr()).ok_or_else(|| {
+                        RollbackError::new(
+                            stage,
+                            "AXTitle could not be decoded immediately before rollback write",
+                        )
+                    })?;
+
+                    if Some(title.as_str()) != expected.title.as_deref() {
+                        return Err(RollbackError::new(
+                            stage,
+                            format!(
+                                "AXTitle changed immediately before rollback write: expected={:?}, actual={:?}",
+                                expected.title, title
+                            ),
+                        ));
+                    }
+
+                    Ok(())
+                };
+
+                // Return the AX restoration result from this closure.
+                // The outer function will always perform final CG verification.
+                restore_bounds(
+                    element,
+                    &position_attribute,
+                    &size_attribute,
+                    old_position,
+                    old_size,
+                    verify_rollback_target,
+                )
+            },
+            || -> Result<(), RollbackError> {
+                // Verify both stable identity and restored CoreGraphics geometry.
+                let restored_windows =
+                    crate::window_discovery::discover_windows().map_err(|error| {
+                        RollbackError::new("verifying window after rollback", error.to_string())
+                    })?;
+
+                verify_fresh_window_identity_only(expected, &restored_windows).map_err(
+                    |error| {
+                        RollbackError::new(
+                            "verifying window identity after rollback",
+                            error.to_string(),
+                        )
+                    },
+                )?;
+
+                let restored_window = restored_windows
+                    .iter()
+                    .find(|window| window.window_id == expected.window_id)
+                    .ok_or_else(|| {
+                        RollbackError::new(
+                            "finding window after rollback",
+                            "required value was unavailable",
+                        )
+                    })?;
+
+                let original_bounds = WindowBounds {
+                    x: old_position.x,
+                    y: old_position.y,
+                    width: old_size.width,
+                    height: old_size.height,
+                };
+
+                if !bounds_match(&original_bounds, &restored_window.bounds) {
+                    return Err(RollbackError::new(
+                        "verifying restored CoreGraphics geometry",
+                        "restored CoreGraphics geometry does not match original bounds",
+                    ));
+                }
+
+                Ok(())
+            },
         )
-        .map_err(|_| "reading AXTitle before rollback")?;
-
-        let current_title = cf_string_to_string(current_title_value.as_ptr())
-            .ok_or("decoding AXTitle before rollback")?;
-
-        if Some(current_title.as_str()) != latest_window.title.as_deref() {
-            return Err("revalidating Accessibility title before rollback");
-        }
-
-        let current_position_value = copy_attribute(
-            element,
-            &position_attribute,
-            "rechecking AXPosition before rollback",
-        )
-        .map_err(|_| "reading AXPosition before rollback")?;
-
-        let current_size_value = copy_attribute(
-            element,
-            &size_attribute,
-            "rechecking AXSize before rollback",
-        )
-        .map_err(|_| "reading AXSize before rollback")?;
-
-        let current_position = read_point(current_position_value.as_ptr())
-            .ok_or("decoding AXPosition before rollback")?;
-        let current_size =
-            read_size(current_size_value.as_ptr()).ok_or("decoding AXSize before rollback")?;
-
-        let current_bounds = WindowBounds {
-            x: current_position.x,
-            y: current_position.y,
-            width: current_size.width,
-            height: current_size.height,
-        };
-
-        // During rollback, AX and CoreGraphics may temporarily report
-        // different geometries after a partially applied setter. Identity
-        // has been revalidated independently; require readable, valid AX
-        // geometry, but do not require it to match the CG snapshot here.
-        if !valid_window_bounds(&current_bounds) {
-            return Err("validating Accessibility geometry before rollback");
-        }
-
-        attribute_is_settable(element, &position_attribute, "AXPosition")
-            .map_err(|_| "checking AXPosition settable before rollback")?;
-        attribute_is_settable(element, &size_attribute, "AXSize")
-            .map_err(|_| "checking AXSize settable before rollback")?;
-
-        restore_bounds(
-            element,
-            &position_attribute,
-            &size_attribute,
-            old_position,
-            old_size,
-        )?;
-
-        // Verify both stable identity and restored CoreGraphics geometry.
-        let restored_windows = crate::window_discovery::discover_windows()
-            .map_err(|_| "verifying window after rollback")?;
-
-        verify_fresh_window_identity_only(expected, &restored_windows)
-            .map_err(|_| "verifying window identity after rollback")?;
-
-        let restored_window = restored_windows
-            .iter()
-            .find(|window| window.window_id == expected.window_id)
-            .ok_or("finding window after rollback")?;
-
-        let original_bounds = WindowBounds {
-            x: old_position.x,
-            y: old_position.y,
-            width: old_size.width,
-            height: old_size.height,
-        };
-
-        if !bounds_match(&original_bounds, &restored_window.bounds) {
-            return Err("verifying restored CoreGraphics geometry");
-        }
-
-        Ok(())
     }
 
     pub fn set_window_bounds(
@@ -1134,7 +1477,33 @@ mod macos {
         let old_position = current_position;
         let old_size = current_size;
 
-        run_window_transaction(
+        let mut verify_forward_target = |stage: &'static str| -> Result<(), AccessibilityError> {
+            let fresh_windows = crate::window_discovery::discover_windows()
+                .map_err(|_| AccessibilityError::WindowDiscoveryFailed)?;
+
+            verify_fresh_window_identity_only(discovered, &fresh_windows)?;
+
+            let title_value = copy_attribute(
+                element,
+                &title_attribute,
+                "revalidating AXTitle before forward write",
+            )?;
+
+            let title = cf_string_to_string(title_value.as_ptr())
+                .ok_or(AccessibilityError::WindowIdentityUnavailable)?;
+
+            if Some(title.as_str()) != discovered.title.as_deref() {
+                return Err(AccessibilityError::WindowIdentityChanged(
+                    "Accessibility title",
+                ));
+            }
+
+            let _ = stage;
+            Ok(())
+        };
+
+        run_guarded_window_transaction(
+            &mut verify_forward_target,
             || set_point(element, &position_attribute, new_position),
             || set_size(element, &size_attribute, new_size),
             || {
@@ -1279,11 +1648,19 @@ pub fn is_accessibility_trusted() -> Result<bool, AccessibilityError> {
     }
 }
 
+fn ensure_window_mutation_enabled() -> Result<(), AccessibilityError> {
+    // Fail closed. Do not remove this gate until the trusted identity and
+    // transaction authorization design has been implemented and reviewed.
+    Err(AccessibilityError::WindowMutationDisabled)
+}
+
 pub fn set_application_window_bounds(
     pid: u32,
     discovered: &DiscoveredWindow,
     desired: &WindowBounds,
 ) -> Result<(), AccessibilityError> {
+    ensure_window_mutation_enabled()?;
+
     #[cfg(target_os = "macos")]
     {
         macos::set_window_bounds(pid, discovered, desired)
@@ -1308,6 +1685,34 @@ pub fn inspect_application_windows(
     {
         let _ = pid;
         Err(AccessibilityError::UnsupportedPlatform)
+    }
+}
+
+fn run_ax_then_always_verify_cg(
+    ax_restore: impl FnOnce() -> Result<(), RollbackError>,
+    cg_verify: impl FnOnce() -> Result<(), RollbackError>,
+) -> Result<(), RollbackError> {
+    let ax_result = ax_restore();
+    let cg_result = cg_verify();
+
+    combine_rollback_results(ax_result, cg_result)
+}
+
+fn combine_rollback_results(
+    ax_result: Result<(), RollbackError>,
+    cg_result: Result<(), RollbackError>,
+) -> Result<(), RollbackError> {
+    match (ax_result, cg_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(ax_error), Ok(())) => Err(ax_error),
+        (Ok(()), Err(cg_error)) => Err(cg_error),
+        (Err(ax_error), Err(cg_error)) => Err(RollbackError::new(
+            "verifying rollback recovery",
+            format!(
+                "AX restoration failed: {}; CoreGraphics final verification failed: {}",
+                ax_error, cg_error
+            ),
+        )),
     }
 }
 
@@ -1492,7 +1897,7 @@ mod matching_tests {
             },
             || {
                 events.borrow_mut().push("rollback");
-                Err("test rollback failure")
+                Err(RollbackError::new("test rollback", "test rollback failure"))
             },
         );
 
@@ -1500,10 +1905,442 @@ mod matching_tests {
             result,
             Err(AccessibilityError::RollbackFailed {
                 operation: Box::new(AccessibilityError::VerificationFailed),
-                rollback: "test rollback failure",
+                rollback: RollbackError::new("test rollback", "test rollback failure"),
             })
         );
         assert_eq!(*events.borrow(), vec!["position", "size", "rollback"]);
+    }
+
+    #[test]
+    fn guarded_forward_transaction_checks_identity_before_each_write() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+
+        let result = run_guarded_window_transaction(
+            |stage| {
+                events.borrow_mut().push(stage);
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("set_position");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("set_size");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("verify_geometry");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("rollback");
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                "before AXPosition",
+                "set_position",
+                "before AXSize",
+                "set_size",
+                "verify_geometry",
+            ]
+        );
+    }
+
+    #[test]
+    fn guarded_forward_transaction_stops_all_writes_when_initial_identity_fails() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+
+        let result = run_guarded_window_transaction(
+            |stage| {
+                events.borrow_mut().push(stage);
+                Err(AccessibilityError::WindowNotFound)
+            },
+            || {
+                events.borrow_mut().push("set_position");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("set_size");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("verify_geometry");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("rollback");
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Err(AccessibilityError::WindowNotFound));
+        assert_eq!(*events.borrow(), vec!["before AXPosition"]);
+    }
+
+    #[test]
+    fn guarded_forward_transaction_stops_second_write_when_identity_changes() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+        let mut checks = 0;
+
+        let result = run_guarded_window_transaction(
+            |stage| {
+                events.borrow_mut().push(stage);
+                checks += 1;
+
+                if checks == 2 {
+                    Err(AccessibilityError::WindowIdentityChanged("title"))
+                } else {
+                    Ok(())
+                }
+            },
+            || {
+                events.borrow_mut().push("set_position");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("set_size");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("verify_geometry");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("rollback");
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            result,
+            Err(AccessibilityError::WindowIdentityChanged("title"))
+        );
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                "before AXPosition",
+                "set_position",
+                "before AXSize",
+                "rollback",
+            ]
+        );
+    }
+
+    #[test]
+    fn guarded_forward_transaction_rolls_back_after_first_setter_failure() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+        let expected_error = AccessibilityError::AxCall {
+            operation: "test position",
+            code: -10,
+        };
+
+        let result = run_guarded_window_transaction(
+            |stage| {
+                events.borrow_mut().push(stage);
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("set_position");
+                Err(expected_error.clone())
+            },
+            || {
+                events.borrow_mut().push("set_size");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("verify_geometry");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("rollback");
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Err(expected_error));
+        assert_eq!(
+            *events.borrow(),
+            vec!["before AXPosition", "set_position", "rollback"]
+        );
+    }
+
+    #[test]
+    fn guarded_rollback_runs_both_writes_when_identity_is_stable() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+
+        let result = run_guarded_rollback_setters(
+            |stage| {
+                events.borrow_mut().push(stage);
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("set_size");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("set_position");
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                "before AXSize rollback",
+                "set_size",
+                "before AXPosition rollback",
+                "set_position",
+            ]
+        );
+    }
+
+    #[test]
+    fn guarded_rollback_continues_after_first_setter_failure() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+        let setter_error = AccessibilityError::VerificationFailed;
+
+        let result = run_guarded_rollback_setters(
+            |stage| {
+                events.borrow_mut().push(stage);
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("set_size");
+                Err(setter_error.clone())
+            },
+            || {
+                events.borrow_mut().push("set_position");
+                Ok(())
+            },
+        );
+
+        let error = result.expect_err("first setter failure must be reported");
+        assert!(error.detail.contains("AXSize=attempted"));
+        assert!(error.detail.contains("AXPosition=attempted"));
+        assert!(error.detail.contains("AXSize setter failed"));
+
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                "before AXSize rollback",
+                "set_size",
+                "before AXPosition rollback",
+                "set_position",
+            ]
+        );
+    }
+
+    #[test]
+    fn guarded_rollback_stops_second_write_when_identity_changes() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+
+        let result = run_guarded_rollback_setters(
+            |stage| {
+                events.borrow_mut().push(stage);
+                if stage == "before AXPosition rollback" {
+                    return Err(RollbackError::new(
+                        stage,
+                        "simulated target identity change",
+                    ));
+                }
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("set_size");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("set_position");
+                Ok(())
+            },
+        );
+
+        let error = result.expect_err("identity change must stop later writes");
+        assert!(error.detail.contains("AXSize=attempted"));
+        assert!(error.detail.contains("AXPosition=not_attempted"));
+        assert!(error.detail.contains("simulated target identity change"));
+
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                "before AXSize rollback",
+                "set_size",
+                "before AXPosition rollback",
+            ]
+        );
+    }
+
+    #[test]
+    fn guarded_rollback_performs_no_writes_when_initial_identity_check_fails() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+
+        let result = run_guarded_rollback_setters(
+            |stage| {
+                events.borrow_mut().push(stage);
+                Err(RollbackError::new(
+                    stage,
+                    "simulated initial identity failure",
+                ))
+            },
+            || {
+                events.borrow_mut().push("set_size");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("set_position");
+                Ok(())
+            },
+        );
+
+        let error = result.expect_err("initial identity failure must block writes");
+        assert!(error.detail.contains("AXSize=not_attempted"));
+        assert!(error.detail.contains("AXPosition=not_attempted"));
+
+        assert_eq!(*events.borrow(), vec!["before AXSize rollback"]);
+    }
+
+    #[test]
+    fn ax_preparation_failure_still_runs_cg_verification() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+
+        let result = run_ax_then_always_verify_cg(
+            || {
+                events.borrow_mut().push("ax_preparation");
+                Err(RollbackError::new(
+                    "AX preparation",
+                    "simulated AXWindows retrieval failure",
+                ))
+            },
+            || {
+                events.borrow_mut().push("cg_verification");
+                Ok(())
+            },
+        );
+
+        let error = result.expect_err("AX preparation failure must be preserved");
+        assert_eq!(error.stage, "AX preparation");
+        assert!(error.detail.contains("AXWindows retrieval failure"));
+        assert_eq!(*events.borrow(), vec!["ax_preparation", "cg_verification"]);
+    }
+
+    #[test]
+    fn ax_restore_failure_still_runs_cg_verification() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+
+        let result = run_ax_then_always_verify_cg(
+            || {
+                events.borrow_mut().push("ax_restore");
+                Err(RollbackError::new(
+                    "AX restore",
+                    "simulated AX setter failure",
+                ))
+            },
+            || {
+                events.borrow_mut().push("cg_verification");
+                Ok(())
+            },
+        );
+
+        let error = result.expect_err("AX restore failure must be preserved");
+        assert_eq!(error.stage, "AX restore");
+        assert!(error.detail.contains("AX setter failure"));
+        assert_eq!(*events.borrow(), vec!["ax_restore", "cg_verification"]);
+    }
+
+    #[test]
+    fn ax_and_cg_failures_are_both_preserved_and_cg_runs() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+
+        let result = run_ax_then_always_verify_cg(
+            || {
+                events.borrow_mut().push("ax_restore");
+                Err(RollbackError::new("AX restore", "simulated AX failure"))
+            },
+            || {
+                events.borrow_mut().push("cg_verification");
+                Err(RollbackError::new(
+                    "CG verification",
+                    "simulated final snapshot failure",
+                ))
+            },
+        );
+
+        let error = result.expect_err("both failures must be reported");
+        assert_eq!(error.stage, "verifying rollback recovery");
+        assert!(error.detail.contains("simulated AX failure"));
+        assert!(error.detail.contains("simulated final snapshot failure"));
+        assert_eq!(*events.borrow(), vec!["ax_restore", "cg_verification"]);
+    }
+
+    #[test]
+    fn rollback_result_combiner_accepts_two_successes() {
+        assert_eq!(combine_rollback_results(Ok(()), Ok(())), Ok(()));
+    }
+
+    #[test]
+    fn rollback_result_combiner_preserves_ax_failure() {
+        let ax_error = RollbackError::new("AX restore", "simulated AX failure");
+
+        let result = combine_rollback_results(Err(ax_error.clone()), Ok(()));
+
+        assert_eq!(result, Err(ax_error));
+    }
+
+    #[test]
+    fn rollback_result_combiner_preserves_cg_failure() {
+        let cg_error = RollbackError::new("CG verification", "simulated CG failure");
+
+        let result = combine_rollback_results(Ok(()), Err(cg_error.clone()));
+
+        assert_eq!(result, Err(cg_error));
+    }
+
+    #[test]
+    fn rollback_result_combiner_preserves_both_failures() {
+        let ax_error = RollbackError::new("AX restore", "simulated AX failure");
+        let cg_error = RollbackError::new("CG verification", "simulated CG failure");
+
+        let result = combine_rollback_results(Err(ax_error), Err(cg_error));
+
+        let error = result.expect_err("both failures must be reported");
+
+        assert_eq!(error.stage, "verifying rollback recovery");
+        assert!(error.detail.contains("AX restoration failed"));
+        assert!(error.detail.contains("simulated AX failure"));
+        assert!(
+            error
+                .detail
+                .contains("CoreGraphics final verification failed")
+        );
+        assert!(error.detail.contains("simulated CG failure"));
     }
 
     #[test]
@@ -1827,5 +2664,25 @@ mod matching_tests {
             match_accessibility_window(&discovered(), &candidates),
             Ok(1)
         );
+    }
+}
+
+#[cfg(test)]
+mod mutation_gate_tests {
+    use super::*;
+
+    #[test]
+    fn window_mutation_gate_fails_closed() {
+        let result = ensure_window_mutation_enabled();
+
+        assert_eq!(result, Err(AccessibilityError::WindowMutationDisabled));
+    }
+
+    #[test]
+    fn window_mutation_disabled_error_is_explicit() {
+        let message = AccessibilityError::WindowMutationDisabled.to_string();
+
+        assert!(message.contains("Window mutations are disabled"));
+        assert!(message.contains("identity authorization"));
     }
 }

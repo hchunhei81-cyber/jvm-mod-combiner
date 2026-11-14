@@ -1,34 +1,37 @@
-use crate::window_manager::{self, ClientRegistration, WindowManagerHandle};
+use crate::window_manager::{self, ClientRegistration, RegistryError, WindowManagerHandle};
 use std::env;
 use std::io;
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 const EXTERNAL_ENV: &str = "JVM_COMBINER_WINDOW_EXTERNAL";
-const ADDRESS_ENV: &str = "JVM_COMBINER_WINDOW_ADDR";
-const ADDRESS_PROPERTY: &str = "jvm.combiner.window.address";
+const SOCKET_ENV: &str = "JVM_COMBINER_WINDOW_SOCKET";
+const SOCKET_PROPERTY: &str = "jvm.combiner.window.socket";
 const BRIDGE_JAR: &str = "window_bridge/build/window-bridge-agent.jar";
 
 pub struct WindowRuntime {
     // 保留 handle，确保本地 Window Manager 不会提前退出。
     manager: Option<WindowManagerHandle>,
-    address: SocketAddr,
+    socket_path: PathBuf,
     bridge_jar: PathBuf,
 }
 
 impl WindowRuntime {
     /// Fusion 父进程使用：无条件启动并拥有一个本地 Window Manager。
     pub fn start_local(project_root: &Path) -> io::Result<Self> {
-        let manager = window_manager::start(window_manager::default_bind_addr())?;
-        let address = manager.local_addr();
+        let socket_path = window_manager::default_socket_path()?;
+        let manager = window_manager::start(&socket_path)?;
+        let socket_path = manager.socket_path().to_path_buf();
 
         let runtime = Self {
             manager: Some(manager),
-            address,
+            socket_path,
             bridge_jar: Self::resolve_bridge_jar(project_root)?,
         };
 
-        eprintln!("[WindowIntegration] Local Manager listening at {}", address);
+        eprintln!(
+            "[WindowIntegration] Local Manager listening at {}",
+            runtime.socket_path.display()
+        );
         Ok(runtime)
     }
 
@@ -43,37 +46,45 @@ impl WindowRuntime {
             })
             .unwrap_or(false);
 
-        let address = if external {
-            let configured = env::var(ADDRESS_ENV)
-                .unwrap_or_else(|_| window_manager::DEFAULT_BIND_ADDR.to_owned());
-
-            configured.parse::<SocketAddr>().map_err(|error| {
+        let socket_path = if external {
+            let configured = env::var_os(SOCKET_ENV).ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    format!("Invalid {ADDRESS_ENV} value '{configured}': {error}"),
+                    format!("{SOCKET_ENV} must name the external Manager Unix socket"),
                 )
-            })?
+            })?;
+            let configured = PathBuf::from(configured);
+
+            if !configured.is_absolute() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{SOCKET_ENV} must be an absolute socket path"),
+                ));
+            }
+
+            configured
         } else {
-            window_manager::default_bind_addr()
+            window_manager::default_socket_path()?
         };
 
         let manager = if external {
-            eprintln!("[WindowIntegration] Connecting to external Manager at {address}");
+            eprintln!(
+                "[WindowIntegration] Connecting to external Manager at {}",
+                socket_path.display()
+            );
             None
         } else {
-            let manager = window_manager::start(address)?;
-            let actual_address = manager.local_addr();
-            eprintln!("[WindowIntegration] Local Manager listening at {actual_address}");
-            return Ok(Self {
-                manager: Some(manager),
-                address: actual_address,
-                bridge_jar: Self::resolve_bridge_jar(project_root)?,
-            });
+            let manager = window_manager::start(&socket_path)?;
+            eprintln!(
+                "[WindowIntegration] Local Manager listening at {}",
+                socket_path.display()
+            );
+            Some(manager)
         };
 
         Ok(Self {
             manager,
-            address,
+            socket_path,
             bridge_jar: Self::resolve_bridge_jar(project_root)?,
         })
     }
@@ -96,22 +107,22 @@ impl WindowRuntime {
 
     /// Return registrations owned by this process's local Manager.
     /// External clients have no access to the parent's in-memory registry.
-    pub fn registrations(&self) -> Vec<ClientRegistration> {
+    /// Returns Some(registrations) for a locally owned Manager.
+    /// Returns None when this process is an external Manager client.
+    /// Registry failures are propagated instead of being treated as empty.
+    pub fn registrations(&self) -> Result<Option<Vec<ClientRegistration>>, RegistryError> {
         self.manager
             .as_ref()
-            .map_or_else(Vec::new, WindowManagerHandle::registrations)
+            .map(WindowManagerHandle::registrations)
+            .transpose()
     }
 
-    pub fn address(&self) -> SocketAddr {
-        self.address
-    }
-
-    pub fn address_string(&self) -> String {
-        self.address.to_string()
+    pub fn socket_path_string(&self) -> String {
+        self.socket_path.to_string_lossy().into_owned()
     }
 
     pub fn java_property_arg(&self) -> String {
-        format!("-D{ADDRESS_PROPERTY}={}", self.address)
+        format!("-D{SOCKET_PROPERTY}={}", self.socket_path.to_string_lossy())
     }
 
     pub fn bridge_agent_arg(&self, loader: &str) -> io::Result<String> {
@@ -151,7 +162,7 @@ mod tests {
 
         let runtime = WindowRuntime {
             manager: None,
-            address: "127.0.0.1:25566".parse().unwrap(),
+            socket_path: PathBuf::from("/tmp/window-manager.sock"),
             bridge_jar: root.join(BRIDGE_JAR),
         };
 
@@ -179,16 +190,27 @@ mod tests {
     }
 
     #[test]
-    fn java_property_contains_actual_manager_address() {
+    fn external_runtime_reports_registry_as_unavailable_not_empty() {
         let runtime = WindowRuntime {
             manager: None,
-            address: "127.0.0.1:34567".parse().unwrap(),
+            socket_path: PathBuf::from("/tmp/window-manager.sock"),
+            bridge_jar: PathBuf::new(),
+        };
+
+        assert_eq!(runtime.registrations().unwrap(), None);
+    }
+
+    #[test]
+    fn java_property_contains_manager_socket_path() {
+        let runtime = WindowRuntime {
+            manager: None,
+            socket_path: PathBuf::from("/tmp/jvm-combiner-501/wm.sock"),
             bridge_jar: PathBuf::new(),
         };
 
         assert_eq!(
             runtime.java_property_arg(),
-            "-Djvm.combiner.window.address=127.0.0.1:34567"
+            "-Djvm.combiner.window.socket=/tmp/jvm-combiner-501/wm.sock"
         );
     }
 }

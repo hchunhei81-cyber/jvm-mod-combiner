@@ -3,10 +3,13 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
-import java.net.InetSocketAddress;
-import java.net.Socket;
-import java.net.SocketTimeoutException;
+import java.net.StandardProtocolFamily;
+import java.net.UnixDomainSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.nio.channels.Channels;
+import java.nio.channels.SocketChannel;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -14,7 +17,6 @@ import java.util.regex.Pattern;
 import java.lang.instrument.Instrumentation;
 
 public final class WindowBridge {
-    private static final String DEFAULT_ADDRESS = "127.0.0.1:25566";
     private static final long INITIAL_RETRY_SECONDS = 1;
     private static final long MAX_RETRY_SECONDS = 30;
 
@@ -43,66 +45,57 @@ public final class WindowBridge {
 
         // JVM property takes precedence; environment variable is the fallback.
         String configuredAddress =
-                System.getProperty("jvm.combiner.window.address");
+                System.getProperty("jvm.combiner.window.socket");
 
         if (configuredAddress == null || configuredAddress.isBlank()) {
-            configuredAddress = System.getenv("JVM_COMBINER_WINDOW_ADDR");
+            configuredAddress = System.getenv("JVM_COMBINER_WINDOW_SOCKET");
         }
 
         if (configuredAddress == null || configuredAddress.isBlank()) {
-            configuredAddress = DEFAULT_ADDRESS;
+            System.err.println(
+                    "[WindowBridge] Manager socket path is not configured");
+            return;
         }
 
-        final InetSocketAddress address;
+        final Path socketPath;
         try {
-            address = parseAddress(configuredAddress.trim());
+            socketPath = parseSocketPath(configuredAddress.trim());
         } catch (IllegalArgumentException error) {
             System.err.println(
-                    "[WindowBridge] Invalid server address: " + error.getMessage());
+                    "[WindowBridge] Invalid server socket path: " + error.getMessage());
             return;
         }
 
         Thread worker = new Thread(
-                () -> runRegistrationLoop(loader, address),
+                () -> runRegistrationLoop(loader, socketPath),
                 "jvm-combiner-window-bridge");
 
         worker.setDaemon(true);
         worker.start();
     }
 
-    private static InetSocketAddress parseAddress(String value) {
-        int separator = value.lastIndexOf(':');
-        if (separator <= 0 || separator == value.length() - 1) {
-            throw new IllegalArgumentException(value);
-        }
-
-        String host = value.substring(0, separator);
-        if (host.startsWith("[") && host.endsWith("]")) {
-            host = host.substring(1, host.length() - 1);
-        }
-
-        final int port;
+    private static Path parseSocketPath(String value) {
+        final Path path;
         try {
-            port = Integer.parseInt(value.substring(separator + 1));
-        } catch (NumberFormatException error) {
+            path = Path.of(value);
+        } catch (InvalidPathException error) {
             throw new IllegalArgumentException(value, error);
         }
 
-        if (port < 1 || port > 65535 || host.isBlank()) {
-            throw new IllegalArgumentException(value);
+        if (!path.isAbsolute()) {
+            throw new IllegalArgumentException("path must be absolute: " + value);
         }
 
-        return new InetSocketAddress(host, port);
+        return path;
     }
 
-    private static void runRegistrationLoop(
-            String loader, InetSocketAddress address) {
+    private static void runRegistrationLoop(String loader, Path socketPath) {
         long retrySeconds = INITIAL_RETRY_SECONDS;
         long pid = ProcessHandle.current().pid();
 
         while (!Thread.currentThread().isInterrupted()) {
             try {
-                connectAndMaintain(loader, pid, address);
+                connectAndMaintain(loader, pid, socketPath);
                 retrySeconds = INITIAL_RETRY_SECONDS;
             } catch (RegistrationRejectedException error) {
                 System.err.println(
@@ -130,20 +123,18 @@ public final class WindowBridge {
     }
 
     private static void connectAndMaintain(
-            String loader, long pid, InetSocketAddress address)
+            String loader, long pid, Path socketPath)
             throws IOException, RegistrationRejectedException {
-        try (Socket socket = new Socket()) {
-            socket.setKeepAlive(true);
-            socket.connect(address, 3000);
-            socket.setSoTimeout(5000);
+        try (SocketChannel channel = SocketChannel.open(StandardProtocolFamily.UNIX)) {
+            channel.connect(UnixDomainSocketAddress.of(socketPath));
 
             BufferedReader reader = new BufferedReader(
                     new InputStreamReader(
-                            socket.getInputStream(), StandardCharsets.UTF_8));
+                            Channels.newInputStream(channel), StandardCharsets.UTF_8));
 
             BufferedWriter writer = new BufferedWriter(
                     new OutputStreamWriter(
-                            socket.getOutputStream(), StandardCharsets.UTF_8));
+                            Channels.newOutputStream(channel), StandardCharsets.UTF_8));
 
             String request = String.format(
                     Locale.ROOT,
@@ -178,16 +169,12 @@ public final class WindowBridge {
                             + loader
                             + " pid="
                             + pid
-                            + " server="
-                            + address);
+                            + " socket="
+                            + socketPath);
 
             while (!Thread.currentThread().isInterrupted()) {
-                try {
-                    if (reader.read() == -1) {
-                        throw new IOException("server disconnected");
-                    }
-                } catch (SocketTimeoutException ignored) {
-                    // The server keeps the registration socket open.
+                if (reader.read() == -1) {
+                    throw new IOException("server disconnected");
                 }
             }
         }

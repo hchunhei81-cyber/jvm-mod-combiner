@@ -1,13 +1,16 @@
+use crate::window_peer;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub const DEFAULT_BIND_ADDR: &str = "127.0.0.1:25566";
 const PROTOCOL_VERSION: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,27 +24,46 @@ pub struct ClientRegistration {
 #[derive(Debug, Clone)]
 struct RegistryEntry {
     connection_id: u64,
+    pid_version: i32,
     registration: ClientRegistration,
 }
 
-type Registry = Arc<Mutex<HashMap<u32, RegistryEntry>>>;
+type Registry = Arc<Mutex<HashMap<(u32, i32), RegistryEntry>>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegistryError {
+    Poisoned,
+}
+
+impl std::fmt::Display for RegistryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Poisoned => write!(
+                formatter,
+                "Window Manager registration registry is poisoned"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RegistryError {}
 
 pub struct WindowManagerHandle {
-    addr: SocketAddr,
+    socket_path: PathBuf,
+    socket_dev: u64,
+    socket_ino: u64,
     shutdown: Arc<AtomicBool>,
     accept_thread: Option<JoinHandle<()>>,
     registry: Registry,
 }
 
 impl WindowManagerHandle {
-    pub fn local_addr(&self) -> SocketAddr {
-        self.addr
+    pub fn socket_path(&self) -> &Path {
+        &self.socket_path
     }
 
-    pub fn registrations(&self) -> Vec<ClientRegistration> {
-        let Ok(registry) = self.registry.lock() else {
-            return Vec::new();
-        };
+    pub fn registrations(&self) -> Result<Vec<ClientRegistration>, RegistryError> {
+        let registry = self.registry.lock().map_err(|_| RegistryError::Poisoned)?;
 
         let mut registrations: Vec<_> = registry
             .values()
@@ -49,7 +71,7 @@ impl WindowManagerHandle {
             .collect();
 
         registrations.sort_by_key(|entry| entry.pid);
-        registrations
+        Ok(registrations)
     }
 }
 
@@ -60,14 +82,118 @@ impl Drop for WindowManagerHandle {
         if let Some(thread) = self.accept_thread.take() {
             let _ = thread.join();
         }
+
+        // 只删除本次 bind 创建的 socket inode。
+        remove_socket_if_owned(&self.socket_path, self.socket_dev, self.socket_ino);
     }
 }
 
-pub fn start(bind_addr: SocketAddr) -> io::Result<WindowManagerHandle> {
-    let listener = TcpListener::bind(bind_addr)?;
-    listener.set_nonblocking(true)?;
+fn remove_socket_if_owned(path: &Path, dev: u64, ino: u64) {
+    use std::os::unix::fs::FileTypeExt;
 
-    let addr = listener.local_addr()?;
+    if let Ok(metadata) = fs::symlink_metadata(path) {
+        if metadata.file_type().is_socket() && metadata.dev() == dev && metadata.ino() == ino {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+fn private_runtime_dir() -> io::Result<PathBuf> {
+    let uid = unsafe { libc::getuid() };
+    let dir = PathBuf::from(format!("/tmp/jvm-combiner-{uid}"));
+
+    match fs::DirBuilder::new().mode(0o700).create(&dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+
+    let metadata = fs::symlink_metadata(&dir)?;
+
+    if !metadata.file_type().is_dir() || metadata.uid() != uid || metadata.mode() & 0o777 != 0o700 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Window Manager runtime directory is not private",
+        ));
+    }
+
+    Ok(dir)
+}
+
+pub fn default_socket_path() -> io::Result<PathBuf> {
+    let dir = private_runtime_dir()?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_nanos();
+
+    Ok(dir.join(format!("wm-{}-{timestamp}.sock", std::process::id())))
+}
+
+pub fn start(socket_path: &Path) -> io::Result<WindowManagerHandle> {
+    if socket_path.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AddrInUse,
+            "Window Manager socket path already exists; refusing to replace it",
+        ));
+    }
+
+    let parent = socket_path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "socket path has no parent"))?;
+
+    let parent_metadata = fs::symlink_metadata(parent)?;
+    let uid = unsafe { libc::getuid() };
+
+    if !parent_metadata.file_type().is_dir()
+        || parent_metadata.uid() != uid
+        || parent_metadata.mode() & 0o777 != 0o700
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "socket parent directory must be owned by current user with mode 0700",
+        ));
+    }
+
+    let listener = UnixListener::bind(socket_path)?;
+
+    // 立即记录本次 bind 创建的 socket inode。
+    // 后续清理只能删除这个 inode，不能盲目删除路径。
+    let metadata = match fs::symlink_metadata(socket_path) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            drop(listener);
+            return Err(error);
+        }
+    };
+
+    {
+        use std::os::unix::fs::FileTypeExt;
+
+        if !metadata.file_type().is_socket() {
+            drop(listener);
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "bound socket path is no longer a socket",
+            ));
+        }
+    }
+
+    let socket_dev = metadata.dev();
+    let socket_ino = metadata.ino();
+
+    let setup_result = (|| {
+        fs::set_permissions(socket_path, fs::Permissions::from_mode(0o600))?;
+        listener.set_nonblocking(true)?;
+        Ok::<(), io::Error>(())
+    })();
+
+    if let Err(error) = setup_result {
+        drop(listener);
+        remove_socket_if_owned(socket_path, socket_dev, socket_ino);
+        return Err(error);
+    }
+
     let shutdown = Arc::new(AtomicBool::new(false));
     let registry: Registry = Arc::new(Mutex::new(HashMap::new()));
     let next_connection_id = Arc::new(AtomicU64::new(1));
@@ -76,10 +202,10 @@ pub fn start(bind_addr: SocketAddr) -> io::Result<WindowManagerHandle> {
     let thread_registry = Arc::clone(&registry);
     let thread_connection_id = Arc::clone(&next_connection_id);
 
-    let accept_thread = thread::Builder::new()
+    let accept_thread = match thread::Builder::new()
         .name("window-manager-accept".to_owned())
         .spawn(move || {
-            let mut clients: Vec<(TcpStream, JoinHandle<()>)> = Vec::new();
+            let mut clients: Vec<(UnixStream, JoinHandle<()>)> = Vec::new();
 
             while !thread_shutdown.load(Ordering::Acquire) {
                 let mut index = 0;
@@ -94,16 +220,20 @@ pub fn start(bind_addr: SocketAddr) -> io::Result<WindowManagerHandle> {
                 }
 
                 match listener.accept() {
-                    Ok((stream, _peer)) => {
-                        let connection_id =
-                            thread_connection_id.fetch_add(1, Ordering::Relaxed);
+                    Ok((stream, _)) => {
+                        if let Err(error) = stream.set_nonblocking(false) {
+                            eprintln!(
+                                "[WindowManager] failed to set accepted socket blocking mode: {error}"
+                            );
+                            continue;
+                        }
+
+                        let connection_id = thread_connection_id.fetch_add(1, Ordering::Relaxed);
 
                         let shutdown_stream = match stream.try_clone() {
                             Ok(stream) => stream,
                             Err(error) => {
-                                eprintln!(
-                                    "[WindowManager] failed to clone client socket connection_id={connection_id}: {error}"
-                                );
+                                eprintln!("[WindowManager] socket clone failed: {error}");
                                 continue;
                             }
                         };
@@ -111,7 +241,7 @@ pub fn start(bind_addr: SocketAddr) -> io::Result<WindowManagerHandle> {
                         let client_registry = Arc::clone(&thread_registry);
                         let client_shutdown = Arc::clone(&thread_shutdown);
 
-                        let spawn_result = thread::Builder::new()
+                        match thread::Builder::new()
                             .name(format!("window-manager-client-{connection_id}"))
                             .spawn(move || {
                                 handle_client(
@@ -120,16 +250,12 @@ pub fn start(bind_addr: SocketAddr) -> io::Result<WindowManagerHandle> {
                                     client_registry,
                                     client_shutdown,
                                 );
-                            });
-
-                        match spawn_result {
+                            }) {
                             Ok(client_thread) => {
                                 clients.push((shutdown_stream, client_thread));
                             }
                             Err(error) => {
-                                eprintln!(
-                                    "[WindowManager] client thread spawn failed connection_id={connection_id}: {error}"
-                                );
+                                eprintln!("[WindowManager] client thread spawn failed: {error}");
                             }
                         }
                     }
@@ -145,28 +271,29 @@ pub fn start(bind_addr: SocketAddr) -> io::Result<WindowManagerHandle> {
             }
 
             for (stream, _) in &clients {
-                let _ = stream.shutdown(Shutdown::Both);
+                let _ = stream.shutdown(std::net::Shutdown::Both);
             }
 
             for (_, client_thread) in clients {
                 let _ = client_thread.join();
             }
-        })?;
+        }) {
+        Ok(thread) => thread,
+        Err(error) => {
+            remove_socket_if_owned(socket_path, socket_dev, socket_ino);
+            return Err(error);
+        }
+    };
 
     Ok(WindowManagerHandle {
-        addr,
+        socket_path: socket_path.to_path_buf(),
+        socket_dev,
+        socket_ino,
         shutdown,
         accept_thread: Some(accept_thread),
         registry,
     })
 }
-
-pub fn default_bind_addr() -> SocketAddr {
-    DEFAULT_BIND_ADDR
-        .parse()
-        .expect("DEFAULT_BIND_ADDR must be a valid socket address")
-}
-
 fn validate_registration(value: &Value) -> Result<ClientRegistration, String> {
     if value.get("type").and_then(Value::as_str) != Some("register") {
         return Err("expected type=register".to_owned());
@@ -214,47 +341,82 @@ fn validate_registration(value: &Value) -> Result<ClientRegistration, String> {
 }
 
 fn handle_client(
-    stream: TcpStream,
+    stream: UnixStream,
     connection_id: u64,
     registry: Registry,
     shutdown: Arc<AtomicBool>,
 ) {
-    if let Err(error) = stream.set_nonblocking(false) {
-        eprintln!(
-            "[WindowManager] failed to set blocking mode connection_id={connection_id}: {error}"
-        );
-        return;
-    }
+    eprintln!("[WindowManager][DEBUG] connection_id={connection_id}: handler started");
+
+    // 必须先认证内核 peer，之后才读取注册 JSON。
+    let identity = match window_peer::peer_identity(&stream) {
+        Ok(identity) => {
+            eprintln!(
+                "[WindowManager][DEBUG] connection_id={connection_id}: peer authenticated pid={} pid_version={}",
+                identity.pid, identity.pid_version
+            );
+            identity
+        }
+        Err(error) => {
+            eprintln!(
+                "[WindowManager] peer authentication failed connection_id={connection_id}: {error}"
+            );
+            return;
+        }
+    };
 
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
 
     let mut reader = BufReader::new(stream);
-
     let mut line = String::new();
-    let response = match reader.read_line(&mut line) {
+
+    let read_result = reader.read_line(&mut line);
+
+    match &read_result {
+        Ok(0) => eprintln!(
+            "[WindowManager][DEBUG] connection_id={connection_id}: EOF before registration"
+        ),
+        Ok(bytes_read) => eprintln!(
+            "[WindowManager][DEBUG] connection_id={connection_id}: read {bytes_read} bytes: {}",
+            line.trim_end()
+        ),
+        Err(error) => eprintln!(
+            "[WindowManager][DEBUG] connection_id={connection_id}: registration read failed: {error}"
+        ),
+    }
+
+    let response = match read_result {
         Ok(0) => return,
         Ok(_) => match serde_json::from_str::<Value>(&line) {
             Ok(value) => match validate_registration(&value) {
+                Ok(registration) if registration.pid != identity.pid => {
+                    json!({
+                        "type": "registered",
+                        "accepted": false,
+                        "error": "kernel peer PID mismatch"
+                    })
+                }
                 Ok(registration) => {
-                    let pid = registration.pid;
+                    let key = (identity.pid, identity.pid_version);
 
-                    let inserted = registry.lock().map(|mut entries| {
-                        entries.insert(
-                            pid,
-                            RegistryEntry {
-                                connection_id,
-                                registration,
-                            },
-                        );
-                    });
+                    match registry.lock() {
+                        Ok(mut entries) => {
+                            entries.insert(
+                                key,
+                                RegistryEntry {
+                                    connection_id,
+                                    pid_version: identity.pid_version,
+                                    registration,
+                                },
+                            );
 
-                    match inserted {
-                        Ok(()) => json!({
-                            "type": "registered",
-                            "accepted": true,
-                            "pid": pid
-                        }),
+                            json!({
+                                "type": "registered",
+                                "accepted": true,
+                                "pid": identity.pid
+                            })
+                        }
                         Err(_) => json!({
                             "type": "registered",
                             "accepted": false,
@@ -277,17 +439,25 @@ fn handle_client(
         Err(_) => return,
     };
 
-    let registered_pid = response
-        .get("pid")
-        .and_then(Value::as_u64)
-        .and_then(|pid| u32::try_from(pid).ok());
+    let registered = response["accepted"].as_bool() == Some(true);
+    let key = (identity.pid, identity.pid_version);
 
-    let response_sent = {
-        let stream = reader.get_mut();
-        writeln!(stream, "{response}").is_ok()
+    let response_sent = match writeln!(reader.get_mut(), "{response}") {
+        Ok(()) => {
+            eprintln!(
+                "[WindowManager][DEBUG] connection_id={connection_id}: response sent: {response}"
+            );
+            true
+        }
+        Err(error) => {
+            eprintln!(
+                "[WindowManager][DEBUG] connection_id={connection_id}: response write failed: {error}"
+            );
+            false
+        }
     };
 
-    if response_sent {
+    if response_sent && registered {
         let mut buffer = [0_u8; 256];
 
         while !shutdown.load(Ordering::Acquire) {
@@ -304,21 +474,36 @@ fn handle_client(
         }
     }
 
-    if let (Some(pid), Ok(mut entries)) = (registered_pid, registry.lock()) {
-        if let Some(entry) = entries.get(&pid) {
-            if entry.connection_id == connection_id {
-                entries.remove(&pid);
+    if registered {
+        match registry.lock() {
+            Ok(mut entries) => {
+                let should_remove = entries
+                    .get(&key)
+                    .map(|entry| {
+                        entry.connection_id == connection_id
+                            && entry.pid_version == identity.pid_version
+                    })
+                    .unwrap_or(false);
+
+                if should_remove {
+                    entries.remove(&key);
+                }
+            }
+            Err(_) => {
+                eprintln!(
+                    "[WindowManager] registry poisoned during cleanup pid={}",
+                    identity.pid
+                );
             }
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     use std::io::{BufRead, BufReader, Read, Write};
-    use std::net::TcpStream;
+    use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
     use std::thread;
@@ -327,18 +512,37 @@ mod tests {
     fn valid_registration() -> Value {
         json!({
             "type": "register",
-            "pid": 12345,
+            "pid": std::process::id(),
             "loader": "fabric",
             "role": "minecraft_client",
             "protocol": 1
         })
     }
 
+    fn start_test_manager() -> WindowManagerHandle {
+        start(&default_socket_path().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn registrations_returns_error_when_registry_is_poisoned() {
+        let manager = start_test_manager();
+        let registry = Arc::clone(&manager.registry);
+
+        let panic_result = thread::spawn(move || {
+            let _guard = registry.lock().unwrap();
+            panic!("intentional registry poison for regression test");
+        })
+        .join();
+
+        assert!(panic_result.is_err());
+        assert_eq!(manager.registrations(), Err(RegistryError::Poisoned));
+    }
+
     #[test]
     fn accepts_valid_registration() {
         let registration = validate_registration(&valid_registration()).unwrap();
 
-        assert_eq!(registration.pid, 12345);
+        assert_eq!(registration.pid, std::process::id());
         assert_eq!(registration.loader, "fabric");
         assert_eq!(registration.role, "minecraft_client");
         assert_eq!(registration.protocol, 1);
@@ -370,9 +574,9 @@ mod tests {
 
     #[test]
     fn newer_connection_replaces_same_pid_without_stale_cleanup() {
-        let manager = start("127.0.0.1:0".parse().unwrap()).unwrap();
+        let manager = start_test_manager();
 
-        let mut first = TcpStream::connect(manager.local_addr()).unwrap();
+        let mut first = UnixStream::connect(manager.socket_path()).unwrap();
         first
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
@@ -387,7 +591,7 @@ mod tests {
         let response: Value = serde_json::from_str(&response).unwrap();
         assert_eq!(response["accepted"], true);
 
-        let mut second = TcpStream::connect(manager.local_addr()).unwrap();
+        let mut second = UnixStream::connect(manager.socket_path()).unwrap();
         second
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
@@ -408,6 +612,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while manager
             .registrations()
+            .expect("registry should be readable")
             .first()
             .map(|entry| entry.loader.as_str())
             != Some("neoforge")
@@ -416,32 +621,66 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
 
-        assert_eq!(manager.registrations().len(), 1);
-        assert_eq!(manager.registrations()[0].loader, "neoforge");
+        assert_eq!(
+            manager
+                .registrations()
+                .expect("registry should be readable")
+                .len(),
+            1
+        );
+        assert_eq!(
+            manager
+                .registrations()
+                .expect("registry should be readable")[0]
+                .loader,
+            "neoforge"
+        );
 
         drop(first);
 
         thread::sleep(Duration::from_millis(100));
 
-        assert_eq!(manager.registrations().len(), 1);
-        assert_eq!(manager.registrations()[0].loader, "neoforge");
+        assert_eq!(
+            manager
+                .registrations()
+                .expect("registry should be readable")
+                .len(),
+            1
+        );
+        assert_eq!(
+            manager
+                .registrations()
+                .expect("registry should be readable")[0]
+                .loader,
+            "neoforge"
+        );
 
         drop(second);
 
         let deadline = Instant::now() + Duration::from_secs(2);
-        while !manager.registrations().is_empty() && Instant::now() < deadline {
+        while !manager
+            .registrations()
+            .expect("registry should be readable")
+            .is_empty()
+            && Instant::now() < deadline
+        {
             thread::sleep(Duration::from_millis(10));
         }
 
-        assert!(manager.registrations().is_empty());
+        assert!(
+            manager
+                .registrations()
+                .expect("registry should be readable")
+                .is_empty()
+        );
     }
 
     #[test]
     fn shutdown_closes_clients_and_cleans_registry() {
-        let manager = start("127.0.0.1:0".parse().unwrap()).unwrap();
+        let manager = start_test_manager();
         let registry = Arc::clone(&manager.registry);
 
-        let mut client = TcpStream::connect(manager.local_addr()).unwrap();
+        let mut client = UnixStream::connect(manager.socket_path()).unwrap();
         client
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
@@ -465,7 +704,7 @@ mod tests {
 
         // Keep a second client connected without sending its registration.
         // Its server-side thread will be blocked in read_line().
-        let mut pending_client = TcpStream::connect(manager.local_addr()).unwrap();
+        let mut pending_client = UnixStream::connect(manager.socket_path()).unwrap();
         pending_client
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
@@ -488,10 +727,10 @@ mod tests {
     }
 
     #[test]
-    fn tcp_service_rejects_invalid_registration_with_error_response() {
-        let manager = start("127.0.0.1:0".parse().unwrap()).unwrap();
+    fn unix_service_rejects_invalid_registration_with_error_response() {
+        let manager = start_test_manager();
 
-        let mut stream = TcpStream::connect(manager.local_addr()).unwrap();
+        let mut stream = UnixStream::connect(manager.socket_path()).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
@@ -512,15 +751,20 @@ mod tests {
         assert_eq!(response["accepted"], false);
         assert_eq!(response["error"], "unsupported loader");
         assert!(response.get("pid").is_none());
-        assert!(manager.registrations().is_empty());
+        assert!(
+            manager
+                .registrations()
+                .expect("registry should be readable")
+                .is_empty()
+        );
 
         drop(stream);
     }
 
     #[test]
-    fn tcp_service_registers_and_removes_client() {
-        let manager = start("127.0.0.1:0".parse().unwrap()).unwrap();
-        let mut stream = TcpStream::connect(manager.local_addr()).unwrap();
+    fn unix_service_registers_and_removes_client() {
+        let manager = start_test_manager();
+        let mut stream = UnixStream::connect(manager.socket_path()).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
@@ -535,25 +779,52 @@ mod tests {
         let response: Value = serde_json::from_str(&response).unwrap();
         assert_eq!(response["type"], "registered");
         assert_eq!(response["accepted"], true);
-        assert_eq!(response["pid"], 12345);
+        assert_eq!(response["pid"], std::process::id());
         assert!(response.get("error").is_none());
 
         let deadline = Instant::now() + Duration::from_secs(2);
-        while manager.registrations().is_empty() && Instant::now() < deadline {
+        while manager
+            .registrations()
+            .expect("registry should be readable")
+            .is_empty()
+            && Instant::now() < deadline
+        {
             thread::sleep(Duration::from_millis(10));
         }
 
-        assert_eq!(manager.registrations().len(), 1);
-        assert_eq!(manager.registrations()[0].pid, 12345);
+        assert_eq!(
+            manager
+                .registrations()
+                .expect("registry should be readable")
+                .len(),
+            1
+        );
+        assert_eq!(
+            manager
+                .registrations()
+                .expect("registry should be readable")[0]
+                .pid,
+            std::process::id()
+        );
 
         drop(stream);
 
         let deadline = Instant::now() + Duration::from_secs(2);
-        while !manager.registrations().is_empty() && Instant::now() < deadline {
+        while !manager
+            .registrations()
+            .expect("registry should be readable")
+            .is_empty()
+            && Instant::now() < deadline
+        {
             thread::sleep(Duration::from_millis(10));
         }
 
-        assert!(manager.registrations().is_empty());
+        assert!(
+            manager
+                .registrations()
+                .expect("registry should be readable")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -604,10 +875,8 @@ public final class WindowBridgeRustHarness {
             "Java integration harness compilation failed"
         );
 
-        let manager =
-            start("127.0.0.1:0".parse().unwrap()).expect("failed to start Rust Window Manager");
-
-        let address = manager.local_addr().to_string();
+        let manager = start_test_manager();
+        let socket_path = manager.socket_path().to_string_lossy().into_owned();
 
         for loader in ["fabric", "forge", "neoforge"] {
             let mut child = Command::new("java")
@@ -615,7 +884,7 @@ public final class WindowBridgeRustHarness {
                 .arg("-cp")
                 .arg(&harness_dir)
                 .arg("WindowBridgeRustHarness")
-                .env("JVM_COMBINER_WINDOW_ADDR", &address)
+                .env("JVM_COMBINER_WINDOW_SOCKET", &socket_path)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
@@ -629,6 +898,7 @@ public final class WindowBridgeRustHarness {
             let registration = loop {
                 if let Some(registration) = manager
                     .registrations()
+                    .expect("registry should be readable")
                     .into_iter()
                     .find(|entry| entry.pid == pid)
                 {
@@ -657,7 +927,11 @@ public final class WindowBridgeRustHarness {
 
             let cleanup_deadline = Instant::now() + Duration::from_secs(5);
 
-            while manager.registrations().iter().any(|entry| entry.pid == pid)
+            while manager
+                .registrations()
+                .expect("registry should be readable")
+                .iter()
+                .any(|entry| entry.pid == pid)
                 && Instant::now() < cleanup_deadline
             {
                 thread::sleep(Duration::from_millis(20));
@@ -676,7 +950,11 @@ public final class WindowBridgeRustHarness {
             assert_eq!(registration.protocol, PROTOCOL_VERSION);
 
             assert!(
-                !manager.registrations().iter().any(|entry| entry.pid == pid),
+                !manager
+                    .registrations()
+                    .expect("registry should be readable")
+                    .iter()
+                    .any(|entry| entry.pid == pid),
                 "Rust registry did not remove disconnected Java PID {pid}"
             );
         }

@@ -6,6 +6,7 @@ mod window_dry_run;
 mod window_integration;
 mod window_layout;
 mod window_manager;
+mod window_peer;
 mod window_transaction;
 mod window_transaction_adapter;
 
@@ -3508,37 +3509,46 @@ fn main() {
         let sandbox_dir = current_dir.join("sandbox");
         let window_runtime = window_integration::WindowRuntime::start_local(&current_dir)
             .expect("[WindowIntegration] Fusion 无法启动 Window Manager");
-        let window_addr = window_runtime.address_string();
+        let window_socket_path = window_runtime.socket_path_string();
 
-        // 启动 Fabric
-        let _sandbox_fab = sandbox_dir.clone();
-        let fab_window_addr = window_addr.clone();
+        // 直接启动当前 Rust 可执行文件，避免 cargo run 引入中间进程。
+        let executable = env::current_exe().expect("[Fusion] 无法获取当前 Rust 可执行文件路径");
 
-        let _fab_thread = thread::spawn(move || {
-            let mut cmd = std::process::Command::new("cargo");
+        // Fabric：Rust 子进程内嵌 JVM，Bridge PID 应对应此 Rust 进程。
+        let mut fabric_cmd = std::process::Command::new(&executable);
+        fabric_cmd
+            .arg("--mode")
+            .arg("fabric")
+            .current_dir(&current_dir)
+            .env("JVM_COMBINER_BUS_EXTERNAL", "1")
+            .env("JVM_COMBINER_WINDOW_EXTERNAL", "1")
+            .env("JVM_COMBINER_WINDOW_SOCKET", &window_socket_path);
 
-            // Agent 由 Fabric JVM 的 jvm_args 显式注入。
-            // 不要再通过 JAVA_TOOL_OPTIONS 注入第二次。
-            cmd.args(&["run", "--", "--mode", "fabric"]);
+        let mut fabric_child = Some(
+            fabric_cmd
+                .spawn()
+                .expect("[Fusion] 无法启动 Fabric Rust 子进程"),
+        );
+        let fabric_pid = fabric_child.as_ref().unwrap().id();
+        eprintln!("[Fusion] Fabric Rust child started: pid={fabric_pid}");
 
-            cmd.env("JVM_COMBINER_BUS_EXTERNAL", "1");
-            cmd.env("JVM_COMBINER_WINDOW_EXTERNAL", "1");
-            cmd.env("JVM_COMBINER_WINDOW_ADDR", fab_window_addr);
-            cmd.status().unwrap();
-        });
+        // NeoForge：Rust 子进程再启动独立 Java 进程。
+        let mut neoforge_cmd = std::process::Command::new(&executable);
+        neoforge_cmd
+            .arg("--mode")
+            .arg("neoforge")
+            .current_dir(&current_dir)
+            .env("JVM_COMBINER_BUS_EXTERNAL", "1")
+            .env("JVM_COMBINER_WINDOW_EXTERNAL", "1")
+            .env("JVM_COMBINER_WINDOW_SOCKET", &window_socket_path);
 
-        // 启动 NeoForge
-        let _sandbox_nf = sandbox_dir.clone();
-        let nf_window_addr = window_addr.clone();
-        let _nf_thread = thread::spawn(move || {
-            let mut cmd = std::process::Command::new("cargo");
-
-            cmd.args(&["run", "--", "--mode", "neoforge"]);
-            cmd.env("JVM_COMBINER_BUS_EXTERNAL", "1");
-            cmd.env("JVM_COMBINER_WINDOW_EXTERNAL", "1");
-            cmd.env("JVM_COMBINER_WINDOW_ADDR", nf_window_addr);
-            cmd.status().unwrap();
-        });
+        let mut neoforge_child = Some(
+            neoforge_cmd
+                .spawn()
+                .expect("[Fusion] 无法启动 NeoForge Rust 子进程"),
+        );
+        let neoforge_pid = neoforge_child.as_ref().unwrap().id();
+        eprintln!("[Fusion] NeoForge Rust child started: pid={neoforge_pid}");
 
         // Read-only window monitoring. The Fusion parent owns the
         // Window Manager and is therefore the authoritative registry reader.
@@ -3546,11 +3556,63 @@ fn main() {
         let mut discovery_failed = false;
 
         loop {
+            // 回收已退出的 Rust 子进程，父进程持续持有运行中子进程的句柄。
+            let fabric_exit = match fabric_child.as_mut() {
+                Some(child) => match child.try_wait() {
+                    Ok(Some(status)) => Some(status.to_string()),
+                    Ok(None) => None,
+                    Err(error) => {
+                        eprintln!("[Fusion] Fabric child wait failed: {error}");
+                        None
+                    }
+                },
+                None => None,
+            };
+
+            if let Some(status) = fabric_exit {
+                eprintln!("[Fusion] Fabric child exited: {status}");
+                fabric_child = None;
+            }
+
+            let neoforge_exit = match neoforge_child.as_mut() {
+                Some(child) => match child.try_wait() {
+                    Ok(Some(status)) => Some(status.to_string()),
+                    Ok(None) => None,
+                    Err(error) => {
+                        eprintln!("[Fusion] NeoForge child wait failed: {error}");
+                        None
+                    }
+                },
+                None => None,
+            };
+
+            if let Some(status) = neoforge_exit {
+                eprintln!("[Fusion] NeoForge child exited: {status}");
+                neoforge_child = None;
+            }
+
             match window_discovery::discover_windows() {
                 Ok(windows) => {
                     discovery_failed = false;
 
-                    let registrations = window_runtime.registrations();
+                    let registrations = match window_runtime.registrations() {
+                        Ok(Some(registrations)) => registrations,
+                        Ok(None) => {
+                            eprintln!(
+                                "[WindowDiscovery] Registry unavailable: this process does not own the Window Manager"
+                            );
+                            thread::sleep(std::time::Duration::from_secs(2));
+                            continue;
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "[WindowDiscovery] Registry read failed; skipping window association: {error}"
+                            );
+                            thread::sleep(std::time::Duration::from_secs(2));
+                            continue;
+                        }
+                    };
+
                     let mut registered_windows =
                         window_discovery::associate_windows(windows, &registrations);
 

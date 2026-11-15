@@ -109,7 +109,9 @@ Tested primarily on macOS with Apple Silicon and Temurin JDK 21.
 - [x] Rust DataBus source rejects non-Fabric registered clients publishing protected player and monster state messages.
 - [x] A Rust Window Manager and Java bridge register Fabric, Forge, and NeoForge JVM processes; tests cover registration, reconnection, rejection, and PID-based window association.
 - [x] macOS read-only on-screen window discovery and an optional read-only Accessibility API probe are implemented. The probe requires the user's macOS Accessibility permission.
-- [x] Rust tests pass (36 tests), and the Java bridge harness passes registration, reconnect, and rejection cases for all three loader labels.
+- [x] Fusion directly owns the NeoForge Java child; only child PIDs confirmed live in the current supervision pass can authorize window-registration association.
+- [x] A read-only Control UDS dry-run path carries a server execution deadline through window discovery and AX inspection, with bounded AX messaging and target-title filtering.
+- [x] All 216 Rust binary unit tests pass, including Control, dry-run deadline, window discovery, and command-guard coverage; Java bridge tests cover registration, reconnect, and rejection for all three loader labels.
 
 ### Currently in progress
 
@@ -122,8 +124,14 @@ Tested primarily on macOS with Apple Silicon and Temurin JDK 21.
 - [ ] Improve synchronization behavior under latency and packet loss.
 - [ ] Rebuild and runtime-test the committed hostile-mob receiver, mirror, and ACK/retry implementation.
 - [ ] Implement reliable hostile-mob removal messages and verify reconnect/world-transition recovery.
-- [ ] Resolve and live-validate the macOS window mutation path. Position/size transactions and guarded rollback exist in Rust source, but a real operation partially applied and rollback did not confirm recovery; do not treat it as reliable yet.
+- [ ] Validate read-only window discovery, Control UDS behavior, and Accessibility permission handling against live Minecraft windows.
+- [ ] Complete trusted process-instance identity and transaction authorization review. Mutation and rollback code remains staged behind the fail-closed `WindowMutationDisabled` gate; a previous partial-apply/failed-rollback incident remains unresolved.
 - [ ] Investigate embedding/composition and Windows/Linux window support.
+
+The Control client applies a 2-second absolute budget to post-connect request I/O;
+the standard Unix socket `connect()` call itself is not bounded by that timeout.
+Server-side dry-run work has its own 5-second deadline. Deadline checks stop
+subsequent stages but cannot cancel an AX system call already in progress.
 
 **Current authority model:** Fabric is the sole authoritative source of player
 movement state. NeoForge receives Fabric state and maintains a remote-player

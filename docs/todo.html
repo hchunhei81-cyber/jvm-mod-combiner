@@ -73,11 +73,7 @@
         </div>
 
         <div class="doc-callout">
-          <strong data-i18n="statusLabel">Current status:</strong> <span data-i18n="statusText">The startup, Agent, DataBus, and
-          initial player-mirror foundation is verified as a prototype. The Rust
-          source already rejects protected player/monster state messages from
-          non-Fabric registrations. Next: package the Java Agent and runtime-test
-          the rejection path, registration identity, and reconnect behavior.</span>
+          <strong data-i18n="statusLabel">Current status:</strong> <span data-i18n="statusText">Fusion directly owns the NeoForge Java child, and a read-only Control UDS dry-run carries its server deadline through AX inspection. Live Minecraft window validation is pending; the mutation gate remains closed. Next: package the Java Agent and runtime-test sender authorization and reconnect behavior.</span>
         </div>
 
         <section class="doc-group" aria-labelledby="done-title">
@@ -149,20 +145,24 @@
         </section>
 
         <section class="doc-group" aria-labelledby="window-title">
-          <span class="doc-status open" data-i18n="windowStatus">Transaction in source · recovery unresolved</span>
-          <h3 id="window-title" data-i18n="windowTitle">macOS window transaction and recovery</h3>
+          <span class="doc-status open" data-i18n="windowStatus">Read-only Control path implemented · mutation gate closed</span>
+          <h3 id="window-title" data-i18n="windowTitle">macOS read-only window control and recovery boundary</h3>
           <p data-i18n="windowIntro">
-            A Rust Window Manager and Java bridge register loader JVMs and
-            associate macOS windows by PID. Position/size transactions exist
-            in source, but a real partial mutation was not successfully rolled
-            back; live recovery remains unverified.
+            Fusion owns the NeoForge Java child directly. A read-only Control
+            UDS dry-run checks live child identity and carries deadlines through
+            AX inspection. Transaction and rollback code remains staged behind
+            a closed mutation gate; a previous partial mutation still has no
+            confirmed recovery.
           </p>
           <ul class="doc-checks">
             <li><input type="checkbox" checked disabled /><span data-i18n="window1">Test loader registration, reconnection, rejection, and client cleanup</span></li>
             <li><input type="checkbox" checked disabled /><span data-i18n="window2">Discover and associate on-screen macOS windows by PID (implementation/tests)</span></li>
-            <li><input type="checkbox" disabled /><span data-i18n="window3">Review identity checks and preserve specific errors across every mutation/rollback stage</span></li>
-            <li><input type="checkbox" disabled /><span data-i18n="window4">Add failure-injection tests; validate safe recovery with live Minecraft windows only after review</span></li>
-            <li><input type="checkbox" disabled /><span data-i18n="window5">Investigate embedding/composition and Windows/Linux support separately</span></li>
+            <li><input type="checkbox" checked disabled /><span data-i18n="window3">Fusion owns NeoForge Java directly; association uses child PIDs confirmed live in the current pass</span></li>
+            <li><input type="checkbox" checked disabled /><span data-i18n="window4">Read-only Control UDS dry-run has server/client budgets and deadline-aware AX inspection</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="window5">Validate read-only discovery, Control behavior, and macOS Accessibility permission with live Minecraft windows</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="window6">Review trusted process-instance identity and transaction authorization before enabling any write</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="window7">Resolve the partial-apply/failed-rollback incident; keep the mutation gate closed meanwhile</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="window8">Investigate embedding/composition and Windows/Linux support separately</span></li>
           </ul>
         </section>
 

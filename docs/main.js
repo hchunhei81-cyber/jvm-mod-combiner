@@ -47,7 +47,7 @@
       routingVerified: "基础路由已验证",
       playerStateVerified: "状态读取与发布已验证",
       pocNeedsStability: "概念验证完成 · 持续稳定中",
-      windowPrototypeStatus: "原型已实现 · 真实环境验证待完成",
+      windowPrototypeStatus: "只读控制已实现 · 真实环境验证待完成",
       diagnosticsVerified: "基础诊断已验证",
       noResults: "没有找到匹配的功能。",
       f1Title: "Rust 启动内核",
@@ -65,7 +65,7 @@
       f6Desc: "输出 Minecraft 实例字段、类型和值，辅助分析混淆环境。",
       f7Title: "窗口注册与观察",
       f7Desc:
-        "Java Bridge 注册 Loader JVM，Rust 按 PID 关联窗口；macOS 窗口发现和辅助功能检查为只读，不会操作窗口。",
+        "Fusion 直接持有 NeoForge Java 子进程；只读 Control UDS dry-run 以存活子进程身份关联窗口并对 AX 查询实施 deadline。窗口修改 Gate 仍关闭。",
       architectureTitle: "系统架构",
       architectureDesc: "选择一个模块，查看它在整个启动和同步流程中的职责。",
       archRust: "依赖解析 · JNI",
@@ -166,7 +166,7 @@
       routingVerified: "Basic routing verified",
       playerStateVerified: "State extraction and publishing verified",
       pocNeedsStability: "PoC verified · Stabilization ongoing",
-      windowPrototypeStatus: "Prototype implemented · live validation pending",
+      windowPrototypeStatus: "Read-only control implemented · live validation pending",
       diagnosticsVerified: "Basic diagnostics verified",
       noResults: "No matching features found.",
       f1Title: "Rust launcher kernel",
@@ -189,7 +189,7 @@
         "Inspects Minecraft instance fields, types, and values to help analyze obfuscated environments.",
       f7Title: "Window registration and observation",
       f7Desc:
-        "The Java bridge registers loader JVMs and Rust associates windows by PID; macOS discovery and Accessibility inspection are read-only and do not control windows.",
+        "Fusion directly owns the NeoForge Java child; the read-only Control UDS dry-run associates windows only with confirmed live child identities and applies deadlines to AX inspection. The mutation gate remains closed.",
       architectureTitle: "System architecture",
       architectureDesc:
         "Select a module to inspect its role in the launch and synchronization pipeline.",

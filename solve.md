@@ -305,11 +305,22 @@ A solution that works on one machine may fail on another GPU or operating system
 Start with ordinary operating-system window composition.
 
 **Current prototype status:** The Rust Window Manager and Java bridge register
-Fabric, Forge, and NeoForge JVM processes; tests cover registration,
-reconnection, rejection, and PID-based association. macOS window discovery and
-Accessibility inspection are implemented, and Rust source now includes
-transactional position/size changes. A real operation partially applied and
-could not confirm rollback, so safe live recovery remains unresolved. Window
+Fabric, Forge, and NeoForge JVM processes. Fusion directly owns the NeoForge
+Java child, and only registrations matching a child confirmed live during the
+current supervision pass are candidates for association; polling failures fail
+closed. macOS discovery and Accessibility inspection feed a read-only Control
+UDS dry-run path. A 5-second server deadline is propagated through dry-run and
+AX inspection; the client has a 2-second post-connect I/O budget, and each AX
+message uses a 500 ms messaging timeout. Deadline checks cannot cancel an AX
+call already in progress, and the standard Unix socket connect call is not
+bounded by the client timeout. The 32-window cap and target-title filtering
+reduce inspection work without changing the full inspection path.
+
+Position/size transaction and rollback code is retained as staged
+infrastructure, but the mutation gate remains closed and rejects writes. A
+previous real operation partially applied and did not confirm rollback, so
+safe live recovery remains unresolved. The read-only path and source tests do
+not validate live Minecraft windows or macOS Accessibility behavior. Window
 embedding/composition and Windows/Linux discovery are not implemented.
 
 **1. Independent Client Windows**
@@ -692,13 +703,16 @@ consistency requirements, and failure behavior before implementation.
 
 ### Phase 5 — Improve Compatibility and Portability
 
-- [x] Add process registration, PID-based window association, macOS window
-      discovery/Accessibility inspection, and source-level position/size
-      transactions.
+- [x] Add process registration, live-child PID association, macOS read-only
+      discovery/Accessibility inspection, and a deadline-bounded read-only
+      Control UDS dry-run path.
+- [x] Keep the staged transaction/rollback infrastructure behind a closed
+      mutation gate; do not treat it as an enabled or verified write path.
 - [ ] Validate discovery and macOS permission handling with live Minecraft
       windows.
-- [ ] Review identity checks and diagnostics; resolve and live-validate the
-      partial-mutation/failed-rollback path before relying on window control.
+- [ ] Review trusted process-instance identity and transaction authorization;
+      resolve and live-validate the partial-mutation/failed-rollback path
+      before enabling any window mutation.
 - [ ] Define and implement window arrangement/embedding only after selecting
       the intended user experience.
 - [ ] Establish loader-specific adapter interfaces.

@@ -305,9 +305,18 @@ Linux 上的 `LD_PRELOAD`、macOS 上的 `DYLD_INSERT_LIBRARIES` 以及 Windows 
 应从普通的操作系统窗口合成开始。
 
 **当前原型状态：** Rust Window Manager 与 Java Bridge 可注册 Fabric、
-Forge 和 NeoForge JVM 进程；测试覆盖注册、重连、拒绝及按 PID 关联。
-macOS 窗口发现和 Accessibility 检查已实现，Rust 源码也已加入位置/尺寸
-事务。但一次真实操作部分生效，回滚未能确认成功，因此安全恢复仍未解决。
+Forge 和 NeoForge JVM 进程。Fusion 直接持有 NeoForge Java 子进程；只有
+当前监督轮次确认存活的子进程及对应注册才可成为关联候选，轮询错误会
+fail-closed。macOS 窗口发现和 Accessibility 检查接入只读 Control UDS
+dry-run 路径。5 秒服务端 deadline 会贯穿 dry-run 与 AX inspection；客户端
+连接后的读写预算为 2 秒，每条 AX 消息设置 500ms 超时。deadline 检查无法
+取消已经执行中的 AX 调用，标准 Unix socket `connect()` 也不受客户端超时
+约束。32 个窗口上限和目标标题过滤可减少查询，同时不改变完整 inspection
+路径。
+
+位置/尺寸事务与回滚代码作为暂存基础设施保留，但 Mutation Gate 仍关闭并
+拒绝写入。此前一次真实操作部分生效且未能确认回滚，因此安全恢复仍未解决。
+只读路径和源码测试不能证明真实 Minecraft 窗口或 macOS 辅助功能行为可靠。
 窗口嵌入/合成和 Windows/Linux 窗口发现尚未实现。
 
 **1. 独立客户端窗口**
@@ -652,11 +661,13 @@ Rust DataBus 源码已在消息路由边界强制执行单向状态策略。该�
 
 ### 阶段 5 — 提升兼容性和可移植性
 
-- [x] 添加进程注册、基于 PID 的窗口关联、macOS 窗口发现/
-      Accessibility 检查，以及源码级位置/尺寸事务。
+- [x] 添加进程注册、基于存活子进程 PID 的窗口关联、macOS 只读窗口发现/
+      Accessibility 检查，以及带 deadline 的只读 Control UDS dry-run。
+- [x] 将事务/回滚基础设施保持在关闭的 Mutation Gate 后；不把它描述为已启用
+      或已验证的写入路径。
 - [ ] 使用真实 Minecraft 窗口验证窗口发现和 macOS 权限流程。
-- [ ] 审查身份验证和错误诊断；在依赖窗口控制前解决并实测部分修改后的
-      回滚失败路径。
+- [ ] 审查可信进程实例身份与事务授权；在启用任何窗口修改前，解决并实测
+      部分修改后的回滚失败路径。
 - [ ] 确定预期用户体验后，再定义并实现窗口排列/嵌入。
 - [ ] 建立 Loader 专属适配器接口。
 - [ ] 实现基于能力的同步。

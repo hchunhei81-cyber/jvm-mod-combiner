@@ -78,13 +78,15 @@ Fabric is the sole authoritative player-state publisher. NeoForge operates as a 
 
 - [x] Register Fabric, Forge, and NeoForge JVM processes with a Rust Window Manager through a Java Agent.
 - [x] Test registration, reconnect, explicit rejection, and manager-side client cleanup.
-- [x] Associate macOS on-screen windows with registered processes by PID.
-- [x] Implement read-only macOS window discovery and a read-only Accessibility API probe.
-- [ ] Validate discovery and Accessibility permission handling against live Minecraft windows.
-- [x] Implement position/size changes as a recoverable transaction in Rust source.
-- [ ] Investigate the observed partial-apply/failed-rollback case; live recovery is not verified.
-- [ ] Preserve specific errors across forward matching and all rollback stages; reject ambiguous window identities.
-- [ ] Add failure-injection tests before further live mutation attempts.
+- [x] Let Fusion own the NeoForge Java child directly; associate registrations only with child PIDs confirmed live during the current supervision pass.
+- [x] Fail closed on child polling errors and clear stale monitoring snapshots.
+- [x] Implement read-only macOS window discovery, exact AX identity matching, target-title geometry filtering, a 32-window scan limit, and 500 ms AX messaging timeouts.
+- [x] Add a read-only Control UDS dry-run path with peer-identity checks, a 500 ms request-read budget, a 5-second server execution deadline, and deadline checks through dry-run and AX inspection.
+- [x] Bound client-side post-connect request I/O with a 2-second absolute deadline. The standard Unix socket `connect()` call itself is not covered by that timeout.
+- [x] Keep transaction and snapshot infrastructure staged; the public mutation gate remains closed and returns `WindowMutationDisabled`.
+- [ ] Validate read-only discovery, Control UDS behavior, and Accessibility permission handling against live Minecraft windows.
+- [ ] Complete trusted process-instance identity and transaction authorization review before considering any mutation path.
+- [ ] Resolve the observed partial-apply/failed-rollback incident and validate recovery separately; the current read-only path does not resolve it.
 - [ ] Define and test window arrangement/embedding UX separately from basic movement.
 - [ ] Add Windows and Linux support.
 
@@ -139,6 +141,9 @@ The committed Java source is an end-to-end implementation draft, not a verified 
 
 ### 9. Refactor the Rust Launcher
 
+- [x] Extract NeoForge Java command construction into a shared builder and let Fusion own the spawned Java child directly.
+- [x] Track Fabric and NeoForge children with fail-closed supervision; clean up owned children on startup and polling failures.
+
 - [ ] Rewrite remaining Python-based launcher operations in Rust.
   - Version metadata parsing.
   - Dependency discovery.
@@ -146,17 +151,8 @@ The committed Java source is an end-to-end implementation draft, not a verified 
   - Version and architecture filtering.
   - Dependency download and cache management.
 
-- [ ] Refactor `launch_neoforge_subprocess()`.
-  - Remove dependencies on external launch scripts where practical.
-  - Construct `--module-path` dynamically.
-  - Construct `-DlegacyClassPath` dynamically.
-  - Generate JVM arguments from version metadata.
-  - Keep platform-specific arguments separate from shared launch logic.
-
 - [ ] Improve process management.
-  - Track child JVM processes.
-  - Detect unexpected process termination.
-  - Shut down both sandboxes cleanly.
+  - Define graceful shutdown behavior when the Fusion parent itself is terminated.
   - Preserve useful logs when one sandbox crashes.
 
 - [ ] Organize build artifacts and repository structure.
@@ -314,6 +310,6 @@ Rust launcher, Fabric and NeoForge startup, Java Agent injection, TCP DataBus, a
 
 Rebuild/package the committed Java Agent sources, constrain the self-asserted DataBus registration identity, and runtime-test one-way sender authorization plus the hostile-mob mirror/ACK path.
 
-The next milestone also includes testing unauthorized reverse `player_move` rejection, reconnect behavior, and RemotePlayer lifecycle recovery. The DataBus policy exists in Rust source, but it is not a substitute for authenticating local clients or for runtime verification. Separately, review window identity and error reporting, then validate safe recovery against live macOS windows after a partial operation failed.
+The next milestone also includes testing unauthorized reverse `player_move` rejection, reconnect behavior, and RemotePlayer lifecycle recovery. The DataBus policy exists in Rust source, but it is not a substitute for authenticating local clients or for runtime verification. Window control now has direct NeoForge child ownership and a deadline-bounded read-only Control/AX path; live AX behavior remains unverified, and the mutation gate stays closed until identity, authorization, and recovery are reviewed.
 
 > The immediate objective is not to make every Fabric mod work with every NeoForge mod. It is to build a reliable, measurable foundation on which broader interoperability can be developed.

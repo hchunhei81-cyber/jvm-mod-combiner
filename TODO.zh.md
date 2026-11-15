@@ -72,13 +72,15 @@ Fabric 是玩家状态的唯一权威发布方。NeoForge 作为仅接收端客�
 
 - [x] 通过 Java Agent 向 Rust Window Manager 注册 Fabric、Forge 和 NeoForge JVM 进程。
 - [x] 测试注册、重连、明确拒绝和管理器端客户端清理。
-- [x] 按 PID 将 macOS 屏幕窗口与已注册进程关联。
-- [x] 实现只读 macOS 窗口发现和只读辅助功能 API 检查。
-- [ ] 使用实际 Minecraft 窗口验证发现结果和辅助功能权限流程。
-- [x] 在 Rust 源码中实现可回滚的位置/尺寸事务。
-- [ ] 调查部分修改后回滚失败的问题；真实窗口恢复尚未验证。
-- [ ] 保留正向匹配和所有回滚阶段的具体错误；身份不唯一时拒绝操作。
-- [ ] 在再次尝试真实窗口修改前，增加故障注入测试。
+- [x] 由 Fusion 直接持有 NeoForge Java 子进程；仅将当前监督轮次确认存活的子进程 PID 用于注册关联。
+- [x] 子进程轮询错误时 fail-closed，并清除过期监控快照。
+- [x] 实现只读 macOS 窗口发现、精确 AX 身份匹配、目标标题几何过滤、32 个窗口上限和 500ms AX 消息超时。
+- [x] 增加只读 Control UDS dry-run 路径，保留对端身份检查，并将 500ms 请求读取预算、5 秒服务端执行 deadline 贯穿 dry-run 与 AX inspection。
+- [x] 对连接后的客户端请求读写设置 2 秒绝对 deadline。标准 Unix socket `connect()` 本身不受该超时约束。
+- [x] 事务和快照基础设施保持暂存状态；公开 Mutation Gate 仍关闭并返回 `WindowMutationDisabled`。
+- [ ] 使用真实 Minecraft 窗口验证只读发现、Control UDS 行为和辅助功能权限流程。
+- [ ] 完成可信进程实例身份与事务授权审查后，才考虑任何窗口修改路径。
+- [ ] 单独解决并验证部分修改后回滚失败事件；当前只读路径并未解决该问题。
 - [ ] 将窗口排列/嵌入的交互设计与基础位置修改分开评估。
 - [ ] 添加 Windows 和 Linux 支持。
 
@@ -131,6 +133,9 @@ Fabric 是玩家状态的唯一权威发布方。NeoForge 作为仅接收端客�
 
 ### 9. 重构 Rust 启动器
 
+- [x] 提取共享 NeoForge Java 命令构建器，并由 Fusion 直接持有启动后的 Java 子进程。
+- [x] 跟踪 Fabric 和 NeoForge 子进程；启动或轮询失败时 fail-closed 并清理已持有的子进程。
+
 - [ ] 将剩余基于 Python 的启动器操作改写为 Rust。
   - 版本元数据解析。
   - 依赖发现。
@@ -138,17 +143,8 @@ Fabric 是玩家状态的唯一权威发布方。NeoForge 作为仅接收端客�
   - 版本和架构筛选。
   - 依赖下载和缓存管理。
 
-- [ ] 重构 `launch_neoforge_subprocess()`。
-  - 在可行时移除对外部启动脚本的依赖。
-  - 动态构造 `--module-path`。
-  - 动态构造 `-DlegacyClassPath`。
-  - 根据版本元数据生成 JVM 参数。
-  - 将平台专用参数与通用启动逻辑分离。
-
 - [ ] 改进进程管理。
-  - 跟踪子 JVM 进程。
-  - 检测意外的进程终止。
-  - 正确关闭两个沙盒。
+  - 定义 Fusion 父进程本身被终止时的优雅关闭行为。
   - 一个沙盒崩溃时保留有用日志。
 
 - [ ] 整理构建产物和仓库结构。
@@ -309,6 +305,6 @@ Rust 启动器、Fabric 和 NeoForge 启动、Java Agent 注入、TCP DataBus，
 
 重新构建 Java Agent，验证 Rust DataBus 的拒绝/不转发行为与玩家状态同步，并运行时测试怪物镜像和 ACK/重试；随后实现可靠的怪物移除。
 
-下一个里程碑还包括限制自报注册名、测试未经授权的反向 `player_move` 拒绝和连接保持，以及重新连接行为和 `RemotePlayer` 生命周期恢复。另需审查窗口身份验证与错误报告，并在部分操作失败后验证 macOS 窗口能否安全恢复。
+下一个里程碑还包括限制自报注册名、测试未经授权的反向 `player_move` 拒绝和连接保持，以及重新连接行为和 `RemotePlayer` 生命周期恢复。窗口控制现有 NeoForge 子进程直接所有权和带 deadline 的只读 Control/AX 路径；真实 AX 行为仍未验证，身份、授权和恢复审查完成前继续保持 Mutation Gate 关闭。
 
 > 当前的直接目标并非让每个 Fabric 模组都能与每个 NeoForge 模组兼容，而是构建一个可靠、可度量的基础，以便在此基础上继续实现更广泛的互操作。

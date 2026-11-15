@@ -6,7 +6,7 @@
 >
 > Some problems have been resolved, some have only been worked around, and others remain under investigation. Each section distinguishes verified results from unconfirmed explanations.
 
-**Project status:** Experimental prototype. Fabric, Forge, and NeoForge startup experiments have achieved significant milestones, but complete cross-loader interoperability is not yet implemented.
+**Project status:** Experimental prototype. Fabric, Forge, and NeoForge startup experiments have achieved significant milestones, but complete cross-loader interoperability is not yet implemented. Fusion directly owns the NeoForge Java child, and a read-only Control UDS dry-run path has bounded request and AX inspection stages. Window mutation remains gated off; this is not live-window validation.
 
 ---
 
@@ -1524,18 +1524,24 @@ Forge, and NeoForge labels.
 
 On macOS, the project can enumerate on-screen windows and associate them with
 registered JVMs by PID. An optional Accessibility API probe reads window titles
-and bounds when the user has granted Accessibility permission. A position/size
-transaction is now present in Rust source, but its live recovery behavior is
-unverified; see the partial-mutation incident below. Embedding and composition
-are not implemented, and the test suite does not establish portability beyond
-macOS.
+and bounds when the user has granted Accessibility permission. Position/size
+transaction and rollback code is retained as staged Rust infrastructure, but
+the public mutation gate rejects writes with `WindowMutationDisabled`. Fusion
+directly owns the NeoForge Java child; registration association requires the
+matching child PID to be confirmed live in the current supervision pass.
+Embedding and composition are not implemented, and the test suite does not
+establish portability beyond macOS.
 
 **Remaining work**
 
 - Verify process registration and window association with live Minecraft
   clients, including macOS permission handling.
-- Resolve and validate the existing window mutation/recovery path before
-  relying on it; decide the intended UX before pursuing embedding or composition.
+- Validate the read-only Control UDS and macOS Accessibility behavior with live
+  clients; keep writes disabled until process-instance identity, authorization,
+  and recovery are reviewed.
+- Resolve and validate the previous partial-mutation/failed-rollback incident
+  before relying on any mutation path; decide the intended UX before pursuing
+  embedding or composition.
 - Investigate Windows and Linux separately; their window APIs are not
   implemented by this macOS probe.
 
@@ -1555,11 +1561,13 @@ window. Treating every failed AX read as a missing value can obscure whether
 the cause was an API error, invalid returned data, or an absent/ambiguous
 candidate.
 
-The Rust source now has a recoverable position/size transaction and emits
-candidate-level diagnostics when rollback matching fails. This is not proof
-that a live window can be restored. Other failure stages still need clearer
-diagnostics, and the forward candidate scan still suppresses individual AX
-read errors.
+Transaction and rollback helpers remain in source as staged infrastructure;
+the public setter is blocked by a fail-closed gate and returns
+`WindowMutationDisabled`. The previous incident is not resolved, and the
+retained implementation is not proof that a live window can be restored.
+The read-only inspection path now applies AX messaging timeouts and
+deadline-aware checks, but individual candidate attribute read failures can
+still be omitted from the inspection result.
 
 **Resolution direction**
 
@@ -1567,11 +1575,42 @@ read errors.
   any write or rollback; refuse mutation when identity is ambiguous.
 - Report the specific failing stage and AX read/decode result instead of
   collapsing failures into “window not found.”
+- Keep the mutation gate closed until trusted process-instance identity,
+  transaction authorization, and recovery validation are reviewed.
 - Add non-destructive tests for partial writes, mismatches, and rollback
   failures; validate live-window behavior separately before relying on it.
 
 Until that work and live verification are complete, do not consider rollback
 reliable or retry window mutations blindly.
+
+## 8.9 Control UDS Deadlines and Bounded AX Inspection
+
+<badge color="warning">Read-only path implemented; live macOS behavior unverified</badge>
+
+The Control UDS currently exposes a read-only dry-run path. The server applies
+a 500 ms request-read budget and starts a separate 5-second execution deadline
+after a request has been parsed and before its handler runs. The deadline is
+passed through window discovery, dry-run matching, and AX inspection. Expiry
+returns a rejected response with `accepted: false` and
+`transaction_ready: false`.
+
+The client uses a 2-second absolute deadline for post-connect request I/O and
+updates read/write timeouts from the remaining budget. Rust's standard Unix
+socket `connect()` has no corresponding timeout API, so this does not guarantee
+that connection establishment itself completes within two seconds. AX calls
+use a 500 ms messaging timeout and check the execution deadline before and
+after system calls. A deadline can stop subsequent stages but cannot cancel an
+AX call already in progress.
+
+AX enumeration rejects more than 32 windows instead of truncating the list.
+The dry-run gathers all requested titles per PID and reads geometry only for
+matching titles; the full inspection path remains available to staged
+rollback code. Focused tests cover deadline propagation and stopping later
+stages without sleeping or claiming that AX calls can be interrupted.
+
+These safeguards do not resolve the partial-mutation incident and do not
+authorize writes. The mutation gate remains closed, and no live Minecraft
+window, apply, or restore validation is claimed.
 
 # 9. ClassLoader Isolation and Mixin Compatibility
 
@@ -1858,8 +1897,12 @@ Validate the same launch pipeline on:
 | NeoForge hostile-mob receive/mirroring | <badge color="warning">Committed source; packaged-agent/runtime verification pending</badge> |
 | Hostile-mob ACK/retry delivery | <badge color="warning">Committed source; packaged-agent/runtime verification pending</badge> |
 | Rust Window Manager and Java bridge lifecycle | <badge color="success">Unit and bridge-harness tests pass</badge> |
+| NeoForge Java child ownership and live-child registration association | <badge color="success">Implemented with fail-closed supervision</badge> |
 | macOS window discovery and PID association | <badge color="warning">Implemented; live Minecraft validation pending</badge> |
-| macOS window position/size transaction | <badge color="danger">Implemented in source; live recovery unresolved</badge> |
+| Read-only Control UDS dry-run and deadline propagation | <badge color="warning">Implemented and unit-tested; live macOS behavior pending</badge> |
+| AX message timeout, 32-window cap, and target-title filtering | <badge color="warning">Implemented and unit-tested; AX system calls remain non-cancellable</badge> |
+| Window mutation gate | <badge color="success">Closed; setters reject with `WindowMutationDisabled`</badge> |
+| macOS window position/size transaction and rollback | <badge color="danger">Staged behind gate; live recovery unresolved</badge> |
 | Window embedding or composition | <badge color="warning">Not implemented</badge> |
 | Bidirectional player mirroring | <badge color="warning">Not a current goal</badge> |
 | Cross-version world consistency | <badge color="warning">Under investigation</badge> |
@@ -1947,7 +1990,7 @@ The intended implementation order is:
 
 ## Current Development Focus
 
-The current focus is validating the Rust source-level one-way state policy at runtime, constraining registration identity, and rebuilding/testing the committed Java Agent changes for player and hostile-mob mirror lifecycle. Separately, a macOS window mutation partially applied and its rollback could not reacquire a safe AX target. The source now contains transaction and rollback diagnostics, but the live recovery path remains unverified and needs identity/error-path review before further mutation attempts.
+The current focus is validating the Rust source-level one-way state policy at runtime, constraining registration identity, and rebuilding/testing the committed Java Agent changes for player and hostile-mob mirror lifecycle. Window-control source work now includes direct NeoForge Java-child ownership, fail-closed live-child association, and bounded read-only Control/AX stages. The earlier macOS partial mutation still has no confirmed recovery; the mutation gate remains closed pending identity and authorization review. Live window behavior has not been tested in this work.
 
 **Next milestone:**
 

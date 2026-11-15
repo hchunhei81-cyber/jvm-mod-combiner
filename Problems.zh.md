@@ -6,7 +6,7 @@
 >
 > 部分问题已经解决，部分问题仅通过临时方案绕过，另一些问题仍在调查中。每个章节都会区分已验证的结果与尚未确认的解释。
 
-**项目状态：** 实验性原型。Fabric、Forge 和 NeoForge 的启动实验已取得重要进展，但尚未实现完整的跨 Loader 互操作。已提交的 Java Agent 源码包含敌对生物镜像和 ACK/重试实现，但仍需打包并运行时验证。Rust Window Manager、Java Bridge、macOS 窗口发现和位置/尺寸事务已加入；真实窗口验证与安全恢复仍未完成。
+**项目状态：** 实验性原型。Fabric、Forge 和 NeoForge 的启动实验已取得重要进展，但尚未实现完整的跨 Loader 互操作。已提交的 Java Agent 源码包含敌对生物镜像和 ACK/重试实现，但仍需打包并运行时验证。Fusion 现直接持有 NeoForge Java 子进程，并加入只读 Control UDS dry-run 路径及有界 AX inspection；窗口修改仍被 Gate 禁用，以上工作不代表真实窗口验证。
 
 ---
 
@@ -1492,15 +1492,17 @@ Bridge 支持连接重试，并在服务端明确拒绝后停止重试。Rust �
 
 macOS 实现可枚举屏幕上的窗口，并按 PID 将窗口与已注册 JVM 关联。用户
 授予辅助功能权限后，可选的 Accessibility API 探针可以读取窗口标题和
-边界。Rust 源码现已包含位置/尺寸事务，但真实恢复行为尚未验证；详见下方
-部分修改事件。窗口嵌入和合成尚未实现，测试套件也不能证明其可移植到
-macOS 以外的平台。
+边界。位置/尺寸事务和回滚实现作为暂存 Rust 基础设施保留，但公开修改接口
+会由 fail-closed Gate 拒绝并返回 `WindowMutationDisabled`。Fusion 直接持有
+NeoForge Java 子进程；窗口注册关联要求对应子进程在当前监督轮次明确存活。
+窗口嵌入和合成尚未实现，测试套件也不能证明其可移植到 macOS 以外的平台。
 
 **剩余工作**
 
-- 使用真实 Minecraft 客户端验证进程注册和窗口关联，包括 macOS 权限流程。
-- 先解决并验证已有的窗口修改/恢复路径，再依赖该功能；研究嵌入或合成前，
-  先确定预期用户体验。
+- 使用真实 Minecraft 客户端验证只读 Control UDS 和窗口关联，包括 macOS 权限流程；
+  在进程实例身份、授权和恢复审查完成前保持写入禁用。
+- 先解决并验证部分修改后回滚失败事件，再依赖任何窗口修改路径；研究嵌入或
+  合成前，先确定预期用户体验。
 - 分别研究 Windows 和 Linux；当前 macOS 探针未实现这些平台的窗口 API。
 
 ## 8.8 macOS 窗口修改部分生效与回滚失败
@@ -1516,19 +1518,43 @@ macOS 以外的平台。
 窗口身份。如果把所有 AX 读取失败都当成缺失值，就难以区分 API 调用失败、
 返回数据无效，还是候选窗口确实不存在或无法唯一匹配。
 
-Rust 源码现在包含可回滚的位置/尺寸事务；回滚匹配失败时也会输出候选窗口
-诊断。但这不能证明真实窗口能够恢复。其他失败阶段仍需更清晰的诊断；正向
-候选扫描目前也仍会隐藏单项 AX 读取错误。
+事务和回滚辅助函数仍保留在源码中作为暂存基础设施；公开 setter 被 fail-closed
+Gate 阻止并返回 `WindowMutationDisabled`。此前事件尚未解决，保留的实现也不能
+证明真实窗口能够恢复。只读 inspection 路径现已设置 AX 消息超时并检查 deadline，
+但候选属性读取失败仍可能不会出现在 inspection 结果中。
 
 **解决方向**
 
 - 将窗口身份验证与几何验证分开；每次写入或回滚前重新确认身份，身份不唯一
   时拒绝修改。
 - 记录具体失败阶段及 AX 读取/解码结果，不要把不同故障都压缩成“找不到窗口”。
+- 在可信进程实例身份、事务授权和恢复验证完成前，保持 Mutation Gate 关闭。
 - 用不触碰真实窗口的测试覆盖部分写入、验证不匹配和回滚失败；真实窗口验证
   应单独进行。
 
 在完成这些工作并验证真实环境前，不应认为回滚可靠，也不应盲目重试窗口修改。
+
+## 8.9 Control UDS Deadline 与有界 AX Inspection
+
+<badge color="warning">只读路径已实现；macOS 真实行为尚未验证</badge>
+
+Control UDS 当前仅提供只读 dry-run。服务端为请求读取设置 500ms 预算，并在
+请求解析成功后、handler 执行前启动独立的 5 秒执行 deadline。该 deadline
+会传入窗口发现、dry-run 匹配和 AX inspection。超时会返回拒绝响应，其中
+`accepted: false` 且 `transaction_ready: false`。
+
+客户端对连接后的请求 I/O 使用 2 秒绝对 deadline，并依据剩余时间更新读写超时。
+Rust 标准 Unix socket `connect()` 没有对应的 timeout API，因此不能保证连接建立
+本身在两秒内完成。AX 调用设置 500ms messaging timeout，并在系统调用前后检查
+执行 deadline。deadline 可以阻止后续阶段，但不能取消已经执行中的 AX 调用。
+
+AX 枚举超过 32 个窗口时会拒绝请求而非截断列表。dry-run 会先按 PID 收集所有
+目标标题，只为匹配标题读取几何；暂存回滚代码仍可使用完整 inspection 路径。
+定向测试覆盖 deadline 传递和超时后停止后续阶段，不使用 sleep，也不声称 AX
+调用可以被中断。
+
+这些保护措施没有解决部分修改事件，也不授权窗口写入。Mutation Gate 仍关闭；
+不声称已验证真实 Minecraft 窗口、apply 或 restore。
 
 # 9. ClassLoader 隔离和 Mixin 兼容性
 
@@ -1815,8 +1841,12 @@ Fabric 依赖解析器会读取 Minecraft 版本元数据并应用平台规则�
 | Fabric 敌对生物采样及生成/更新 | <badge color="warning">源码已提交；打包与端到端验证待完成</badge> |
 | NeoForge 怪物镜像及 ACK/重试 | <badge color="warning">已提交源码；打包与运行时验证待完成</badge> |
 | Rust Window Manager 与 Java Bridge 生命周期 | <badge color="success">单元测试和 Bridge 测试程序通过</badge> |
+| NeoForge Java 子进程所有权与存活子进程关联 | <badge color="success">已实现 fail-closed 监督</badge> |
 | macOS 窗口发现和 PID 关联 | <badge color="warning">已实现；真实 Minecraft 验证待完成</badge> |
-| macOS 窗口位置/尺寸事务 | <badge color="danger">源码已实现；真实恢复仍未解决</badge> |
+| 只读 Control UDS dry-run 与 deadline 传递 | <badge color="warning">已实现并通过单元测试；macOS 真实行为待验证</badge> |
+| AX 消息超时、32 窗口上限和目标标题过滤 | <badge color="warning">已实现并通过单元测试；AX 调用不能被强制取消</badge> |
+| 窗口修改 Gate | <badge color="success">保持关闭；setter 返回 `WindowMutationDisabled`</badge> |
+| macOS 窗口位置/尺寸事务与回滚 | <badge color="danger">暂存于 Gate 后；真实恢复尚未解决</badge> |
 | 窗口嵌入或合成 | <badge color="warning">尚未实现</badge> |
 | 怪物移除事件 | <badge color="warning">尚未实现</badge> |
 | 双向玩家镜像 | <badge color="warning">尚未完成</badge> |
@@ -1908,7 +1938,7 @@ Java 源码已进入 `main` 历史；怪物同步尚未完成端到端验证。
 
 ## 当前开发重点
 
-当前重点是运行时验证单向玩家状态权威策略，并重新打包/测试已提交的怪物镜像和 ACK/重试实现。另有一次 macOS 窗口修改部分生效，回滚未能重新找到可安全操作的 AX 目标。源码已加入事务和回滚诊断，但真实恢复路径仍未验证；在进一步修改前，应先审查身份验证和失败诊断路径。
+当前重点是运行时验证单向玩家状态权威策略，并重新打包/测试已提交的怪物镜像和 ACK/重试实现。窗口控制源码已加入 NeoForge Java 子进程直接所有权、fail-closed 存活进程关联，以及有界只读 Control/AX 阶段。此前 macOS 部分修改后回滚失败仍未确认恢复；Mutation Gate 保持关闭，等待身份与授权审查。本轮未测试真实窗口行为。
 
 **下一个里程碑：**
 

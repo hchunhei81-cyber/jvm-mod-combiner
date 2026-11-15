@@ -48,16 +48,16 @@
         pageTitle: "Progress & latest update",
         pageIntro:
           "A source-based snapshot of verified work, current implementation, and the next validation steps.",
-        latestStatus: "LATEST UPDATE · 2026-11-12",
-        latestTitle: "Window-management prototype and launcher performance updates",
+        latestStatus: "LATEST UPDATE · 2026-11-15",
+        latestTitle: "NeoForge process ownership and bounded read-only window control",
         latestText:
-          "The Rust launcher now includes a Window Manager, a Java registration bridge, PID-based window association, and read-only macOS window discovery/Accessibility inspection. Dependency and classpath construction were also optimized.",
-        branchLabel: "Main-branch context:",
+          "Fusion directly owns the NeoForge Java child. Read-only Control UDS dry-run requests now carry deadlines through window discovery and AX inspection, with target-title filtering and a bounded AX window count. Mutation and rollback remain gated off.",
+        branchLabel: "Implementation snapshot:",
         branchText:
-          "The current main snapshot runs through documentation update 2781603 (2026-11-12); the latest feature commit is the read-only macOS Accessibility probe (8fcdfeb). Recent implementation work also includes dependency-resolution optimization (dcf3d9f), Java bridge tests (d9117be), Window Manager integration (1f8ac6f), and PID association (f0b89d6).",
+          "Source work includes direct child-process ownership, fail-closed live-child association, a read-only Control UDS dry-run, a server-side execution deadline, a client post-connect I/O budget, and deadline-aware AX inspection. Unix socket connection establishment itself is not covered by the client timeout.",
         verifyLabel: "Verification status:",
         verifyText:
-          "The Rust suite passes 36 tests; the Java bridge harness passes registration, reconnect, and rejection tests for Fabric, Forge, and NeoForge labels. Live Minecraft window discovery and the Accessibility permission flow remain unverified. Hostile-mob source is committed but still needs a current packaged Agent and end-to-end testing; monster removal is not implemented.",
+          "All 216 Rust binary unit tests pass, including Control, dry-run deadlines, window discovery, and command guards. Live Minecraft window discovery, AX permission behavior, and actual AX timing remain unverified. The mutation gate remains closed; no apply or restore was run.",
         doneStatus: "Verified foundation",
         doneTitle: "Capabilities already established",
         doneIntro:
@@ -67,7 +67,7 @@
         done3: "Rust TCP DataBus registration and JSON routing",
         done4: "Fabric-to-NeoForge player-state and RemotePlayer proof of concept",
         done5:
-          "Window Manager/Java bridge registration tests and read-only macOS window discovery prototype",
+          "Window Manager/Java bridge tests, direct NeoForge child ownership, live-child association, and read-only macOS discovery",
         workStatus: "Committed source · live runtime test pending",
         workTitle: "Committed implementation requiring validation",
         workIntro:
@@ -86,7 +86,7 @@
         next4: "Design and publish reliable monster_remove events; absence from the sampled render list is not proof of despawn.",
         next5: "Validate or otherwise constrain DataBus registration names.",
         next6:
-          "Validate window registration, discovery, and macOS permission handling with live Minecraft clients; do not imply window movement or embedding.",
+          "Validate read-only window discovery, Control UDS behavior, and macOS Accessibility permission with live Minecraft clients; keep mutation gated off.",
         scopeLabel: "Scope:",
         scopeText:
           "A source implementation or successful launcher startup is not end-to-end verification or general cross-loader mod compatibility.",
@@ -105,16 +105,16 @@
         eyebrow: "项目状态",
         pageTitle: "项目进度与最新更新",
         pageIntro: "基于源码整理已验证成果、当前实现和下一步验证工作。",
-        latestStatus: "最新更新 · 2026-11-12",
-        latestTitle: "新增窗口管理原型并优化启动器性能",
+        latestStatus: "最新更新 · 2026-11-15",
+        latestTitle: "NeoForge 子进程所有权与有界只读窗口控制",
         latestText:
-          "Rust 启动器新增 Window Manager、Java 注册 Bridge、基于 PID 的窗口关联，以及只读 macOS 窗口发现/辅助功能检查；同时优化了依赖解析和类路径构建。",
-        branchLabel: "main 分支记录：",
+          "Fusion 现直接持有 NeoForge Java 子进程。只读 Control UDS dry-run 会将 deadline 贯穿窗口发现与 AX inspection，并使用目标标题过滤和 AX 窗口数量上限；窗口修改和回滚仍由 Gate 禁用。",
+        branchLabel: "实现状态：",
         branchText:
-          "当前 main 快照包含文档更新 2781603（2026-11-12）；最近的功能提交是只读 macOS 辅助功能探针（8fcdfeb）。近期实现还包括依赖解析优化（dcf3d9f）、Java Bridge 测试（d9117be）、Window Manager 集成（1f8ac6f）和 PID 关联（f0b89d6）。",
+          "源码现已包含直接子进程所有权、fail-closed 存活子进程关联、只读 Control UDS dry-run、服务端执行 deadline、连接后的客户端读写预算和带 deadline 的 AX inspection。Unix socket 建连本身不受客户端超时约束。",
         verifyLabel: "验证状态：",
         verifyText:
-          "Rust 测试套件的 36 项测试通过；Java Bridge 测试程序也通过 Fabric、Forge、NeoForge 标签的注册、重连和拒绝测试。真实 Minecraft 窗口发现与辅助功能权限流程尚未验证。敌对生物源码已提交，但仍需更新打包 Agent 并进行端到端测试；怪物移除尚未实现。",
+          "Rust 二进制单元测试 216 项全部通过，包含 Control、dry-run deadline、窗口发现和命令保护。真实 Minecraft 窗口发现、AX 权限行为和实际 AX 调用时延仍未验证。Mutation Gate 保持关闭；本轮未运行 apply 或 restore。",
         doneStatus: "已验证基础",
         doneTitle: "已建立的能力",
         doneIntro: "区分已通过测试程序验证的里程碑与仍待真实 Minecraft 验证的功能。",
@@ -122,7 +122,7 @@
         done2: "Fabric 与 NeoForge 启动实验，以及 Forge 实验性启动",
         done3: "Rust TCP DataBus 注册与 JSON 路由",
         done4: "Fabric 到 NeoForge 玩家状态与 RemotePlayer 概念验证",
-        done5: "Window Manager/Java Bridge 注册测试及只读 macOS 窗口发现原型",
+        done5: "Window Manager/Java Bridge 测试、NeoForge 子进程直接所有权、存活子进程关联及只读 macOS 窗口发现",
         workStatus: "源码已提交 · 待真实运行时测试",
         workTitle: "已提交但仍需验证的实现",
         workIntro: "敌对生物接收端和 ACK/重试源码已进入 main，但打包 Agent 和真实 Minecraft 行为仍待验证。",
@@ -140,7 +140,7 @@
         next4: "设计并发布可靠的 monster_remove 事件；采样渲染列表中缺失并不能证明实体已消失。",
         next5: "校验或以其他方式限制 DataBus 注册名称。",
         next6:
-          "使用真实 Minecraft 客户端验证窗口注册、发现和 macOS 权限流程；不要将其描述为窗口移动或嵌入。",
+          "使用真实 Minecraft 客户端验证只读窗口发现、Control UDS 和 macOS 辅助功能权限；继续保持窗口修改 Gate 关闭。",
         scopeLabel: "范围说明：",
         scopeText:
           "源码实现或成功启动加载器不等于端到端验证，也不代表通用跨加载器模组兼容。",
@@ -217,15 +217,15 @@
         p9Status: "Not a current target",
         p9Title: "Cross-process rendering and window composition",
         p9Text:
-          "The prototype registers JVMs and observes window metadata on macOS; position/size transactions exist in source, but live recovery remains unverified. Embedding and composition are not implemented. Combining GPU resources across independent clients is platform-specific and adds driver, synchronization, and lifetime risks.",
+          "The prototype registers JVMs and observes window metadata on macOS. A read-only Control UDS dry-run now has bounded request and AX inspection stages, but position/size writes remain gated off. Embedding and composition are not implemented. Combining GPU resources across independent clients is platform-specific and adds driver, synchronization, and lifetime risks.",
         p9Direction:
           "<strong>Solution direction:</strong> Keep independent windows and prioritize reliable state synchronization. Consider platform-native composition only after core behavior is stable.",
         p10Status: "Unresolved · recovery unverified",
         p10Title: "Partial macOS window mutation and failed rollback",
         p10Text:
-          "A real position/size operation partially changed a window, then failed verification. Rollback could not safely reacquire a matching Accessibility window, so recovery was not confirmed. CoreGraphics and Accessibility observations can differ during layout changes, and a title alone is not a reliable identity.",
+          "A real position/size operation partially changed a window, then failed verification. Rollback could not safely reacquire a matching Accessibility window, so recovery was not confirmed. CoreGraphics and Accessibility observations can differ during layout changes, and a title alone is not a reliable identity. The mutation gate now remains closed; read-only deadline and AX safeguards do not resolve this incident or authorize writes.",
         p10Direction:
-          "<strong>Fix direction:</strong> Revalidate window identity before every write, preserve specific API/read-back errors, and test partial-write and rollback failures without touching live windows. Do not treat source-level transaction support as verified recovery.",
+          "<strong>Fix direction:</strong> Review trusted process-instance identity and transaction authorization, preserve specific API/read-back errors, and test partial-write and rollback failures without touching live windows. Keep the mutation gate closed until recovery is validated.",
         historyLink: "Detailed issue history (problems.md)",
         architectureLink: "Proposed architecture (solve.md)",
         todoLink: "See current TODO priorities →",
@@ -292,15 +292,15 @@
         p9Status: "当前非目标",
         p9Title: "跨进程渲染与窗口合成",
         p9Text:
-          "当前原型可注册 JVM 并在 macOS 观察窗口元数据；源码已有位置/尺寸事务，但真实恢复尚未验证。窗口嵌入和合成尚未实现。在独立客户端间共享 GPU 资源具有平台差异，并增加驱动、同步和资源生命周期风险。",
+          "当前原型可注册 JVM 并在 macOS 观察窗口元数据。只读 Control UDS dry-run 已加入有界请求与 AX inspection 阶段，但位置/尺寸写入仍被 Gate 禁用。窗口嵌入和合成尚未实现。在独立客户端间共享 GPU 资源具有平台差异，并增加驱动、同步和资源生命周期风险。",
         p9Direction:
           "<strong>解决方向：</strong> 保留独立窗口并优先保证状态同步可靠。核心行为稳定后，再考虑平台原生窗口合成。",
         p10Status: "尚未解决 · 恢复未验证",
         p10Title: "macOS 窗口修改部分生效与回滚失败",
         p10Text:
-          "一次真实位置/尺寸操作只改变了部分窗口几何信息，随后验证失败。回滚无法安全地重新找到匹配的 Accessibility 窗口，因此恢复未获确认。布局变化期间 CoreGraphics 与 Accessibility 的观察可能不同步，标题也不足以单独确认窗口身份。",
+          "一次真实位置/尺寸操作只改变了部分窗口几何信息，随后验证失败。回滚无法安全地重新找到匹配的 Accessibility 窗口，因此恢复未获确认。布局变化期间 CoreGraphics 与 Accessibility 的观察可能不同步，标题也不足以单独确认窗口身份。Mutation Gate 现保持关闭；只读 deadline 和 AX 保护措施不能解决该事件，也不授权写入。",
         p10Direction:
-          "<strong>修复方向：</strong> 每次写入前重新验证窗口身份，保留具体 API/读回错误，并通过不触碰真实窗口的测试覆盖部分写入和回滚失败。源码有事务实现不等于真实恢复已验证。",
+          "<strong>修复方向：</strong> 审查可信进程实例身份与事务授权，保留具体 API/读回错误，并通过不触碰真实窗口的测试覆盖部分写入和回滚失败。恢复得到验证前保持 Mutation Gate 关闭。",
         historyLink: "详细问题记录（problems.md）",
         architectureLink: "架构方案（solve.md）",
         todoLink: "查看当前待办优先级 →",
@@ -319,7 +319,7 @@
           "Completed work and the next implementation steps, summarized from the project roadmap.",
         statusLabel: "Current status:",
         statusText:
-          "The Rust Window Manager/Java bridge and read-only macOS window discovery prototype are implemented; Rust and bridge tests pass. Live Minecraft window validation is pending. Next: rebuild and runtime-test the committed Java Agent, verify one-way sender authorization, and constrain DataBus registration identity.",
+          "Fusion directly owns the NeoForge Java child, and a read-only Control UDS dry-run carries its server deadline through AX inspection. Live Minecraft window validation is pending; the mutation gate remains closed. Next: package the Java Agent and runtime-test sender authorization and reconnect behavior.",
         doneStatus: "Completed / verified",
         doneTitle: "Prototype foundation",
         doneIntro: "Verified achievements recorded in the project roadmap.",
@@ -358,15 +358,18 @@
         later5: "Refactor launcher dependency resolution and child-process management",
         later6: "Expand beyond player coordinates through incremental entity/state adapters",
         later7: "Investigate Mixin compatibility, cross-platform support, and advanced mod integrations",
-        windowStatus: "Transaction in source · recovery unresolved",
-        windowTitle: "macOS window transaction and recovery",
+        windowStatus: "Read-only Control path implemented · mutation gate closed",
+        windowTitle: "macOS read-only window control and recovery boundary",
         windowIntro:
-          "A Rust Window Manager and Java bridge register loader JVMs and associate macOS windows by PID. Position/size transactions exist in source, but a real partial mutation was not successfully rolled back; live recovery remains unverified.",
+          "Fusion owns the NeoForge Java child directly. A read-only Control UDS dry-run checks live child identity and carries deadlines through AX inspection. Transaction and rollback code remains staged behind a closed mutation gate; a previous partial mutation still has no confirmed recovery.",
         window1: "Test loader registration, reconnection, rejection, and client cleanup",
         window2: "Discover and associate on-screen macOS windows by PID (implementation/tests)",
-        window3: "Review identity checks and preserve specific errors across every mutation/rollback stage",
-        window4: "Add failure-injection tests; validate safe recovery with live Minecraft windows only after review",
-        window5: "Investigate embedding/composition and Windows/Linux support separately",
+        window3: "Fusion directly owns NeoForge Java; association uses child PIDs confirmed live in the current pass",
+        window4: "Read-only Control UDS dry-run has server/client budgets and deadline-aware AX inspection",
+        window5: "Validate read-only discovery, Control behavior, and macOS Accessibility permission with live Minecraft windows",
+        window6: "Review trusted process-instance identity and transaction authorization before enabling any write",
+        window7: "Resolve the partial-apply/failed-rollback incident; keep the mutation gate closed meanwhile",
+        window8: "Investigate embedding/composition and Windows/Linux support separately",
         scopeLabel: "Scope guard:",
         scopeText:
           "A successful loader launch or visual entity mirror does not mean arbitrary mods, inventories, combat, worlds, or game logic are synchronized.",
@@ -386,7 +389,7 @@
         pageIntro: "根据项目路线图整理的已完成工作和后续实现步骤。",
         statusLabel: "当前状态：",
         statusText:
-          "Rust Window Manager/Java Bridge 和只读 macOS 窗口发现原型已实现，Rust 与 Bridge 测试通过；真实 Minecraft 窗口验证仍待完成。下一步是重新构建并运行时测试已提交的 Java Agent、验证单向发送方授权，并限制 DataBus 注册身份。",
+          "Fusion 直接持有 NeoForge Java 子进程，只读 Control UDS dry-run 会将服务端 deadline 传递到 AX inspection。真实 Minecraft 窗口验证仍待完成；Mutation Gate 保持关闭。下一步是打包 Java Agent，并运行时验证发送方授权和重连行为。",
         doneStatus: "已完成 / 已验证",
         doneTitle: "原型基础",
         doneIntro: "项目路线图中记录的已验证成果。",
@@ -425,15 +428,18 @@
         later5: "重构启动器依赖解析与子进程管理",
         later6: "通过渐进式实体/状态适配器扩展玩家坐标以外的同步",
         later7: "研究 Mixin 兼容性、跨平台支持和高级模组集成",
-        windowStatus: "源码已有事务 · 恢复问题未解决",
-        windowTitle: "macOS 窗口事务与恢复",
+        windowStatus: "只读 Control 路径已实现 · Mutation Gate 关闭",
+        windowTitle: "macOS 只读窗口控制与恢复边界",
         windowIntro:
-          "Rust Window Manager 和 Java Bridge 可注册 Loader JVM，并按 PID 关联 macOS 窗口。源码已有位置/尺寸事务，但一次真实部分修改未能成功回滚；真实恢复仍未验证。",
+          "Fusion 直接持有 NeoForge Java 子进程。只读 Control UDS dry-run 会检查存活子进程身份，并将 deadline 传入 AX inspection。事务和回滚代码仍暂存于关闭的 Mutation Gate 后；此前部分修改后回滚失败仍未确认恢复。",
         window1: "测试 Loader 注册、重连、拒绝及客户端清理",
         window2: "按 PID 发现并关联 macOS 屏幕窗口（实现/测试）",
-        window3: "审查身份验证，并保留所有修改/回滚阶段的具体错误",
-        window4: "增加故障注入测试；审查完成后再用真实 Minecraft 窗口验证安全恢复",
-        window5: "分别研究窗口嵌入/合成以及 Windows/Linux 支持",
+        window3: "Fusion 直接持有 NeoForge Java；仅使用当前轮次确认存活的子进程 PID 关联",
+        window4: "只读 Control UDS dry-run 具有服务端/客户端预算，并对 AX inspection 检查 deadline",
+        window5: "使用真实 Minecraft 窗口验证只读发现、Control 行为和 macOS 辅助功能权限",
+        window6: "启用任何写入前，审查可信进程实例身份与事务授权",
+        window7: "解决部分修改后回滚失败事件；期间继续保持 Mutation Gate 关闭",
+        window8: "分别研究窗口嵌入/合成以及 Windows/Linux 支持",
         scopeLabel: "范围说明：",
         scopeText:
           "成功启动加载器或显示实体镜像，不代表任意模组、物品栏、战斗、世界或游戏逻辑已经同步。",

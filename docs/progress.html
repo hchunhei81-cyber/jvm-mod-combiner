@@ -226,37 +226,35 @@
 
         <section class="doc-group" aria-labelledby="latest-title">
           <span class="doc-status open" data-i18n="latestStatus"
-            >LATEST UPDATE · 2026-11-12</span
+            >LATEST UPDATE · 2026-11-15</span
           >
           <h3 id="latest-title" data-i18n="latestTitle">
-            Window-management prototype and launcher performance updates
+            NeoForge process ownership and bounded read-only window control
           </h3>
           <p data-i18n="latestText">
-            The Rust launcher now includes a Window Manager, a Java registration
-            bridge, PID-based window association, and read-only macOS window
-            discovery/Accessibility inspection. Dependency and classpath
-            construction were also optimized.
+            Fusion directly owns the NeoForge Java child. Read-only Control UDS
+            dry-run requests now carry deadlines through window discovery and
+            AX inspection, with target-title filtering and a bounded AX window
+            count. Mutation and rollback remain gated off.
           </p>
           <div class="doc-callout">
-            <strong data-i18n="branchLabel">Main-branch context:</strong>
+            <strong data-i18n="branchLabel">Implementation snapshot:</strong>
             <span data-i18n="branchText">
-              The current main snapshot runs through documentation update
-              2781603 (2026-11-12); the latest feature commit is the read-only
-              macOS Accessibility probe (8fcdfeb). Recent implementation work
-              also includes dependency-resolution optimization (dcf3d9f), Java
-              bridge tests (d9117be), Window Manager integration (1f8ac6f),
-              and PID association (f0b89d6).
+              Source work includes direct child-process ownership, fail-closed
+              live-child association, a read-only Control UDS dry-run, a
+              server-side execution deadline, a client post-connect I/O budget,
+              and deadline-aware AX inspection. Unix socket connection
+              establishment itself is not covered by the client timeout.
             </span>
           </div>
           <div class="doc-callout">
             <strong data-i18n="verifyLabel">Verification status:</strong>
             <span data-i18n="verifyText">
-              The Rust suite passes 36 tests; the Java bridge harness passes
-              registration, reconnect, and rejection tests for Fabric, Forge,
-              and NeoForge labels. Live Minecraft window discovery and the
-              Accessibility permission flow remain unverified. Hostile-mob
-              source is committed but still needs a current packaged Agent and
-              end-to-end testing; monster removal is not implemented.
+              All 216 Rust binary unit tests pass, including Control, dry-run
+              deadlines, window discovery, and command guards. Live Minecraft
+              window discovery, AX permission behavior, and actual AX timing
+              remain unverified. The mutation gate remains closed; no apply or
+              restore was run.
             </span>
           </div>
         </section>

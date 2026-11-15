@@ -117,7 +117,9 @@ Rust 负责：
 - [x] Rust DataBus 源码会拒绝非 Fabric 注册客户端发布受保护的玩家和怪物状态消息。
 - [x] Rust Window Manager 与 Java Bridge 可注册 Fabric、Forge、NeoForge JVM 进程；测试覆盖注册、重连、拒绝及按 PID 关联窗口。
 - [x] 已实现 macOS 只读屏幕窗口发现和可选的只读辅助功能 API 检查；该检查需要用户授予 macOS 辅助功能权限。
-- [x] Rust 测试套件通过（36 项），Java Bridge 测试程序也通过三种 Loader 标签的注册、重连和拒绝测试。
+- [x] Fusion 直接持有 NeoForge Java 子进程；只有当前监督轮次确认存活的子进程 PID 才能用于窗口注册关联。
+- [x] 只读 Control UDS dry-run 路径已实现，服务端执行 deadline 贯穿窗口发现与 AX inspection，并限制 AX 消息等待及目标标题几何读取。
+- [x] Rust 二进制单元测试 216 项全部通过，包含 Control、dry-run deadline、窗口发现和命令保护；Java Bridge 测试覆盖三种 Loader 标签的注册、重连和拒绝。
 
 ### 正在开发
 
@@ -130,8 +132,13 @@ Rust 负责：
 - [ ] 改善高延迟和丢包条件下的同步。
 - [ ] 重新打包并运行时测试已提交的敌对生物接收、镜像及 ACK/重试实现。
 - [ ] 实现可靠的敌对生物移除消息，并验证重连和世界切换恢复。
-- [ ] 解决并在真实环境中验证 macOS 窗口修改路径。Rust 源码已有位置/尺寸事务和受保护的回滚，但一次真实操作部分生效且回滚未能确认恢复；目前不能认为该功能可靠。
+- [ ] 使用真实 Minecraft 窗口验证只读窗口发现、Control UDS 行为和辅助功能权限流程。
+- [ ] 完成可信进程实例身份与事务授权审查。窗口修改和回滚代码仍暂存于 fail-closed 的 `WindowMutationDisabled` Gate 后；此前部分修改后回滚失败的问题仍未解决。
 - [ ] 研究窗口嵌入/合成以及 Windows/Linux 窗口支持。
+
+Control 客户端对连接后的请求读写使用 2 秒绝对预算；标准 Unix socket
+`connect()` 本身不受该超时约束。服务端 dry-run 使用独立的 5 秒 deadline。
+deadline 检查可以阻止后续阶段，但无法取消已经执行中的 AX 系统调用。
 
 **当前源码说明：** Java 源码位于 [`bus_test/`](bus_test/)。已提交源码包含 Fabric 怪物采样、NeoForge 生成/更新镜像处理，以及基于序列号的 ACK/重试实现。这些改动仍需重新构建到 `bus_test/bus-agent.jar` 并在 Minecraft 中运行时验证；可靠的怪物移除尚未实现。
 

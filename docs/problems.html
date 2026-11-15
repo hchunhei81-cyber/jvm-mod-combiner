@@ -220,12 +220,12 @@
             <span class="doc-status research" data-i18n="p9Status">Not a current target</span>
             <h3 data-i18n="p9Title">Cross-process rendering and window composition</h3>
             <p data-i18n="p9Text">
-              The current prototype registers JVMs and observes window
-              metadata on macOS; position/size transactions exist in source,
-              but live recovery remains unverified. Embedding and composition
-              are not implemented. Combining GPU resources across independent
-              clients is platform-specific and adds driver, synchronization,
-              and lifetime risks.
+              The prototype registers JVMs and observes window metadata on
+              macOS. A read-only Control UDS dry-run now has bounded request
+              and AX inspection stages, but position/size writes remain gated
+              off. Embedding and composition are not implemented. Combining
+              GPU resources across independent clients is platform-specific
+              and adds driver, synchronization, and lifetime risks.
             </p>
             <p data-i18n="p9Direction">
               <strong>Solution direction:</strong> Keep independent windows
@@ -243,12 +243,15 @@
               matching Accessibility window, so recovery was not confirmed.
               CoreGraphics and Accessibility observations can differ during
               layout changes, and a title alone is not a reliable identity.
+              The mutation gate now remains closed; read-only deadline and AX
+              safeguards do not resolve this incident or authorize writes.
             </p>
             <p data-i18n="p10Direction">
-              <strong>Fix direction:</strong> Revalidate window identity before
-              every write, preserve specific API/read-back errors, and test
-              partial-write and rollback failures without touching live windows.
-              Do not treat source-level transaction support as verified recovery.
+              <strong>Fix direction:</strong> Review trusted process-instance
+              identity and transaction authorization, preserve specific
+              API/read-back errors, and test partial-write and rollback failures
+              without touching live windows. Keep the mutation gate closed until
+              recovery is validated.
             </p>
           </article>
         </div>

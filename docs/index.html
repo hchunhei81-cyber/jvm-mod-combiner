@@ -3,12 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#090d14" />
+    <meta name="theme-color" content="#0A0A0A" />
     <meta
       name="description"
       content="JVM Mod Combiner — an experimental Rust and Java prototype for cross-sandbox Minecraft interoperability."
     />
-    <title>JVM Mod Combiner — Cross-platform Modding Kernel</title>
+    <title>JVM Mod Combiner — Minecraft Interoperability Prototype</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -21,13 +21,8 @@
     <a class="skip-link" href="#main-content" data-i18n="skipToContent"
       >跳转到主要内容</a
     >
-    <div class="ambient ambient-one"></div>
-    <div class="ambient ambient-two"></div>
-    <div class="grid-bg"></div>
-
     <header class="nav" id="top">
       <a class="brand" href="#top">
-        <span class="brand-mark">&lt;/&gt;</span>
         <span>JVM <b>Mod</b> Combiner</span>
       </a>
 
@@ -78,14 +73,11 @@
       <section class="hero">
         <div class="hero-content">
           <div class="status-pill">
-            <span class="status-dot"></span
-            ><span data-i18n="heroBadge">实验性原型 · 单向玩家镜像概念验证</span>
+            <span data-i18n="heroBadge">实验性原型 · 单向玩家镜像概念验证</span>
           </div>
           <p class="overline">RUST / JNI / JVM / MINECRAFT</p>
           <h1 data-i18n="heroTitle">
-            连接不同的<br /><span class="gradient-text"
-              >Minecraft 模组生态。</span
-            >
+            Minecraft 模组互操作
           </h1>
           <p class="hero-description" data-i18n="heroDesc">
             JVM Mod Combiner 是一个基于 Rust 和 Java 的实验性原型。已验证
@@ -118,7 +110,6 @@
 
         <div class="hero-terminal panel">
           <div class="window-bar">
-            <div class="window-dots"><i></i><i></i><i></i></div>
             <span>jvm-mod-combiner / terminal</span>
             <span class="window-live">LOCAL DEMO</span>
           </div>
@@ -131,8 +122,6 @@
             <span>FABRIC MODE</span><span>JAVA AGENT</span>
           </div>
         </div>
-        <div class="hero-orbit orbit-one"></div>
-        <div class="hero-orbit orbit-two"></div>
       </section>
 
       <section class="metrics">
@@ -227,7 +216,6 @@
             data-search="rust kernel startup jni 启动 内核"
           >
             <span class="card-index">01 / CORE</span>
-            <div class="feature-symbol">RUST</div>
             <h3 data-i18n="f1Title">Rust 启动内核</h3>
             <p data-i18n="f1Desc">
               解析版本依赖、组织 JVM 类路径，并通过 JNI 启动目标 Java 环境。
@@ -241,7 +229,6 @@
             data-search="java agent instrumentation premain 代理"
           >
             <span class="card-index">02 / AGENT</span>
-            <div class="feature-symbol">JVM</div>
             <h3 data-i18n="f2Title">Java Agent</h3>
             <p data-i18n="f2Desc">
               使用 premain 和 Instrumentation 探索运行时类结构及诊断能力。
@@ -255,7 +242,6 @@
             data-search="fabric player state movement extraction 玩家 状态 移动"
           >
             <span class="card-index">03 / PLAYER STATE</span>
-            <div class="feature-symbol">STATE</div>
             <h3 data-i18n="f3Title">Fabric 玩家状态读取</h3>
             <p data-i18n="f3Desc">
               通过反射读取玩家状态并发布到 Rust DataBus；Java 源码还包含敌对生物采样及初始/变化消息的早期原型。
@@ -269,7 +255,6 @@
             data-search="tcp bus network communication 网络"
           >
             <span class="card-index">04 / TRANSPORT</span>
-            <div class="feature-symbol">TCP</div>
             <h3 data-i18n="f4Title">Rust TCP DataBus</h3>
             <p data-i18n="f4Desc">
               Rust 源码按注册连接名限制玩家及怪物状态消息仅由 Fabric 发布；注册名仍由客户端自报，且拒绝行为待运行时验证。
@@ -283,7 +268,6 @@
             data-search="neoforge remote player mirror entity sync lifecycle 镜像 同步"
           >
             <span class="card-index">05 / SYNC</span>
-            <div class="feature-symbol">SYNC</div>
             <h3 data-i18n="f5Title">双端实体镜像</h3>
             <p data-i18n="f5Desc">
               Fabric 到 NeoForge 的 RemotePlayer 镜像已完成概念验证。已提交源码包含 NeoForge 怪物接收与 ACK/重试流程，但仍需打包和运行时测试；怪物移除尚未实现。
@@ -297,7 +281,6 @@
             data-search="diagnostics reflection structure 诊断 反射"
           >
             <span class="card-index">06 / DEBUG</span>
-            <div class="feature-symbol">TRACE</div>
             <h3 data-i18n="f6Title">运行时结构诊断</h3>
             <p data-i18n="f6Desc">
               输出 Minecraft 实例字段、类型和值，辅助分析混淆环境。
@@ -311,7 +294,6 @@
             data-search="window manager registration macos accessibility 窗口 注册 辅助功能"
           >
             <span class="card-index">07 / WINDOWS</span>
-            <div class="feature-symbol">WINDOW</div>
             <h3 data-i18n="f7Title">窗口注册与观察</h3>
             <p data-i18n="f7Desc">
               Java Bridge 注册 Loader JVM，Rust 按 PID 关联窗口；macOS 窗口发现和辅助功能检查为只读，不会操作窗口。
@@ -386,7 +368,6 @@
         </div>
         <div class="demo-panel panel">
           <div class="window-bar">
-            <div class="window-dots"><i></i><i></i><i></i></div>
             <span>prototype verification / local replay</span>
             <span class="window-live">REPLAY</span>
           </div>
@@ -551,14 +532,10 @@
 
     <footer class="footer">
       <a class="brand" href="#top"
-        ><span class="brand-mark">&lt;/&gt;</span
         ><span>JVM <b>Mod</b> Combiner</span></a
       >
       <p data-i18n="footerText">
         独立技术研究项目 · Rust × JVM · Minecraft 1.21.4
-      </p>
-      <p class="donate" data-i18n="donate">
-        纯为爱发电，不接受任何形式的资助或捐赠。
       </p>
       <a
         class="footer-github"

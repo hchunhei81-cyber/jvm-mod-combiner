@@ -15,8 +15,7 @@
       navGithub: "GitHub ↗",
       viewSource: "在 GitHub 上查看 ↗",
       heroBadge: "实验性原型 · 单向玩家镜像概念验证",
-      heroTitle:
-        '连接不同的<br><span class="gradient-text">Minecraft 模组生态。</span>',
+      heroTitle: "Minecraft 模组互操作",
       heroDesc:
         "JVM Mod Combiner 是一个基于 Rust 和 Java 的实验性原型。已验证 Fabric 与 NeoForge 在独立 JVM 中运行，并完成单向玩家状态同步概念验证；近期还加入了只读 macOS 窗口发现原型。",
       explore: "探索架构",
@@ -38,8 +37,8 @@
       flowMirrorTitle: "单向玩家镜像",
       flowMirrorDesc: "Fabric 玩家状态已能驱动 NeoForge RemotePlayer 镜像；生命周期稳定性仍在完善。",
       flowFootnote: "这是本地原型的已验证数据流，不代表任意模组或服务器间的通用兼容。",
-      featuresTitle: "为 JVM 互操作而设计",
-      featuresDesc: "从启动流程到运行时通信，逐层构建跨模组生态的技术基础。",
+      featuresTitle: "当前实现",
+      featuresDesc: "已实现的启动、通信、状态读取与窗口观察组件。",
       searchPlaceholder: "搜索功能 / Search features...",
       featureCount: "{visible} / {total} 项功能",
       verified: "已验证启动",
@@ -114,7 +113,6 @@
       copyFailed: "复制失败，请手动复制",
       footerText: "独立技术研究项目 · Rust × JVM · Minecraft 1.21.4",
       backTop: "返回顶部 ↑",
-      donate: "纯为爱发电，不接受任何形式的资助或捐赠。",
     },
     en: {
       skipToContent: "Skip to main content",
@@ -129,8 +127,7 @@
       navGithub: "GitHub ↗",
       viewSource: "View on GitHub ↗",
       heroBadge: "Experimental prototype · One-way player-mirroring PoC",
-      heroTitle:
-        'Connecting different<br><span class="gradient-text">Minecraft mod ecosystems.</span>',
+      heroTitle: "Minecraft mod interoperability",
       heroDesc:
         "JVM Mod Combiner is an experimental Rust and Java prototype. Fabric and NeoForge have been verified in separate JVMs, with a proof of concept for one-way player-state synchronization; a read-only macOS window-discovery prototype has also been added.",
       explore: "Explore architecture",
@@ -158,9 +155,9 @@
         "Fabric player state drives a NeoForge RemotePlayer mirror; lifecycle stability is still being improved.",
       flowFootnote:
         "This is a verified data flow in a local prototype, not general compatibility between arbitrary mods or servers.",
-      featuresTitle: "Designed for JVM interoperability",
+      featuresTitle: "Implemented components",
       featuresDesc:
-        "Building the technical foundations for cross-loader interoperability, from launch to runtime communication.",
+        "Current launch, transport, state-extraction, and window-observation components.",
       searchPlaceholder: "Search features...",
       featureCount: "{visible} / {total} features",
       verified: "Launch verified",
@@ -250,7 +247,6 @@
       footerText:
         "Independent research project · Rust × JVM · Minecraft 1.21.4",
       backTop: "Back to top ↑",
-      donate: "This project is purely for love of the craft; no funding or donations are accepted.",
     },
   };
 

@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
-use crate::window_manager::ClientRegistration;
+use crate::window_manager::AuthenticatedRegistration;
+use crate::window_peer::PeerIdentity;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowBounds {
@@ -24,12 +25,14 @@ pub struct DiscoveredWindow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowRecord {
     pub window: DiscoveredWindow,
+    pub identity: Option<PeerIdentity>,
     pub loader: Option<String>,
     pub role: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiscoveryError {
+    #[cfg(not(target_os = "macos"))]
     UnsupportedPlatform,
     WindowServerUnavailable,
 }
@@ -37,6 +40,7 @@ pub enum DiscoveryError {
 impl fmt::Display for DiscoveryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(not(target_os = "macos"))]
             Self::UnsupportedPlatform => {
                 write!(f, "window discovery is only supported on macOS")
             }
@@ -70,27 +74,37 @@ pub fn discover_windows() -> Result<Vec<DiscoveredWindow>, DiscoveryError> {
 /// `loader` and `role` set to `None`.
 pub fn associate_windows(
     windows: Vec<DiscoveredWindow>,
-    registrations: &[ClientRegistration],
+    registrations: &[AuthenticatedRegistration],
 ) -> Vec<WindowRecord> {
-    let clients: HashMap<u32, (&str, &str)> = registrations
-        .iter()
-        .map(|registration| {
-            (
-                registration.pid,
-                (registration.loader.as_str(), registration.role.as_str()),
-            )
-        })
-        .collect();
+    let mut clients: HashMap<u32, Vec<&AuthenticatedRegistration>> = HashMap::new();
+
+    for registration in registrations {
+        if registration.registration.pid != registration.identity.pid
+            || registration.identity.pid_version <= 0
+        {
+            continue;
+        }
+
+        clients
+            .entry(registration.identity.pid)
+            .or_default()
+            .push(registration);
+    }
 
     windows
         .into_iter()
         .map(|window| {
-            let client = clients.get(&window.pid);
+            let client = clients
+                .get(&window.pid)
+                .filter(|matches| matches.len() == 1)
+                .and_then(|matches| matches.first())
+                .copied();
 
             WindowRecord {
                 window,
-                loader: client.map(|(loader, _)| (*loader).to_owned()),
-                role: client.map(|(_, role)| (*role).to_owned()),
+                identity: client.map(|entry| entry.identity.clone()),
+                loader: client.map(|entry| entry.registration.loader.clone()),
+                role: client.map(|entry| entry.registration.role.clone()),
             }
         })
         .collect()
@@ -308,6 +322,7 @@ mod macos {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::window_manager::ClientRegistration;
 
     fn sample_window(window_id: u32, pid: u32) -> DiscoveredWindow {
         DiscoveredWindow {
@@ -324,36 +339,45 @@ mod tests {
         }
     }
 
-    fn registration(pid: u32, loader: &str) -> ClientRegistration {
-        ClientRegistration {
-            pid,
-            loader: loader.to_owned(),
-            role: "minecraft_client".to_owned(),
-            protocol: 1,
+    fn registration(pid: u32, pid_version: i32, loader: &str) -> AuthenticatedRegistration {
+        AuthenticatedRegistration {
+            registration: ClientRegistration {
+                pid,
+                loader: loader.to_owned(),
+                role: "minecraft_client".to_owned(),
+                protocol: 1,
+            },
+            identity: crate::window_peer::PeerIdentity {
+                pid,
+                pid_version,
+                audit_token: [pid, pid_version as u32, 0, 0, 0, 0, 0, 0],
+            },
         }
     }
 
     #[test]
     fn associates_window_by_pid() {
         let windows = vec![sample_window(100, 4242)];
-        let registrations = vec![registration(4242, "fabric")];
+        let registrations = vec![registration(4242, 100, "fabric")];
 
         let result = associate_windows(windows, &registrations);
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].loader.as_deref(), Some("fabric"));
         assert_eq!(result[0].role.as_deref(), Some("minecraft_client"));
+        assert_eq!(result[0].identity, Some(registrations[0].identity.clone()));
         assert_eq!(result[0].window.window_id, 100);
     }
 
     #[test]
     fn keeps_unregistered_windows() {
         let windows = vec![sample_window(101, 9999)];
-        let registrations = vec![registration(4242, "fabric")];
+        let registrations = vec![registration(4242, 100, "fabric")];
 
         let result = associate_windows(windows, &registrations);
 
         assert_eq!(result.len(), 1);
+        assert_eq!(result[0].identity, None);
         assert_eq!(result[0].loader, None);
         assert_eq!(result[0].role, None);
         assert_eq!(result[0].window.pid, 9999);
@@ -362,7 +386,7 @@ mod tests {
     #[test]
     fn supports_multiple_windows_for_one_process() {
         let windows = vec![sample_window(201, 4242), sample_window(202, 4242)];
-        let registrations = vec![registration(4242, "neoforge")];
+        let registrations = vec![registration(4242, 100, "neoforge")];
 
         let result = associate_windows(windows, &registrations);
 
@@ -374,6 +398,39 @@ mod tests {
                 .iter()
                 .all(|item| { item.loader.as_deref() == Some("neoforge") })
         );
+    }
+
+    #[test]
+    fn rejects_ambiguous_pid_with_multiple_process_instances() {
+        let windows = vec![sample_window(401, 4242), sample_window(402, 4242)];
+
+        let registrations = vec![
+            registration(4242, 100, "fabric"),
+            registration(4242, 200, "neoforge"),
+        ];
+
+        let result = associate_windows(windows, &registrations);
+
+        assert_eq!(result.len(), 2);
+
+        assert!(result.iter().all(|item| {
+            item.identity.is_none() && item.loader.is_none() && item.role.is_none()
+        }));
+    }
+
+    #[test]
+    fn rejects_registration_with_mismatched_identity_pid() {
+        let windows = vec![sample_window(403, 4242)];
+
+        let mut invalid = registration(4242, 100, "fabric");
+        invalid.identity.pid = 9999;
+
+        let result = associate_windows(windows, &[invalid]);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].identity, None);
+        assert_eq!(result[0].loader, None);
+        assert_eq!(result[0].role, None);
     }
 
     #[test]

@@ -25,6 +25,7 @@ pub struct DisplayGeometry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DisplayGeometryError {
+    #[cfg(not(target_os = "macos"))]
     UnsupportedPlatform,
     CoreGraphics(i32),
     NoActiveDisplays,
@@ -36,6 +37,7 @@ pub enum DisplayGeometryError {
 impl fmt::Display for DisplayGeometryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(not(target_os = "macos"))]
             Self::UnsupportedPlatform => {
                 write!(f, "display geometry discovery is only supported on macOS")
             }

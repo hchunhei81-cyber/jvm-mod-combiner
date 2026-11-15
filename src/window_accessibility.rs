@@ -18,6 +18,8 @@ pub struct RollbackError {
     pub detail: String,
 }
 
+// Used by the staged rollback execution path.
+#[allow(dead_code)]
 impl RollbackError {
     fn new(stage: &'static str, detail: impl Into<String>) -> Self {
         Self {
@@ -37,6 +39,9 @@ impl fmt::Display for RollbackError {
     }
 }
 
+// Includes errors reserved for the staged transaction and rollback paths.
+// Keep these variants as part of the planned safety contract.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccessibilityError {
     /// All window mutations are disabled until identity authorization is complete.
@@ -45,6 +50,7 @@ pub enum AccessibilityError {
     PermissionDenied,
     InvalidPid,
     ApplicationUnavailable,
+    DeadlineExceeded,
     AxCall {
         operation: &'static str,
         code: i32,
@@ -89,6 +95,9 @@ impl fmt::Display for AccessibilityError {
             Self::InvalidPid => write!(f, "PID must be a positive valid process ID"),
             Self::ApplicationUnavailable => {
                 write!(f, "Could not create an Accessibility application element")
+            }
+            Self::DeadlineExceeded => {
+                write!(f, "Accessibility inspection deadline exceeded")
             }
             Self::AxCall { operation, code } => {
                 write!(f, "{operation} failed with AXError {code}")
@@ -156,6 +165,93 @@ impl fmt::Display for AccessibilityError {
 
 impl Error for AccessibilityError {}
 
+fn check_ax_deadline(deadline: Option<std::time::Instant>) -> Result<(), AccessibilityError> {
+    if deadline.is_some_and(|limit| std::time::Instant::now() >= limit) {
+        return Err(AccessibilityError::DeadlineExceeded);
+    }
+
+    Ok(())
+}
+
+fn run_ax_stage_with_check<T>(
+    check: &mut impl FnMut() -> Result<(), AccessibilityError>,
+    operation: impl FnOnce() -> T,
+) -> Result<T, AccessibilityError> {
+    check()?;
+    let result = operation();
+    check()?;
+    Ok(result)
+}
+
+fn run_ax_stage<T>(
+    deadline: Option<std::time::Instant>,
+    operation: impl FnOnce() -> T,
+) -> Result<T, AccessibilityError> {
+    let mut check = || check_ax_deadline(deadline);
+    run_ax_stage_with_check(&mut check, operation)
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    #[test]
+    fn expired_ax_deadline_is_rejected() {
+        let deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
+
+        assert_eq!(
+            check_ax_deadline(Some(deadline)),
+            Err(AccessibilityError::DeadlineExceeded)
+        );
+        assert_eq!(
+            AccessibilityError::DeadlineExceeded.to_string(),
+            "Accessibility inspection deadline exceeded"
+        );
+    }
+
+    #[test]
+    fn unexpired_ax_deadline_passes() {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+
+        assert_eq!(check_ax_deadline(Some(deadline)), Ok(()));
+    }
+
+    #[test]
+    fn deadline_after_title_read_stops_position_read() {
+        let mut check_count = 0;
+        let mut check_deadline = || {
+            check_count += 1;
+            if check_count == 2 {
+                Err(AccessibilityError::DeadlineExceeded)
+            } else {
+                Ok(())
+            }
+        };
+        let mut title_reads = 0;
+        let mut position_reads = 0;
+
+        let result = (|| {
+            let title_result = run_ax_stage_with_check(&mut check_deadline, || {
+                title_reads += 1;
+                Ok::<_, AccessibilityError>("target")
+            })?;
+            let _title = title_result?;
+
+            let position_result = run_ax_stage_with_check(&mut check_deadline, || {
+                position_reads += 1;
+                Ok::<_, AccessibilityError>(())
+            })?;
+            position_result?;
+
+            Ok::<(), AccessibilityError>(())
+        })();
+
+        assert_eq!(result, Err(AccessibilityError::DeadlineExceeded));
+        assert_eq!(title_reads, 1);
+        assert_eq!(position_reads, 0);
+    }
+}
+
 /// Maximum difference, in logical screen points, accepted when matching
 /// CoreGraphics geometry against Accessibility geometry.
 const WINDOW_MATCH_TOLERANCE: f64 = 2.0;
@@ -182,6 +278,7 @@ fn bounds_match(expected: &WindowBounds, actual: &WindowBounds) -> bool {
 /// Rollback must use this check because a failed position/size write can
 /// leave the window at an intermediate geometry.
 #[cfg(any(target_os = "macos", test))]
+#[allow(dead_code)]
 fn verify_fresh_window_identity_only(
     expected: &DiscoveredWindow,
     current_windows: &[DiscoveredWindow],
@@ -208,6 +305,20 @@ fn verify_fresh_window_identity_only(
         });
     }
 
+    // Fail closed: owner and title must both be present and non-empty.
+    // Two missing values are not proof of matching window identity.
+    if expected.owner_name.as_deref().is_none_or(str::is_empty)
+        || actual.owner_name.as_deref().is_none_or(str::is_empty)
+    {
+        return Err(AccessibilityError::WindowIdentityUnavailable);
+    }
+
+    if expected.title.as_deref().is_none_or(str::is_empty)
+        || actual.title.as_deref().is_none_or(str::is_empty)
+    {
+        return Err(AccessibilityError::WindowIdentityUnavailable);
+    }
+
     if actual.owner_name != expected.owner_name {
         return Err(AccessibilityError::WindowIdentityChanged("owner"));
     }
@@ -223,6 +334,7 @@ fn verify_fresh_window_identity_only(
 /// CoreGraphics snapshot. Window IDs must be unique in the fresh snapshot.
 /// This variant also requires geometry to remain unchanged.
 #[cfg(any(target_os = "macos", test))]
+#[allow(dead_code)]
 fn verify_fresh_window_identity(
     expected: &DiscoveredWindow,
     current_windows: &[DiscoveredWindow],
@@ -245,6 +357,7 @@ fn verify_fresh_window_identity(
 /// geometry. Accessibility read-back can differ slightly, so use a
 /// one-logical-point tolerance.
 #[cfg(any(target_os = "macos", test))]
+#[allow(dead_code)]
 fn geometry_matches(actual: &WindowBounds, expected: &WindowBounds) -> bool {
     const VERIFY_TOLERANCE: f64 = 1.0;
 
@@ -262,6 +375,7 @@ fn geometry_matches(actual: &WindowBounds, expected: &WindowBounds) -> bool {
 /// setter, because a failed system call does not prove that no mutation
 /// occurred.
 #[cfg(any(target_os = "macos", test))]
+#[allow(dead_code)]
 fn run_window_transaction(
     mut set_position: impl FnMut() -> Result<(), AccessibilityError>,
     mut set_size: impl FnMut() -> Result<(), AccessibilityError>,
@@ -289,6 +403,7 @@ fn run_window_transaction(
 /// Execute a forward window transaction with an independent identity check
 /// immediately before each Accessibility write.
 #[cfg(any(target_os = "macos", test))]
+#[allow(dead_code)]
 fn run_guarded_window_transaction(
     mut verify_target: impl FnMut(&'static str) -> Result<(), AccessibilityError>,
     mut set_position: impl FnMut() -> Result<(), AccessibilityError>,
@@ -327,6 +442,7 @@ fn run_guarded_window_transaction(
 /// do suppress all subsequent writes. The caller remains responsible for
 /// readback, even when this function returns an error.
 #[cfg(any(target_os = "macos", test))]
+#[allow(dead_code)]
 fn run_guarded_rollback_setters(
     mut verify_target: impl FnMut(&'static str) -> Result<(), RollbackError>,
     mut set_size: impl FnMut() -> Result<(), AccessibilityError>,
@@ -390,6 +506,7 @@ fn run_guarded_rollback_setters(
 /// the window. The caller must independently revalidate the CoreGraphics
 /// Window ID, PID, owner and title before using the returned transient index.
 /// Duplicate titles and invalid AX geometry are still rejected.
+#[allow(dead_code)]
 fn match_accessibility_window_for_rollback(
     expected_title: Option<&str>,
     candidates: &[AccessibilityWindow],
@@ -474,6 +591,7 @@ mod macos {
     type AXValueRef = *const c_void;
 
     const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+    const MAX_AX_WINDOWS: isize = 32;
 
     const K_AX_VALUE_TYPE_CG_POINT: u32 = 1;
     const K_AX_VALUE_TYPE_CG_SIZE: u32 = 2;
@@ -498,21 +616,26 @@ mod macos {
 
         fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
 
+        fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, timeout: f32) -> i32;
+
         fn AXUIElementCopyAttributeValue(
             element: AXUIElementRef,
             attribute: CFStringRef,
             value: *mut CFTypeRef,
         ) -> i32;
+        #[allow(dead_code)]
         fn AXUIElementIsAttributeSettable(
             element: AXUIElementRef,
             attribute: CFStringRef,
             settable: *mut u8,
         ) -> i32;
+        #[allow(dead_code)]
         fn AXUIElementSetAttributeValue(
             element: AXUIElementRef,
             attribute: CFStringRef,
             value: CFTypeRef,
         ) -> i32;
+        #[allow(dead_code)]
         fn AXValueCreate(value_type: u32, value: *const c_void) -> AXValueRef;
 
         fn AXValueGetType(value: AXValueRef) -> u32;
@@ -584,6 +707,21 @@ mod macos {
         };
 
         unsafe { OwnedCf::from_raw(value) }
+    }
+
+    const AX_MESSAGING_TIMEOUT_SECONDS: f32 = 0.5;
+
+    fn set_element_messaging_timeout(
+        element: AXUIElementRef,
+        operation: &'static str,
+    ) -> Result<(), AccessibilityError> {
+        let code = unsafe { AXUIElementSetMessagingTimeout(element, AX_MESSAGING_TIMEOUT_SECONDS) };
+
+        if code != 0 {
+            return Err(AccessibilityError::AxCall { operation, code });
+        }
+
+        Ok(())
     }
 
     fn copy_attribute(
@@ -702,6 +840,7 @@ mod macos {
         }
     }
 
+    #[allow(dead_code)]
     fn attribute_is_settable(
         element: AXUIElementRef,
         attribute: &OwnedCf,
@@ -725,6 +864,7 @@ mod macos {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn set_ax_value(
         element: AXUIElementRef,
         attribute: &OwnedCf,
@@ -748,6 +888,7 @@ mod macos {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn set_point(
         element: AXUIElementRef,
         attribute: &OwnedCf,
@@ -762,6 +903,7 @@ mod macos {
         )
     }
 
+    #[allow(dead_code)]
     fn set_size(
         element: AXUIElementRef,
         attribute: &OwnedCf,
@@ -776,6 +918,7 @@ mod macos {
         )
     }
 
+    #[allow(dead_code)]
     fn restore_bounds(
         element: AXUIElementRef,
         position_attribute: &OwnedCf,
@@ -884,6 +1027,7 @@ mod macos {
     /// Reacquire the window through fresh CoreGraphics and Accessibility
     /// snapshots before restoring its original geometry. Never reuse the
     /// AXUIElementRef selected by the failed forward operation.
+    #[allow(dead_code)]
     fn restore_bounds_safely(
         pid: u32,
         expected: &DiscoveredWindow,
@@ -936,6 +1080,17 @@ mod macos {
                                 "required value was unavailable",
                             )
                         })?;
+
+                set_element_messaging_timeout(
+                    application.as_ptr(),
+                    "setting AX application messaging timeout for rollback",
+                )
+                .map_err(|error| {
+                    RollbackError::from_accessibility(
+                        "setting AX application messaging timeout for rollback",
+                        error,
+                    )
+                })?;
 
                 let windows_attribute = create_attribute(b"AXWindows\0").ok_or_else(|| {
                     RollbackError::new(
@@ -1028,6 +1183,17 @@ mod macos {
                         rollback_candidate_diagnostics.push(format!("index={index} element=null"));
                         continue;
                     }
+
+                    set_element_messaging_timeout(
+                        element,
+                        "setting AX window messaging timeout for rollback",
+                    )
+                    .map_err(|error| {
+                        RollbackError::from_accessibility(
+                            "setting AX window messaging timeout for rollback",
+                            error,
+                        )
+                    })?;
 
                     let title_result =
                         copy_attribute(element, &title_attribute, "AXTitle before rollback");
@@ -1316,6 +1482,7 @@ mod macos {
         )
     }
 
+    #[allow(dead_code)]
     pub fn set_window_bounds(
         pid: u32,
         discovered: &DiscoveredWindow,
@@ -1342,6 +1509,11 @@ mod macos {
 
         let application = unsafe { OwnedCf::from_raw(AXUIElementCreateApplication(pid as i32)) }
             .ok_or(AccessibilityError::ApplicationUnavailable)?;
+
+        set_element_messaging_timeout(
+            application.as_ptr(),
+            "setting application AX messaging timeout for window mutation",
+        )?;
 
         let windows_attribute =
             create_attribute(b"AXWindows\0").ok_or(AccessibilityError::ApplicationUnavailable)?;
@@ -1376,6 +1548,11 @@ mod macos {
             if element.is_null() {
                 continue;
             }
+
+            set_element_messaging_timeout(
+                element,
+                "setting window AX messaging timeout for window mutation",
+            )?;
 
             let title = copy_attribute(element, &title_attribute, "AXTitle")
                 .ok()
@@ -1556,16 +1733,35 @@ mod macos {
     }
 
     pub fn inspect(pid: u32) -> Result<Vec<AccessibilityWindow>, AccessibilityError> {
+        inspect_with_titles(pid, None, None)
+    }
+
+    pub fn inspect_with_titles(
+        pid: u32,
+        expected_titles: Option<&std::collections::HashSet<String>>,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Vec<AccessibilityWindow>, AccessibilityError> {
+        check_ax_deadline(deadline)?;
+
         if pid == 0 || pid > i32::MAX as u32 {
             return Err(AccessibilityError::InvalidPid);
         }
 
-        if !is_trusted() {
+        if !run_ax_stage(deadline, || is_trusted())? {
             return Err(AccessibilityError::PermissionDenied);
         }
 
-        let application = unsafe { OwnedCf::from_raw(AXUIElementCreateApplication(pid as i32)) }
-            .ok_or(AccessibilityError::ApplicationUnavailable)?;
+        let application = run_ax_stage(deadline, || unsafe {
+            OwnedCf::from_raw(AXUIElementCreateApplication(pid as i32))
+        })?
+        .ok_or(AccessibilityError::ApplicationUnavailable)?;
+
+        run_ax_stage(deadline, || {
+            set_element_messaging_timeout(
+                application.as_ptr(),
+                "setting application AX messaging timeout",
+            )
+        })??;
 
         let windows_attribute =
             create_attribute(b"AXWindows\0").ok_or(AccessibilityError::ApplicationUnavailable)?;
@@ -1579,41 +1775,68 @@ mod macos {
         let size_attribute =
             create_attribute(b"AXSize\0").ok_or(AccessibilityError::ApplicationUnavailable)?;
 
-        let windows = copy_attribute(application.as_ptr(), &windows_attribute, "AXWindows")?;
+        let windows = run_ax_stage(deadline, || {
+            copy_attribute(application.as_ptr(), &windows_attribute, "AXWindows")
+        })??;
 
-        unsafe {
-            if CFGetTypeID(windows.as_ptr()) != CFArrayGetTypeID() {
-                return Err(AccessibilityError::InvalidReturnedType("AXWindows"));
-            }
+        let is_array = run_ax_stage(deadline, || unsafe {
+            CFGetTypeID(windows.as_ptr()) == CFArrayGetTypeID()
+        })?;
+        if !is_array {
+            return Err(AccessibilityError::InvalidReturnedType("AXWindows"));
         }
 
-        let count = unsafe { CFArrayGetCount(windows.as_ptr()) };
+        let count = run_ax_stage(deadline, || unsafe { CFArrayGetCount(windows.as_ptr()) })?;
 
-        if count < 0 {
-            return Err(AccessibilityError::InvalidReturnedType("AXWindows"));
+        if count < 0 || count > MAX_AX_WINDOWS {
+            return Err(AccessibilityError::InvalidReturnedType(
+                "AXWindows (invalid or exceeds maximum count of 32)",
+            ));
         }
 
         let mut results = Vec::with_capacity(count as usize);
 
         for index in 0..count {
-            let element =
-                unsafe { CFArrayGetValueAtIndex(windows.as_ptr(), index) } as AXUIElementRef;
+            check_ax_deadline(deadline)?;
+            let element = run_ax_stage(deadline, || unsafe {
+                CFArrayGetValueAtIndex(windows.as_ptr(), index) as AXUIElementRef
+            })?;
 
             if element.is_null() {
                 continue;
             }
 
-            let title = copy_attribute(element, &title_attribute, "AXTitle")
+            run_ax_stage(deadline, || {
+                set_element_messaging_timeout(element, "setting window AX messaging timeout")
+            })??;
+
+            let title_result = run_ax_stage(deadline, || {
+                copy_attribute(element, &title_attribute, "AXTitle")
+            })?;
+            let title = title_result
                 .ok()
                 .and_then(|value| cf_string_to_string(value.as_ptr()));
 
-            let position = copy_attribute(element, &position_attribute, "AXPosition")
-                .ok()
-                .and_then(|value| read_point(value.as_ptr()));
+            let needs_geometry = expected_titles
+                .is_none_or(|titles| title.as_ref().is_some_and(|title| titles.contains(title)));
 
-            let size = copy_attribute(element, &size_attribute, "AXSize")
-                .ok()
-                .and_then(|value| read_size(value.as_ptr()));
+            let (position, size) = if needs_geometry {
+                let position_result = run_ax_stage(deadline, || {
+                    copy_attribute(element, &position_attribute, "AXPosition")
+                })?;
+                let position = position_result
+                    .ok()
+                    .and_then(|value| read_point(value.as_ptr()));
+
+                let size_result = run_ax_stage(deadline, || {
+                    copy_attribute(element, &size_attribute, "AXSize")
+                })?;
+                let size = size_result.ok().and_then(|value| read_size(value.as_ptr()));
+
+                (position, size)
+            } else {
+                (None, None)
+            };
 
             let bounds = match (position, size) {
                 (Some(position), Some(size)) => Some(WindowBounds {
@@ -1648,12 +1871,16 @@ pub fn is_accessibility_trusted() -> Result<bool, AccessibilityError> {
     }
 }
 
+// Intentionally retained as a fail-closed mutation boundary.
+#[allow(dead_code)]
 fn ensure_window_mutation_enabled() -> Result<(), AccessibilityError> {
     // Fail closed. Do not remove this gate until the trusted identity and
     // transaction authorization design has been implemented and reviewed.
     Err(AccessibilityError::WindowMutationDisabled)
 }
 
+// Intentionally unavailable until transaction identity authorization is approved.
+#[allow(dead_code)]
 pub fn set_application_window_bounds(
     pid: u32,
     discovered: &DiscoveredWindow,
@@ -1688,6 +1915,30 @@ pub fn inspect_application_windows(
     }
 }
 
+pub fn inspect_application_windows_for_titles_until(
+    pid: u32,
+    expected_titles: &[String],
+    deadline: Option<std::time::Instant>,
+) -> Result<Vec<AccessibilityWindow>, AccessibilityError> {
+    #[cfg(target_os = "macos")]
+    {
+        let titles: std::collections::HashSet<String> = expected_titles.iter().cloned().collect();
+
+        if titles.is_empty() {
+            return Err(AccessibilityError::WindowIdentityUnavailable);
+        }
+
+        macos::inspect_with_titles(pid, Some(&titles), deadline)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (pid, expected_titles, deadline);
+        Err(AccessibilityError::UnsupportedPlatform)
+    }
+}
+
+#[allow(dead_code)]
 fn run_ax_then_always_verify_cg(
     ax_restore: impl FnOnce() -> Result<(), RollbackError>,
     cg_verify: impl FnOnce() -> Result<(), RollbackError>,
@@ -1698,6 +1949,7 @@ fn run_ax_then_always_verify_cg(
     combine_rollback_results(ax_result, cg_result)
 }
 
+#[allow(dead_code)]
 fn combine_rollback_results(
     ax_result: Result<(), RollbackError>,
     cg_result: Result<(), RollbackError>,
@@ -2455,6 +2707,60 @@ mod matching_tests {
                 expected: target.pid,
                 actual: target.pid + 1,
             })
+        );
+    }
+
+    #[test]
+    fn identity_only_rejects_missing_owner_even_when_both_are_none() {
+        let mut expected = discovered();
+        expected.owner_name = None;
+
+        let mut actual = expected.clone();
+        actual.owner_name = None;
+
+        assert_eq!(
+            verify_fresh_window_identity_only(&expected, &[actual]),
+            Err(AccessibilityError::WindowIdentityUnavailable)
+        );
+    }
+
+    #[test]
+    fn identity_only_rejects_missing_title_even_when_both_are_none() {
+        let mut expected = discovered();
+        expected.title = None;
+
+        let mut actual = expected.clone();
+        actual.title = None;
+
+        assert_eq!(
+            verify_fresh_window_identity_only(&expected, &[actual]),
+            Err(AccessibilityError::WindowIdentityUnavailable)
+        );
+    }
+
+    #[test]
+    fn identity_only_rejects_empty_owner_name() {
+        let mut expected = discovered();
+        expected.owner_name = Some(String::new());
+
+        let actual = expected.clone();
+
+        assert_eq!(
+            verify_fresh_window_identity_only(&expected, &[actual]),
+            Err(AccessibilityError::WindowIdentityUnavailable)
+        );
+    }
+
+    #[test]
+    fn identity_only_rejects_empty_title() {
+        let mut expected = discovered();
+        expected.title = Some(String::new());
+
+        let actual = expected.clone();
+
+        assert_eq!(
+            verify_fresh_window_identity_only(&expected, &[actual]),
+            Err(AccessibilityError::WindowIdentityUnavailable)
         );
     }
 

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::display_geometry;
 use crate::window_accessibility;
 use crate::window_discovery::{self, DiscoveredWindow, WindowBounds};
@@ -108,12 +110,49 @@ fn verify_window_identity(
     Ok(())
 }
 
+fn check_deadline(deadline: Option<std::time::Instant>) -> Result<(), String> {
+    if deadline.is_some_and(|limit| std::time::Instant::now() >= limit) {
+        return Err("dry-run execution deadline exceeded".to_owned());
+    }
+
+    Ok(())
+}
+
+fn run_deadline_stage_with_check<T>(
+    check: &mut impl FnMut() -> Result<(), String>,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    check()?;
+    let result = operation();
+    check()?;
+    result
+}
+
+fn run_deadline_stage<T>(
+    deadline: Option<std::time::Instant>,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let mut check = || check_deadline(deadline);
+    run_deadline_stage_with_check(&mut check, operation)
+}
+
 pub fn build_window_dry_run(
     window_ids: &[u32],
     direction: LayoutDirection,
     display_id: Option<u32>,
     constraints: LayoutConstraints,
 ) -> Result<WindowDryRunReport, String> {
+    build_window_dry_run_with_deadline(window_ids, direction, display_id, constraints, None)
+}
+
+pub fn build_window_dry_run_with_deadline(
+    window_ids: &[u32],
+    direction: LayoutDirection,
+    display_id: Option<u32>,
+    constraints: LayoutConstraints,
+    deadline: Option<std::time::Instant>,
+) -> Result<WindowDryRunReport, String> {
+    check_deadline(deadline)?;
     if window_ids.len() < 2 {
         return Err("at least two Window IDs are required".to_owned());
     }
@@ -130,29 +169,38 @@ pub fn build_window_dry_run(
         }
     }
 
-    let displays = display_geometry::discover_displays()
-        .map_err(|error| format!("display discovery failed: {error}"))?;
+    let displays = run_deadline_stage(deadline, || {
+        display_geometry::discover_displays()
+            .map_err(|error| format!("display discovery failed: {error}"))
+    })?;
 
-    let plan: WindowLayoutPlan = match display_id {
-        Some(id) => window_layout::plan_on_display_id(
-            &displays,
-            id,
-            window_ids.len(),
-            direction,
-            constraints,
-        ),
-        None => {
-            window_layout::plan_on_main_display(&displays, window_ids.len(), direction, constraints)
+    let plan: WindowLayoutPlan = run_deadline_stage(deadline, || {
+        match display_id {
+            Some(id) => window_layout::plan_on_display_id(
+                &displays,
+                id,
+                window_ids.len(),
+                direction,
+                constraints,
+            ),
+            None => window_layout::plan_on_main_display(
+                &displays,
+                window_ids.len(),
+                direction,
+                constraints,
+            ),
         }
-    }
-    .map_err(|error| format!("layout planning failed: {error}"))?;
+        .map_err(|error| format!("layout planning failed: {error}"))
+    })?;
 
-    let initial_windows = window_discovery::discover_windows()
-        .map_err(|error| format!("initial window discovery failed: {error}"))?;
+    let initial_windows = run_deadline_stage(deadline, || {
+        window_discovery::discover_windows()
+            .map_err(|error| format!("initial window discovery failed: {error}"))
+    })?;
 
     let mut selected = Vec::with_capacity(window_ids.len());
-    let mut accessibility_indices = Vec::with_capacity(window_ids.len());
 
+    // First pass: validate and collect every requested window.
     for id in window_ids {
         let window = find_unique_window(&initial_windows, *id)?;
 
@@ -168,34 +216,76 @@ pub fn build_window_dry_run(
             return Err(format!("Window {id} has invalid geometry"));
         }
 
-        let candidates =
-            window_accessibility::inspect_application_windows(window.pid).map_err(|error| {
+        selected.push(window);
+    }
+
+    // Second pass: inspect each PID once, using all requested titles
+    // belonging to that process.
+    let mut accessibility_by_pid =
+        HashMap::<u32, Vec<window_accessibility::AccessibilityWindow>>::new();
+
+    for window in &selected {
+        if accessibility_by_pid.contains_key(&window.pid) {
+            continue;
+        }
+
+        let expected_titles: Vec<String> = selected
+            .iter()
+            .filter(|candidate| candidate.pid == window.pid)
+            .filter_map(|candidate| candidate.title.clone())
+            .collect();
+
+        let candidates = run_deadline_stage(deadline, || {
+            window_accessibility::inspect_application_windows_for_titles_until(
+                window.pid,
+                &expected_titles,
+                deadline,
+            )
+            .map_err(|error| {
                 format!(
-                    "Accessibility inspection failed for Window {id}, PID {}: {error}",
+                    "Accessibility inspection failed for PID {}: {error}",
                     window.pid
                 )
-            })?;
+            })
+        })?;
 
-        let ax_index = window_accessibility::match_accessibility_window(&window, &candidates)
-            .map_err(|error| {
-                format!("Accessibility identity match failed for Window {id}: {error}")
-            })?;
+        accessibility_by_pid.insert(window.pid, candidates);
+    }
 
-        selected.push(window);
+    // Third pass: retain the existing exact title + geometry matching.
+    let mut accessibility_indices = Vec::with_capacity(selected.len());
+
+    for window in &selected {
+        let candidates = accessibility_by_pid
+            .get(&window.pid)
+            .ok_or_else(|| "AX inspection cache entry unexpectedly missing".to_owned())?;
+
+        let ax_index = run_deadline_stage(deadline, || {
+            window_accessibility::match_accessibility_window(window, candidates).map_err(|error| {
+                format!(
+                    "Accessibility identity match failed for Window {}: {error}",
+                    window.window_id
+                )
+            })
+        })?;
+
         accessibility_indices.push(ax_index);
     }
 
     // Re-discover all selected windows before producing a report.
     // A changed or replaced window invalidates the entire plan.
-    let final_windows = window_discovery::discover_windows()
-        .map_err(|error| format!("final window discovery failed: {error}"))?;
+    let final_windows = run_deadline_stage(deadline, || {
+        window_discovery::discover_windows()
+            .map_err(|error| format!("final window discovery failed: {error}"))
+    })?;
 
     let mut entries = Vec::with_capacity(selected.len());
 
     for (index, original) in selected.iter().enumerate() {
+        check_deadline(deadline)?;
         let current = find_unique_window(&final_windows, original.window_id)?;
 
-        verify_window_identity(original, &current)?;
+        run_deadline_stage(deadline, || verify_window_identity(original, &current))?;
 
         let placement = plan
             .placements
@@ -219,6 +309,8 @@ pub fn build_window_dry_run(
             accessibility_index: accessibility_indices[index],
         });
     }
+
+    check_deadline(deadline)?;
 
     Ok(WindowDryRunReport {
         display_id: plan.display_id,
@@ -504,5 +596,53 @@ mod tests {
         );
 
         assert!(result.unwrap_err().contains("at least two"));
+    }
+
+    #[test]
+    fn expired_deadline_is_rejected_immediately() {
+        let deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
+
+        assert_eq!(
+            check_deadline(Some(deadline)),
+            Err("dry-run execution deadline exceeded".to_owned())
+        );
+    }
+
+    #[test]
+    fn unexpired_deadline_passes() {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+
+        assert_eq!(check_deadline(Some(deadline)), Ok(()));
+    }
+
+    #[test]
+    fn deadline_after_ax_inspection_prevents_final_discovery() {
+        let mut check_count = 0;
+        let mut check_deadline = || {
+            check_count += 1;
+            if check_count == 2 {
+                Err("dry-run execution deadline exceeded".to_owned())
+            } else {
+                Ok(())
+            }
+        };
+        let mut ax_inspection_returned = false;
+        let mut final_discovery_called = false;
+
+        let result = (|| {
+            run_deadline_stage_with_check(&mut check_deadline, || {
+                ax_inspection_returned = true;
+                Ok(())
+            })?;
+            run_deadline_stage_with_check(&mut check_deadline, || {
+                final_discovery_called = true;
+                Ok(())
+            })?;
+            Ok::<(), String>(())
+        })();
+
+        assert!(result.unwrap_err().contains("deadline exceeded"));
+        assert!(ax_inspection_returned);
+        assert!(!final_discovery_called);
     }
 }

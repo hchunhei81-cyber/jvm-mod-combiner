@@ -1,4 +1,4 @@
-use crate::window_manager::{self, ClientRegistration, RegistryError, WindowManagerHandle};
+use crate::window_manager::{self, AuthenticatedRegistration, RegistryError, WindowManagerHandle};
 use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -110,7 +110,7 @@ impl WindowRuntime {
     /// Returns Some(registrations) for a locally owned Manager.
     /// Returns None when this process is an external Manager client.
     /// Registry failures are propagated instead of being treated as empty.
-    pub fn registrations(&self) -> Result<Option<Vec<ClientRegistration>>, RegistryError> {
+    pub fn registrations(&self) -> Result<Option<Vec<AuthenticatedRegistration>>, RegistryError> {
         self.manager
             .as_ref()
             .map(WindowManagerHandle::registrations)

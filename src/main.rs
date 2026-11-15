@@ -1,13 +1,21 @@
 mod display_geometry;
 mod display_topology;
 mod window_accessibility;
+mod window_control;
 mod window_discovery;
 mod window_dry_run;
 mod window_integration;
 mod window_layout;
 mod window_manager;
 mod window_peer;
+// Staged transaction infrastructure.
+// Intentionally dormant until trusted process-instance identity,
+// transaction authorization, and recovery validation are complete.
+#[allow(dead_code)]
 mod window_transaction;
+// Staged snapshot adapter.
+// Do not activate until the identity authorization chain is reviewed.
+#[allow(dead_code)]
 mod window_transaction_adapter;
 
 use jni::jni_sig;
@@ -1345,15 +1353,15 @@ where
     }
 }
 
-fn launch_neoforge_subprocess(sandbox_dir: &Path) {
-    use std::process::{Command, Stdio};
+fn build_neoforge_command(
+    sandbox_dir: &Path,
+    project_root: &Path,
+    window_runtime: &window_integration::WindowRuntime,
+) -> Result<std::process::Command, String> {
+    use std::process::Command;
 
     const PROFILE_ID: &str = "neoforge-21.4.161";
     const MC_VERSION: &str = "1.21.4";
-
-    fn fail(message: &str) {
-        eprintln!("[neoforge] ERROR: {}", message);
-    }
 
     fn append_profile_args(value: &Value, output: &mut Vec<String>, allow_features: bool) {
         match value {
@@ -1400,13 +1408,9 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
         output
     }
 
-    let home = match env::var("HOME") {
-        Ok(v) => PathBuf::from(v),
-        Err(e) => {
-            fail(&format!("无法读取 HOME: {}", e));
-            return;
-        }
-    };
+    let home = env::var("HOME")
+        .map(PathBuf::from)
+        .map_err(|e| format!("无法读取 HOME: {e}"))?;
 
     let mc_root = home.join("Library/Application Support/minecraft");
     let libraries_dir = mc_root.join("libraries");
@@ -1422,19 +1426,17 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
         .join(format!("{}.json", MC_VERSION));
 
     if !profile_path.is_file() {
-        fail(&format!(
+        return Err(format!(
             "NeoForge profile 不存在: {}",
             profile_path.display()
         ));
-        return;
     }
 
     if !vanilla_path.is_file() {
-        fail(&format!(
+        return Err(format!(
             "Minecraft profile 不存在: {}",
             vanilla_path.display()
         ));
-        return;
     }
 
     let profile: Value = match fs::read_to_string(&profile_path)
@@ -1442,10 +1444,7 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
         .and_then(|s| serde_json::from_str(&s).ok())
     {
         Some(v) => v,
-        None => {
-            fail("NeoForge JSON 解析失败");
-            return;
-        }
+        None => return Err("NeoForge JSON 解析失败".to_string()),
     };
 
     let vanilla: Value = match fs::read_to_string(&vanilla_path)
@@ -1453,10 +1452,7 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
         .and_then(|s| serde_json::from_str(&s).ok())
     {
         Some(v) => v,
-        None => {
-            fail("Minecraft JSON 解析失败");
-            return;
-        }
+        None => return Err("Minecraft JSON 解析失败".to_string()),
     };
 
     let profile_id = profile
@@ -1470,35 +1466,27 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
         .unwrap_or("");
 
     if inherited != MC_VERSION {
-        fail(&format!(
+        return Err(format!(
             "版本不匹配: NeoForge inheritsFrom={}，预期 {}",
             inherited, MC_VERSION
         ));
-        return;
     }
 
     let main_class = match profile.get("mainClass").and_then(Value::as_str) {
         Some(v) => v,
-        None => {
-            fail("profile 缺少 mainClass");
-            return;
-        }
+        None => return Err("profile 缺少 mainClass".to_string()),
     };
 
     let asset_index = match vanilla.pointer("/assetIndex/id").and_then(Value::as_str) {
         Some(v) => v,
-        None => {
-            fail("原版 profile 缺少 assetIndex.id");
-            return;
-        }
+        None => return Err("原版 profile 缺少 assetIndex.id".to_string()),
     };
 
     let assets_root = mc_root.join("assets");
     let natives_dir = sandbox_dir.join("natives");
 
     if let Err(e) = fs::create_dir_all(&natives_dir) {
-        fail(&format!("创建 natives 目录失败: {}", e));
-        return;
+        return Err(format!("创建 natives 目录失败: {e}"));
     }
 
     // ---------------------------------------------------------
@@ -1591,16 +1579,9 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
         match status {
             Ok(s) if s.success() => extracted_count += 1,
             Ok(s) => {
-                eprintln!(
-                    "[neoforge] WARNING: native 提取失败 {}，status={}",
-                    jar.display(),
-                    s
-                );
+                return Err(format!("native 提取失败 {}，status={}", jar.display(), s));
             }
-            Err(e) => {
-                fail(&format!("无法执行 unzip: {}", e));
-                return;
-            }
+            Err(e) => return Err(format!("无法执行 unzip: {e}")),
         }
     }
 
@@ -1654,17 +1635,14 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
         if let Some(module_path) = jvm_args.get(index + 1) {
             for entry in module_path.split(':') {
                 if !entry.is_empty() && !Path::new(entry).is_file() {
-                    fail(&format!("模块路径 JAR 不存在: {}", entry));
-                    return;
+                    return Err(format!("模块路径 JAR 不存在: {entry}"));
                 }
             }
         } else {
-            fail("-p 后缺少模块路径");
-            return;
+            return Err("-p 后缺少模块路径".to_string());
         }
     } else {
-        fail("NeoForge JVM 参数缺少 -p 模块路径");
-        return;
+        return Err("NeoForge JVM 参数缺少 -p 模块路径".to_string());
     }
 
     // ---------------------------------------------------------
@@ -1727,25 +1705,15 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
     // 6. Java Agent
     // ---------------------------------------------------------
 
-    let project_root = match env::current_dir() {
-        Ok(v) => v,
-        Err(e) => {
-            fail(&format!("无法获取当前目录: {}", e));
-            return;
-        }
-    };
-
-    let agent_jar = resolve_agent_jar(&project_root);
+    let agent_jar = resolve_agent_jar(project_root);
 
     let mut cmd = Command::new(&java);
     cmd.current_dir(&mc_root);
-    let window_runtime = window_integration::WindowRuntime::start_or_connect(&project_root)
-        .expect("[WindowIntegration] NeoForge 无法启动或连接 Window Manager");
     cmd.arg(window_runtime.java_property_arg());
     cmd.arg(
         window_runtime
             .bridge_agent_arg("neoforge")
-            .expect("[WindowIntegration] 无法生成 NeoForge Bridge 参数"),
+            .map_err(|e| format!("无法生成 NeoForge Bridge 参数: {e}"))?,
     );
 
     // 旧代码通过 JAVA_TOOL_OPTIONS 注入，可能造成重复注入。
@@ -1783,19 +1751,131 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
     eprintln!("[neoforge] JVM 参数数量: {}", jvm_args.len());
     eprintln!("[neoforge] Game 参数数量: {}", game_args.len());
     eprintln!("[neoforge] Java: {}", java);
+
+    cmd.stdout(std::process::Stdio::inherit());
+    cmd.stderr(std::process::Stdio::inherit());
+
+    Ok(cmd)
+}
+
+fn launch_neoforge_subprocess(sandbox_dir: &Path) {
+    let project_root = match env::current_dir() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("[neoforge] 无法获取项目目录: {error}");
+            return;
+        }
+    };
+
+    let window_runtime = match window_integration::WindowRuntime::start_or_connect(&project_root) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("[neoforge] WindowRuntime 初始化失败: {error}");
+            return;
+        }
+    };
+
+    let mut command = match build_neoforge_command(sandbox_dir, &project_root, &window_runtime) {
+        Ok(command) => command,
+        Err(error) => {
+            eprintln!("[neoforge] 命令构建失败: {error}");
+            return;
+        }
+    };
+
     eprintln!("[neoforge] 启动 NeoForge 21.4.161...");
 
-    cmd.stdout(Stdio::inherit());
-    cmd.stderr(Stdio::inherit());
-
-    match cmd.spawn() {
+    match command.spawn() {
         Ok(mut child) => match child.wait() {
             Ok(status) => {
                 eprintln!("[neoforge] 进程退出状态: {}", status);
             }
-            Err(e) => fail(&format!("等待 NeoForge 进程失败: {}", e)),
+            Err(error) => eprintln!("[neoforge] 等待 Java 进程失败: {error}"),
         },
-        Err(e) => fail(&format!("启动 Java 失败: {}", e)),
+        Err(error) => eprintln!("[neoforge] 启动 Java 失败: {error}"),
+    }
+}
+
+fn terminate_owned_child(child: &mut std::process::Child, name: &str) {
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            eprintln!("[Fusion] {name} child already exited: {status}");
+        }
+        Ok(None) => {
+            eprintln!("[Fusion] Terminating owned {name} child");
+
+            if let Err(error) = child.kill() {
+                eprintln!("[Fusion] Failed to terminate owned {name} child: {error}");
+            }
+
+            match child.wait() {
+                Ok(status) => {
+                    eprintln!("[Fusion] {name} child reaped: {status}");
+                }
+                Err(error) => {
+                    eprintln!("[Fusion] Failed to reap owned {name} child: {error}");
+                }
+            }
+        }
+        Err(error) => {
+            eprintln!("[Fusion] Cannot poll {name} child before cleanup: {error}");
+
+            if let Err(kill_error) = child.kill() {
+                eprintln!("[Fusion] Failed to terminate owned {name} child: {kill_error}");
+            }
+
+            if let Err(wait_error) = child.wait() {
+                eprintln!("[Fusion] Failed to reap owned {name} child: {wait_error}");
+            }
+        }
+    }
+}
+
+enum ChildPoll<T> {
+    Running,
+    Exited(T),
+    Failed(String),
+}
+
+fn record_live_child_poll<T: std::fmt::Display>(
+    poll_result: std::io::Result<Option<T>>,
+) -> ChildPoll<String> {
+    match poll_result {
+        Ok(None) => ChildPoll::Running,
+        Ok(Some(status)) => ChildPoll::Exited(status.to_string()),
+        Err(error) => ChildPoll::Failed(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod fusion_child_liveness_tests {
+    use super::{ChildPoll, record_live_child_poll};
+    use std::io;
+
+    #[test]
+    fn running_child_is_classified_without_exit_status() {
+        assert!(matches!(
+            record_live_child_poll(Ok(None::<&str>)),
+            ChildPoll::Running
+        ));
+    }
+
+    #[test]
+    fn exited_child_preserves_exit_status() {
+        assert!(matches!(
+            record_live_child_poll(Ok(Some("exit status"))),
+            ChildPoll::Exited(status) if status == "exit status"
+        ));
+    }
+
+    #[test]
+    fn poll_failure_is_not_mistaken_for_running() {
+        match record_live_child_poll::<&str>(Err(io::Error::other("simulated wait failure"))) {
+            ChildPoll::Failed(error) => {
+                assert!(error.contains("simulated wait failure"));
+            }
+            _ => panic!("poll failure must be classified as Failed"),
+        }
     }
 }
 
@@ -2032,107 +2112,6 @@ fn start_data_bus() -> std::io::Result<()> {
     Ok(())
 }
 
-const FABRIC_RESTORE_WINDOW_ID: u32 = 10868;
-const FABRIC_RESTORE_PID: u32 = 53223;
-const FABRIC_RESTORE_CONFIRMATION: &str = "I_UNDERSTAND_FABRIC_WINDOW_WILL_BE_RESTORED";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct WindowRestoreOptions {
-    window_id: u32,
-}
-
-fn parse_window_restore_args(args: &[String]) -> Result<WindowRestoreOptions, String> {
-    let mut mode_seen = false;
-    let mut window_id: Option<u32> = None;
-    let mut confirmation_seen = false;
-    let mut confirmed = false;
-
-    let mut i = 1;
-    while i < args.len() {
-        let arg = &args[i];
-
-        if arg == "--mode" {
-            if mode_seen {
-                return Err("duplicate --mode".to_owned());
-            }
-            i += 1;
-            let value = args.get(i).ok_or("missing value for --mode")?;
-            if !value.eq_ignore_ascii_case("window-restore") {
-                return Err("mode must be window-restore".to_owned());
-            }
-            mode_seen = true;
-        } else if let Some(value) = arg.strip_prefix("--mode=") {
-            if mode_seen {
-                return Err("duplicate --mode".to_owned());
-            }
-            if !value.eq_ignore_ascii_case("window-restore") {
-                return Err("mode must be window-restore".to_owned());
-            }
-            mode_seen = true;
-        } else if arg.eq_ignore_ascii_case("window-restore") {
-            if mode_seen {
-                return Err("duplicate mode".to_owned());
-            }
-            mode_seen = true;
-        } else if arg == "--window-id" {
-            if window_id.is_some() {
-                return Err("duplicate --window-id".to_owned());
-            }
-            i += 1;
-            let value = args.get(i).ok_or("missing value for --window-id")?;
-            window_id = Some(
-                value
-                    .parse::<u32>()
-                    .map_err(|_| "invalid --window-id".to_owned())?,
-            );
-        } else if let Some(value) = arg.strip_prefix("--window-id=") {
-            if window_id.is_some() {
-                return Err("duplicate --window-id".to_owned());
-            }
-            window_id = Some(
-                value
-                    .parse::<u32>()
-                    .map_err(|_| "invalid --window-id".to_owned())?,
-            );
-        } else if arg == "--confirm-window-restore" {
-            if confirmation_seen {
-                return Err("duplicate confirmation".to_owned());
-            }
-            confirmation_seen = true;
-            i += 1;
-            let value = args.get(i).ok_or("missing restore confirmation")?;
-            confirmed = value == FABRIC_RESTORE_CONFIRMATION;
-        } else if let Some(value) = arg.strip_prefix("--confirm-window-restore=") {
-            if confirmation_seen {
-                return Err("duplicate confirmation".to_owned());
-            }
-            confirmation_seen = true;
-            confirmed = value == FABRIC_RESTORE_CONFIRMATION;
-        } else {
-            return Err(format!("unknown argument: {arg}"));
-        }
-
-        i += 1;
-    }
-
-    if !mode_seen {
-        return Err("missing window-restore mode".to_owned());
-    }
-
-    let window_id = window_id.ok_or("missing --window-id")?;
-    if window_id != FABRIC_RESTORE_WINDOW_ID {
-        return Err(format!(
-            "restore is restricted to Fabric window ID {FABRIC_RESTORE_WINDOW_ID}"
-        ));
-    }
-
-    if !confirmation_seen || !confirmed {
-        return Err("explicit restore confirmation is required".to_owned());
-    }
-
-    Ok(WindowRestoreOptions { window_id })
-}
-
 fn is_window_restore_invocation(args: &[String]) -> bool {
     args.windows(2)
         .any(|pair| pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("window-restore"))
@@ -2142,503 +2121,6 @@ fn is_window_restore_invocation(args: &[String]) -> bool {
                     .strip_prefix("--mode=")
                     .is_some_and(|value| value.eq_ignore_ascii_case("window-restore"))
         })
-}
-
-fn restore_bounds_match(
-    actual: &window_discovery::WindowBounds,
-    expected: &window_discovery::WindowBounds,
-) -> bool {
-    const TOLERANCE: f64 = 2.0;
-
-    [
-        (actual.x, expected.x),
-        (actual.y, expected.y),
-        (actual.width, expected.width),
-        (actual.height, expected.height),
-    ]
-    .iter()
-    .all(|(a, e)| a.is_finite() && e.is_finite() && (a - e).abs() <= TOLERANCE)
-}
-
-fn validate_fabric_restore_precondition(
-    window: &window_discovery::DiscoveredWindow,
-) -> Result<(), String> {
-    if window.window_id != FABRIC_RESTORE_WINDOW_ID {
-        return Err("window ID does not match the approved Fabric target".to_owned());
-    }
-    if window.pid != FABRIC_RESTORE_PID {
-        return Err(format!(
-            "PID mismatch: expected {FABRIC_RESTORE_PID}, found {}",
-            window.pid
-        ));
-    }
-    if window.owner_name.as_deref() != Some("jvm-mod-combiner") {
-        return Err("window owner mismatch".to_owned());
-    }
-    if window.title.as_deref() != Some("Minecraft* 1.21.4") {
-        return Err("window title mismatch".to_owned());
-    }
-
-    let expected_current = window_discovery::WindowBounds {
-        x: 0.0,
-        y: 464.0,
-        width: 735.0,
-        height: 492.0,
-    };
-
-    if !restore_bounds_match(&window.bounds, &expected_current) {
-        return Err(format!(
-            "current geometry changed; refusing mutation: ({}, {}, {}, {})",
-            window.bounds.x, window.bounds.y, window.bounds.width, window.bounds.height
-        ));
-    }
-
-    Ok(())
-}
-
-fn run_fabric_window_restore(options: &WindowRestoreOptions) -> Result<(), String> {
-    let windows = window_discovery::discover_windows()
-        .map_err(|error| format!("window discovery failed: {error:?}"))?;
-
-    let matches: Vec<_> = windows
-        .iter()
-        .filter(|window| window.window_id == options.window_id)
-        .collect();
-
-    if matches.len() != 1 {
-        return Err(format!(
-            "expected exactly one matching window, found {}",
-            matches.len()
-        ));
-    }
-
-    let discovered = matches[0];
-    validate_fabric_restore_precondition(discovered)?;
-
-    let target = window_discovery::WindowBounds {
-        x: 24.0,
-        y: 33.0,
-        width: 1422.0,
-        height: 860.0,
-    };
-
-    println!(
-        "[Restore] Approved target: id={} pid={} title={:?}",
-        discovered.window_id, discovered.pid, discovered.title
-    );
-    println!(
-        "[Restore] Current: ({}, {}, {}, {})",
-        discovered.bounds.x, discovered.bounds.y, discovered.bounds.width, discovered.bounds.height
-    );
-    println!(
-        "[Restore] Target: ({}, {}, {}, {})",
-        target.x, target.y, target.width, target.height
-    );
-    println!("[Restore] NeoForge window will not be touched.");
-
-    window_accessibility::set_application_window_bounds(discovered.pid, discovered, &target)
-        .map_err(|error| format!("window setter failed: {error:?}"))?;
-
-    let final_windows = window_discovery::discover_windows()
-        .map_err(|error| format!("post-restore discovery failed: {error:?}"))?;
-
-    let final_matches: Vec<_> = final_windows
-        .iter()
-        .filter(|window| window.window_id == options.window_id)
-        .collect();
-
-    if final_matches.len() != 1 {
-        return Err(format!(
-            "post-restore verification expected one window, found {}",
-            final_matches.len()
-        ));
-    }
-
-    let final_window = final_matches[0];
-
-    if final_window.pid != FABRIC_RESTORE_PID
-        || final_window.owner_name.as_deref() != Some("jvm-mod-combiner")
-        || final_window.title.as_deref() != Some("Minecraft* 1.21.4")
-    {
-        return Err("post-restore window identity verification failed".to_owned());
-    }
-
-    if !restore_bounds_match(&final_window.bounds, &target) {
-        return Err(format!(
-            "post-restore geometry mismatch: actual ({}, {}, {}, {})",
-            final_window.bounds.x,
-            final_window.bounds.y,
-            final_window.bounds.width,
-            final_window.bounds.height
-        ));
-    }
-
-    println!("[Restore] SUCCESS: Fabric window identity and geometry verified.");
-    Ok(())
-}
-
-#[cfg(test)]
-mod window_restore_cli_tests {
-    use super::*;
-
-    fn valid_args() -> Vec<String> {
-        vec![
-            "jvm-mod-combiner".to_owned(),
-            "window-restore".to_owned(),
-            "--window-id=10868".to_owned(),
-            format!("--confirm-window-restore={FABRIC_RESTORE_CONFIRMATION}"),
-        ]
-    }
-
-    fn fabric_window() -> window_discovery::DiscoveredWindow {
-        window_discovery::DiscoveredWindow {
-            window_id: 10868,
-            pid: 53223,
-            owner_name: Some("jvm-mod-combiner".to_owned()),
-            title: Some("Minecraft* 1.21.4".to_owned()),
-            bounds: window_discovery::WindowBounds {
-                x: 0.0,
-                y: 464.0,
-                width: 735.0,
-                height: 492.0,
-            },
-        }
-    }
-
-    #[test]
-    fn accepts_exact_fabric_restore_request() {
-        assert_eq!(
-            parse_window_restore_args(&valid_args()),
-            Ok(WindowRestoreOptions { window_id: 10868 })
-        );
-    }
-
-    #[test]
-    fn accepts_both_mode_argument_forms() {
-        let mut args = vec![
-            "jvm-mod-combiner".to_owned(),
-            "--mode".to_owned(),
-            "window-restore".to_owned(),
-            "--window-id".to_owned(),
-            "10868".to_owned(),
-            "--confirm-window-restore".to_owned(),
-            FABRIC_RESTORE_CONFIRMATION.to_owned(),
-        ];
-        assert!(parse_window_restore_args(&args).is_ok());
-
-        args[1] = format!("--mode=window-restore");
-        args.remove(2);
-        assert!(parse_window_restore_args(&args).is_ok());
-    }
-
-    #[test]
-    fn rejects_missing_confirmation() {
-        let mut args = valid_args();
-        args.pop();
-        assert!(parse_window_restore_args(&args).is_err());
-    }
-
-    #[test]
-    fn rejects_wrong_window_id() {
-        let mut args = valid_args();
-        args[2] = "--window-id=10859".to_owned();
-        assert!(parse_window_restore_args(&args).is_err());
-    }
-
-    #[test]
-    fn rejects_duplicate_window_id() {
-        let mut args = valid_args();
-        args.push("--window-id=10868".to_owned());
-        assert!(parse_window_restore_args(&args).is_err());
-    }
-
-    #[test]
-    fn rejects_wrong_confirmation() {
-        let mut args = valid_args();
-        *args.last_mut().unwrap() = "--confirm-window-restore=WRONG".to_owned();
-        assert!(parse_window_restore_args(&args).is_err());
-    }
-
-    #[test]
-    fn rejects_wrong_pid_or_identity() {
-        let mut window = fabric_window();
-        window.pid += 1;
-        assert!(validate_fabric_restore_precondition(&window).is_err());
-
-        let mut window = fabric_window();
-        window.title = Some("Different window".to_owned());
-        assert!(validate_fabric_restore_precondition(&window).is_err());
-    }
-
-    #[test]
-    fn rejects_unexpected_current_geometry() {
-        let mut window = fabric_window();
-        window.bounds.x = 10.0;
-        assert!(validate_fabric_restore_precondition(&window).is_err());
-    }
-
-    #[test]
-    fn restore_geometry_comparison_rejects_nan() {
-        let actual = window_discovery::WindowBounds {
-            x: f64::NAN,
-            y: 33.0,
-            width: 1422.0,
-            height: 860.0,
-        };
-        let expected = window_discovery::WindowBounds {
-            x: 24.0,
-            y: 33.0,
-            width: 1422.0,
-            height: 860.0,
-        };
-        assert!(!restore_bounds_match(&actual, &expected));
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct WindowApplyOptions {
-    window_ids: Vec<u32>,
-    display_id: Option<u32>,
-}
-
-fn parse_window_apply_args(args: &[String]) -> Result<WindowApplyOptions, String> {
-    const CONFIRMATION: &str = "I_UNDERSTAND_WINDOWS_WILL_MOVE";
-
-    let mut mode_seen = false;
-    let mut ids: Option<Vec<u32>> = None;
-    let mut direction: Option<String> = None;
-    let mut display_id: Option<u32> = None;
-    let mut confirmation_seen = false;
-
-    let mut index = 1;
-    while index < args.len() {
-        let arg = args[index].as_str();
-
-        if arg == "--mode" {
-            if mode_seen {
-                return Err("Duplicate mode selector.".into());
-            }
-            let value = args.get(index + 1).ok_or("Missing value after --mode.")?;
-            if !value.eq_ignore_ascii_case("window-apply") {
-                return Err("Unexpected mode value.".into());
-            }
-            mode_seen = true;
-            index += 2;
-            continue;
-        }
-
-        if let Some(value) = arg.strip_prefix("--mode=") {
-            if mode_seen {
-                return Err("Duplicate mode selector.".into());
-            }
-            if !value.eq_ignore_ascii_case("window-apply") {
-                return Err("Unexpected mode value.".into());
-            }
-            mode_seen = true;
-            index += 1;
-            continue;
-        }
-
-        if arg.eq_ignore_ascii_case("window-apply") {
-            if mode_seen {
-                return Err("Duplicate mode selector.".into());
-            }
-            mode_seen = true;
-            index += 1;
-            continue;
-        }
-
-        let (name, value, consumed) = if let Some((name, value)) = arg.split_once('=') {
-            (name, value, 1)
-        } else {
-            let value = args
-                .get(index + 1)
-                .ok_or_else(|| format!("Missing value for {arg}."))?;
-            if value.starts_with("--") {
-                return Err(format!("Missing value for {arg}."));
-            }
-            (arg, value.as_str(), 2)
-        };
-
-        if value.is_empty() {
-            return Err(format!("Empty value for {name}."));
-        }
-
-        match name {
-            "--window-ids" => {
-                if ids.is_some() {
-                    return Err("Duplicate --window-ids option.".into());
-                }
-
-                let parsed: Result<Vec<u32>, _> = value
-                    .split(',')
-                    .map(|part| part.trim().parse::<u32>())
-                    .collect();
-
-                let parsed = parsed.map_err(|_| "Invalid --window-ids value.")?;
-
-                if parsed.len() != 2 || parsed.iter().any(|id| *id == 0) {
-                    return Err("Exactly two positive Window IDs are required.".into());
-                }
-                if parsed[0] == parsed[1] {
-                    return Err("Window IDs must be distinct.".into());
-                }
-
-                ids = Some(parsed);
-            }
-            "--direction" => {
-                if direction.is_some() {
-                    return Err("Duplicate --direction option.".into());
-                }
-                if !value.eq_ignore_ascii_case("overlap") {
-                    return Err("window-apply only accepts --direction overlap.".into());
-                }
-                direction = Some(value.to_owned());
-            }
-            "--display-id" => {
-                if display_id.is_some() {
-                    return Err("Duplicate --display-id option.".into());
-                }
-                let parsed = value
-                    .parse::<u32>()
-                    .map_err(|_| "Invalid --display-id value.")?;
-                if parsed == 0 {
-                    return Err("--display-id must be positive.".into());
-                }
-                display_id = Some(parsed);
-            }
-            "--confirm-window-mutation" => {
-                if confirmation_seen {
-                    return Err("Duplicate confirmation option.".into());
-                }
-                if value != CONFIRMATION {
-                    return Err("Confirmation phrase does not match.".into());
-                }
-                confirmation_seen = true;
-            }
-            _ => return Err(format!("Unknown option: {name}.")),
-        }
-
-        index += consumed;
-    }
-
-    if !mode_seen {
-        return Err("Missing window-apply mode selector.".into());
-    }
-    if ids.is_none() {
-        return Err("Missing --window-ids; exactly two IDs are required.".into());
-    }
-    if direction.is_none() {
-        return Err("Missing required --direction overlap.".into());
-    }
-    if !confirmation_seen {
-        return Err(
-            "Missing explicit confirmation. Supply --confirm-window-mutation=I_UNDERSTAND_WINDOWS_WILL_MOVE."
-                .into()
-        );
-    }
-
-    Ok(WindowApplyOptions {
-        window_ids: ids.unwrap(),
-        display_id,
-    })
-}
-
-#[cfg(test)]
-mod window_apply_cli_tests {
-    use super::*;
-
-    fn valid_args() -> Vec<String> {
-        [
-            "jvm-mod-combiner",
-            "window-apply",
-            "--window-ids=101,202",
-            "--direction",
-            "overlap",
-            "--confirm-window-mutation=I_UNDERSTAND_WINDOWS_WILL_MOVE",
-        ]
-        .iter()
-        .map(|value| (*value).to_owned())
-        .collect()
-    }
-
-    #[test]
-    fn recognizes_apply_mode_case_insensitively_in_all_supported_forms() {
-        for args in [
-            vec!["bin".into(), "window-apply".into()],
-            vec!["bin".into(), "WINDOW-APPLY".into()],
-            vec!["bin".into(), "--mode".into(), "WINDOW-APPLY".into()],
-            vec!["bin".into(), "--mode=WINDOW-APPLY".into()],
-        ] {
-            assert!(is_window_apply_invocation(&args), "{args:?}");
-        }
-    }
-
-    #[test]
-    fn does_not_misclassify_other_modes_as_apply() {
-        let args = vec!["bin".into(), "--mode=window-dry-run".into()];
-        assert!(!is_window_apply_invocation(&args));
-    }
-
-    #[test]
-    fn accepts_explicit_overlap_apply_arguments() {
-        let parsed = parse_window_apply_args(&valid_args()).unwrap();
-        assert_eq!(parsed.window_ids, vec![101, 202]);
-        assert_eq!(parsed.display_id, None);
-    }
-
-    #[test]
-    fn accepts_explicit_mode_and_display_id() {
-        let args = vec![
-            "jvm-mod-combiner".into(),
-            "--mode".into(),
-            "window-apply".into(),
-            "--window-ids".into(),
-            "101,202".into(),
-            "--direction=overlap".into(),
-            "--display-id=1".into(),
-            "--confirm-window-mutation=I_UNDERSTAND_WINDOWS_WILL_MOVE".into(),
-        ];
-
-        let parsed = parse_window_apply_args(&args).unwrap();
-        assert_eq!(parsed.display_id, Some(1));
-    }
-
-    #[test]
-    fn rejects_missing_confirmation() {
-        let mut args = valid_args();
-        args.pop();
-        assert!(parse_window_apply_args(&args).is_err());
-    }
-
-    #[test]
-    fn rejects_non_overlap_direction() {
-        let mut args = valid_args();
-        let index = args.iter().position(|arg| arg == "overlap").unwrap();
-        args[index] = "horizontal".into();
-        assert!(parse_window_apply_args(&args).is_err());
-    }
-
-    #[test]
-    fn rejects_duplicate_window_ids() {
-        let mut args = valid_args();
-        args[2] = "--window-ids=101,101".into();
-        assert!(parse_window_apply_args(&args).is_err());
-    }
-
-    #[test]
-    fn rejects_more_than_two_windows() {
-        let mut args = valid_args();
-        args[2] = "--window-ids=101,202,303".into();
-        assert!(parse_window_apply_args(&args).is_err());
-    }
-
-    #[test]
-    fn rejects_duplicate_options() {
-        let mut args = valid_args();
-        args.push("--direction=overlap".into());
-        assert!(parse_window_apply_args(&args).is_err());
-    }
 }
 
 fn is_window_apply_invocation(args: &[String]) -> bool {
@@ -2652,130 +2134,433 @@ fn is_window_apply_invocation(args: &[String]) -> bool {
         })
 }
 
+#[cfg(test)]
+mod window_command_guard_tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_window_restore_invocations() {
+        let cases = [
+            vec!["app", "window-restore"],
+            vec!["app", "WINDOW-RESTORE"],
+            vec!["app", "--mode", "window-restore"],
+            vec!["app", "--mode=window-restore"],
+        ];
+
+        for case in cases {
+            let args: Vec<String> = case.iter().map(|s| s.to_string()).collect();
+            assert!(
+                is_window_restore_invocation(&args),
+                "restore invocation not recognized: {case:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn recognizes_window_apply_invocations() {
+        let cases = [
+            vec!["app", "window-apply"],
+            vec!["app", "WINDOW-APPLY"],
+            vec!["app", "--mode", "window-apply"],
+            vec!["app", "--mode=window-apply"],
+        ];
+
+        for case in cases {
+            let args: Vec<String> = case.iter().map(|s| s.to_string()).collect();
+            assert!(
+                is_window_apply_invocation(&args),
+                "apply invocation not recognized: {case:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dry_run_is_not_mistaken_for_mutation_commands() {
+        let cases = [
+            vec!["app", "window-dry-run"],
+            vec!["app", "--mode", "window-dry-run"],
+            vec!["app", "--mode=window-dry-run"],
+        ];
+
+        for case in cases {
+            let args: Vec<String> = case.iter().map(|s| s.to_string()).collect();
+
+            assert!(!is_window_restore_invocation(&args));
+            assert!(!is_window_apply_invocation(&args));
+        }
+    }
+}
+
+fn control_dry_run_rejection(
+    requester: &window_peer::PeerIdentity,
+    reason: String,
+) -> serde_json::Value {
+    serde_json::json!({
+        "protocol": 1,
+        "accepted": false,
+        "transaction_ready": false,
+        "requester": {
+            "pid": requester.pid,
+            "pid_version": requester.pid_version
+        },
+        "error": reason
+    })
+}
+
+fn control_dry_run_deadline_rejection(
+    requester: &window_peer::PeerIdentity,
+    deadline: std::time::Instant,
+) -> Option<serde_json::Value> {
+    (std::time::Instant::now() >= deadline).then(|| {
+        control_dry_run_rejection(
+            requester,
+            "Control dry-run exceeded its 5-second execution budget".to_owned(),
+        )
+    })
+}
+
+fn control_dry_run_result<T>(
+    requester: &window_peer::PeerIdentity,
+    deadline: std::time::Instant,
+    result: Result<T, String>,
+) -> Result<T, serde_json::Value> {
+    if let Some(response) = control_dry_run_deadline_rejection(requester, deadline) {
+        return Err(response);
+    }
+
+    result.map_err(|error| control_dry_run_rejection(requester, format!("dry-run failed: {error}")))
+}
+
+fn build_control_dry_run_response(
+    request: window_control::DryRunRequest,
+    requester: &window_peer::PeerIdentity,
+    runtime: &window_integration::WindowRuntime,
+    live_child_pids: &HashSet<u32>,
+    deadline: std::time::Instant,
+) -> serde_json::Value {
+    use window_layout::{LayoutConstraints, LayoutDirection};
+
+    let reject = |reason: String| control_dry_run_rejection(requester, reason);
+    let reject_if_expired = || control_dry_run_deadline_rejection(requester, deadline);
+
+    if let Some(response) = reject_if_expired() {
+        return response;
+    }
+
+    let direction = match request.direction.as_str() {
+        "horizontal" => LayoutDirection::Horizontal,
+        "vertical" => LayoutDirection::Vertical,
+        "overlap" => LayoutDirection::Overlap,
+        _ => return reject("unsupported layout direction".to_owned()),
+    };
+
+    if let Some(response) = reject_if_expired() {
+        return response;
+    }
+
+    let registrations_result = runtime.registrations();
+    if let Some(response) = reject_if_expired() {
+        return response;
+    }
+
+    let registrations = match registrations_result {
+        Ok(Some(registrations)) => registrations,
+        Ok(None) => {
+            return reject("Fusion parent does not own the Window Manager registry".to_owned());
+        }
+        Err(error) => {
+            return reject(format!("registry read failed: {error}"));
+        }
+    };
+
+    let trusted_candidates: Vec<_> = registrations
+        .iter()
+        .filter(|registration| {
+            registration.identity.pid == registration.registration.pid
+                && registration.identity.pid_version > 0
+                && live_child_pids.contains(&registration.identity.pid)
+                && registration.registration.role == "minecraft_client"
+                && matches!(
+                    registration.registration.loader.as_str(),
+                    "fabric" | "forge" | "neoforge"
+                )
+        })
+        .collect();
+
+    let constraints = LayoutConstraints::default();
+
+    if let Some(response) = reject_if_expired() {
+        return response;
+    }
+
+    let report_result = window_dry_run::build_window_dry_run_with_deadline(
+        &request.window_ids,
+        direction,
+        request.display_id,
+        constraints,
+        Some(deadline),
+    );
+
+    let report = match control_dry_run_result(requester, deadline, report_result) {
+        Ok(report) => report,
+        Err(response) => return response,
+    };
+
+    if report.entries.len() != request.window_ids.len() {
+        return reject("dry-run returned an incomplete window set".to_owned());
+    }
+
+    let mut response_entries = Vec::with_capacity(report.entries.len());
+
+    for entry in &report.entries {
+        if let Some(response) = reject_if_expired() {
+            return response;
+        }
+
+        let matches: Vec<_> = trusted_candidates
+            .iter()
+            .filter(|registration| registration.identity.pid == entry.pid)
+            .collect();
+
+        if matches.len() != 1 {
+            return reject(format!(
+                "window {} PID {} has {} eligible authenticated registrations; exactly one is required",
+                entry.window_id,
+                entry.pid,
+                matches.len()
+            ));
+        }
+
+        let registration = matches[0];
+
+        let current = &entry.current_bounds;
+        let target = &entry.target_bounds;
+
+        response_entries.push(serde_json::json!({
+            "window_id": entry.window_id,
+            "pid": entry.pid,
+            "loader": registration.registration.loader,
+            "peer_pid_version": registration.identity.pid_version,
+            "title": entry.title,
+            "owner": entry.owner_name,
+            "accessibility_index": entry.accessibility_index,
+            "current_bounds": {
+                "x": current.x,
+                "y": current.y,
+                "width": current.width,
+                "height": current.height
+            },
+            "target_bounds": {
+                "x": target.x,
+                "y": target.y,
+                "width": target.width,
+                "height": target.height
+            }
+        }));
+    }
+
+    if let Some(response) = reject_if_expired() {
+        return response;
+    }
+
+    let response = serde_json::json!({
+        "protocol": 1,
+        "accepted": true,
+        "transaction_ready": false,
+        "requester": {
+            "pid": requester.pid,
+            "pid_version": requester.pid_version
+        },
+        "display_id": report.display_id,
+        "direction": report.direction.to_string(),
+        "window_count": response_entries.len(),
+        "entries": response_entries,
+        "notice": "Read-only preview. This response does not authorize window mutations."
+    });
+
+    if let Some(response) = reject_if_expired() {
+        return response;
+    }
+
+    response
+}
+
+#[cfg(test)]
+mod control_deadline_tests {
+    use super::*;
+
+    #[test]
+    fn dry_run_result_after_deadline_is_rejected_without_transaction_authority() {
+        let requester = window_peer::PeerIdentity {
+            pid: 123,
+            pid_version: 7,
+            audit_token: [0; 8],
+        };
+        let deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
+
+        let response = control_dry_run_result(&requester, deadline, Ok(())).unwrap_err();
+
+        assert_eq!(response["accepted"], false);
+        assert_eq!(response["transaction_ready"], false);
+        assert_eq!(
+            response["error"],
+            "Control dry-run exceeded its 5-second execution budget"
+        );
+    }
+}
+
+fn is_window_control_dry_run_invocation(args: &[String]) -> bool {
+    args.windows(2)
+        .any(|pair| pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("window-control-dry-run"))
+        || args.iter().any(|arg| {
+            arg.eq_ignore_ascii_case("window-control-dry-run")
+                || arg.eq_ignore_ascii_case("--mode=window-control-dry-run")
+        })
+}
+
+fn run_window_control_dry_run(args: &[String]) -> Result<(), String> {
+    use std::path::PathBuf;
+
+    let mut socket_path = None;
+    let mut window_ids = None;
+    let mut direction = None;
+    let mut display_id = None;
+
+    let mut i = 1;
+    while i < args.len() {
+        let arg = args[i].as_str();
+
+        if arg == "--mode" {
+            i += 2;
+            continue;
+        }
+
+        if arg.eq_ignore_ascii_case("window-control-dry-run") {
+            i += 1;
+            continue;
+        }
+
+        let (name, value, consumed) = if let Some((name, value)) = arg.split_once('=') {
+            (name, value, 1)
+        } else {
+            let value = args
+                .get(i + 1)
+                .ok_or_else(|| format!("Missing value for {arg}"))?;
+
+            if value.starts_with("--") {
+                return Err(format!("Missing value for {arg}"));
+            }
+
+            (arg, value.as_str(), 2)
+        };
+
+        if value.is_empty() {
+            return Err(format!("Empty value for {name}"));
+        }
+
+        match name {
+            "--control-socket" => {
+                if socket_path.is_some() {
+                    return Err("Duplicate --control-socket".into());
+                }
+                socket_path = Some(PathBuf::from(value));
+            }
+            "--window-ids" => {
+                if window_ids.is_some() {
+                    return Err("Duplicate --window-ids".into());
+                }
+
+                let ids: Result<Vec<u32>, _> = value
+                    .split(',')
+                    .map(|part| part.trim().parse::<u32>())
+                    .collect();
+
+                let ids = ids.map_err(|_| "Invalid --window-ids")?;
+
+                if !(2..=16).contains(&ids.len()) || ids.iter().any(|id| *id == 0) {
+                    return Err("--window-ids requires 2 to 16 positive IDs".into());
+                }
+
+                let mut unique = std::collections::HashSet::new();
+                if ids.iter().any(|id| !unique.insert(*id)) {
+                    return Err("Duplicate window IDs are not allowed".into());
+                }
+
+                window_ids = Some(ids);
+            }
+            "--direction" => {
+                if direction.is_some() {
+                    return Err("Duplicate --direction".into());
+                }
+
+                let normalized = value.to_ascii_lowercase();
+                if !matches!(normalized.as_str(), "horizontal" | "vertical" | "overlap") {
+                    return Err("Invalid direction".into());
+                }
+
+                direction = Some(normalized);
+            }
+            "--display-id" => {
+                if display_id.is_some() {
+                    return Err("Duplicate --display-id".into());
+                }
+
+                let id = value.parse::<u32>().map_err(|_| "Invalid --display-id")?;
+
+                if id == 0 {
+                    return Err("--display-id must be positive".into());
+                }
+
+                display_id = Some(id);
+            }
+            _ => return Err(format!("Unknown option: {name}")),
+        }
+
+        i += consumed;
+    }
+
+    let socket_path = socket_path.ok_or("--control-socket is required")?;
+
+    let request = window_control::DryRunRequest {
+        window_ids: window_ids.ok_or("--window-ids is required")?,
+        direction: direction.unwrap_or_else(|| "horizontal".into()),
+        display_id,
+    };
+
+    let response = window_control::request_dry_run(&socket_path, &request)
+        .map_err(|error| format!("Control request failed: {error}"))?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&response).map_err(|error| error.to_string())?
+    );
+
+    Ok(())
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    let is_window_restore = is_window_restore_invocation(&args);
-    if is_window_restore {
-        println!("=== Fabric Window Restore ===");
-
-        let options = match parse_window_restore_args(&args) {
-            Ok(options) => options,
-            Err(error) => {
-                eprintln!("[Restore] Invalid arguments: {error}");
-                std::process::exit(2);
-            }
-        };
-
-        if let Err(error) = run_fabric_window_restore(&options) {
-            eprintln!("[Restore] FAILED: {error}");
-            std::process::exit(1);
+    if is_window_control_dry_run_invocation(&args) {
+        if let Err(error) = run_window_control_dry_run(&args) {
+            eprintln!("[WindowControl] {error}");
+            std::process::exit(2);
         }
-
         return;
     }
 
-    let is_window_apply = is_window_apply_invocation(&args);
+    if is_window_restore_invocation(&args) {
+        eprintln!("[Restore] RETIRED: legacy fixed-identity restore is disabled.");
+        eprintln!("[Restore] No window properties were changed.");
+        std::process::exit(2);
+    }
 
-    if is_window_apply {
-        println!("=== Window Apply (explicit mutation mode) ===");
-
-        let options = match parse_window_apply_args(&args) {
-            Ok(options) => options,
-            Err(error) => {
-                eprintln!("[WindowApply] Invalid arguments: {error}");
-                eprintln!("[WindowApply] No window properties were changed.");
-                std::process::exit(2);
-            }
-        };
-
-        use window_layout::{LayoutConstraints, LayoutDirection};
-
-        let constraints = LayoutConstraints::default();
-
-        println!("[WindowApply] Requested direction: overlap");
-        println!(
-            "[WindowApply] Requested Window IDs: {:?}",
-            options.window_ids
+    if is_window_apply_invocation(&args) {
+        eprintln!(
+            "[WindowApply] DISABLED: authenticated Fusion-parent transaction authorization is not implemented."
         );
-        println!("[WindowApply] Building a fresh identity-verified dry run...");
-
-        let report = match window_dry_run::build_window_dry_run(
-            &options.window_ids,
-            LayoutDirection::Overlap,
-            options.display_id,
-            constraints,
-        ) {
-            Ok(report) => report,
-            Err(error) => {
-                eprintln!("[WindowApply] Dry-run verification failed: {error}");
-                eprintln!("[WindowApply] No window properties were changed.");
-                std::process::exit(1);
-            }
-        };
-
-        if report.entries.len() != 2 {
-            eprintln!(
-                "[WindowApply] Expected exactly two verified windows, got {}.",
-                report.entries.len()
-            );
-            eprintln!("[WindowApply] No window properties were changed.");
-            std::process::exit(1);
-        }
-
-        println!("[WindowApply] Fresh dry-run verification passed.");
-        println!("[WindowApply] Target display: {}", report.display_id);
-
-        for entry in &report.entries {
-            let target = &entry.target_bounds;
-            println!(
-                "[Window {}] pid={} title={:?} target=({:.2}, {:.2}, {:.2}, {:.2})",
-                entry.window_id,
-                entry.pid,
-                entry.title,
-                target.x,
-                target.y,
-                target.width,
-                target.height
-            );
-        }
-
-        let snapshots = match window_transaction_adapter::snapshots_from_dry_run(&report) {
-            Ok(snapshots) => snapshots,
-            Err(error) => {
-                eprintln!("[WindowApply] Snapshot conversion failed: {error:?}");
-                eprintln!("[WindowApply] No window properties were changed.");
-                std::process::exit(1);
-            }
-        };
-
-        println!("[WindowApply] Starting recoverable multi-window transaction.");
-
-        let result = window_transaction_adapter::execute_window_snapshots(
-            &snapshots,
-            || window_discovery::discover_windows(),
-            |pid, discovered, desired| {
-                window_accessibility::set_application_window_bounds(pid, discovered, desired)
-            },
-        );
-
-        match result {
-            Ok(()) => {
-                println!(
-                    "[WindowApply] SUCCESS: both windows reached and passed target verification."
-                );
-            }
-            Err(error) => {
-                eprintln!("[WindowApply] TRANSACTION FAILED: {error:#?}");
-                eprintln!(
-                    "[WindowApply] Review the error and rollback_failures above; \
-                     do not assume every window was restored."
-                );
-                std::process::exit(1);
-            }
-        }
-
-        return;
+        eprintln!("[WindowApply] No window properties were changed.");
+        std::process::exit(2);
     }
 
     let is_window_dry_run = args
@@ -2974,7 +2759,10 @@ fn main() {
                         "[Window {}] target=({:.2}, {:.2}, {:.2}, {:.2})",
                         entry.window_id, target.x, target.y, target.width, target.height,
                     );
-                    println!("[Window {}] identity=VERIFIED", entry.window_id);
+                    println!(
+                        "[Window {}] discovery+AX=VERIFIED; peer-auth=NOT CHECKED",
+                        entry.window_id
+                    );
                 }
 
                 println!();
@@ -3511,6 +3299,14 @@ fn main() {
             .expect("[WindowIntegration] Fusion 无法启动 Window Manager");
         let window_socket_path = window_runtime.socket_path_string();
 
+        let control_server = window_control::WindowControlServer::start()
+            .expect("[WindowControl] Fusion 无法启动只读 Control UDS");
+
+        eprintln!(
+            "[WindowControl] Read-only control socket: {}",
+            control_server.socket_path().display()
+        );
+
         // 直接启动当前 Rust 可执行文件，避免 cargo run 引入中间进程。
         let executable = env::current_exe().expect("[Fusion] 无法获取当前 Rust 可执行文件路径");
 
@@ -3532,23 +3328,34 @@ fn main() {
         let fabric_pid = fabric_child.as_ref().unwrap().id();
         eprintln!("[Fusion] Fabric Rust child started: pid={fabric_pid}");
 
-        // NeoForge：Rust 子进程再启动独立 Java 进程。
-        let mut neoforge_cmd = std::process::Command::new(&executable);
-        neoforge_cmd
-            .arg("--mode")
-            .arg("neoforge")
-            .current_dir(&current_dir)
-            .env("JVM_COMBINER_BUS_EXTERNAL", "1")
-            .env("JVM_COMBINER_WINDOW_EXTERNAL", "1")
-            .env("JVM_COMBINER_WINDOW_SOCKET", &window_socket_path);
+        let mut neoforge_command =
+            match build_neoforge_command(&sandbox_dir, &current_dir, &window_runtime) {
+                Ok(command) => command,
+                Err(error) => {
+                    eprintln!("[Fusion] NeoForge command build failed: {error}");
 
-        let mut neoforge_child = Some(
-            neoforge_cmd
-                .spawn()
-                .expect("[Fusion] 无法启动 NeoForge Rust 子进程"),
-        );
+                    if let Some(mut child) = fabric_child.take() {
+                        terminate_owned_child(&mut child, "Fabric");
+                    }
+
+                    return;
+                }
+            };
+
+        let mut neoforge_child = match neoforge_command.spawn() {
+            Ok(child) => Some(child),
+            Err(error) => {
+                eprintln!("[Fusion] NeoForge Java spawn failed: {error}");
+
+                if let Some(mut child) = fabric_child.take() {
+                    terminate_owned_child(&mut child, "Fabric");
+                }
+
+                return;
+            }
+        };
         let neoforge_pid = neoforge_child.as_ref().unwrap().id();
-        eprintln!("[Fusion] NeoForge Rust child started: pid={neoforge_pid}");
+        eprintln!("[Fusion] NeoForge Java child started: pid={neoforge_pid}");
 
         // Read-only window monitoring. The Fusion parent owns the
         // Window Manager and is therefore the authoritative registry reader.
@@ -3556,39 +3363,108 @@ fn main() {
         let mut discovery_failed = false;
 
         loop {
-            // 回收已退出的 Rust 子进程，父进程持续持有运行中子进程的句柄。
-            let fabric_exit = match fabric_child.as_mut() {
-                Some(child) => match child.try_wait() {
-                    Ok(Some(status)) => Some(status.to_string()),
-                    Ok(None) => None,
-                    Err(error) => {
-                        eprintln!("[Fusion] Fabric child wait failed: {error}");
-                        None
-                    }
-                },
-                None => None,
+            let mut live_child_pids = HashSet::new();
+
+            let fabric_state = match fabric_child.as_mut() {
+                Some(child) => record_live_child_poll(child.try_wait()),
+                None => ChildPoll::Exited("already reaped".to_string()),
             };
 
-            if let Some(status) = fabric_exit {
-                eprintln!("[Fusion] Fabric child exited: {status}");
-                fabric_child = None;
+            match fabric_state {
+                ChildPoll::Running => {
+                    if let Some(child) = fabric_child.as_ref() {
+                        live_child_pids.insert(child.id());
+                    }
+                }
+                ChildPoll::Exited(status) => {
+                    eprintln!("[Fusion] Fabric child exited: {status}");
+                    fabric_child = None;
+                }
+                ChildPoll::Failed(error) => {
+                    eprintln!("[Fusion] Fabric child supervision failed: {error}");
+                    last_registered_windows.clear();
+
+                    if let Some(mut child) = fabric_child.take() {
+                        terminate_owned_child(&mut child, "Fabric");
+                    }
+                    if let Some(mut child) = neoforge_child.take() {
+                        terminate_owned_child(&mut child, "NeoForge");
+                    }
+
+                    eprintln!("[Fusion] Supervisor stopped: child state is uncertain");
+                    return;
+                }
             }
 
-            let neoforge_exit = match neoforge_child.as_mut() {
-                Some(child) => match child.try_wait() {
-                    Ok(Some(status)) => Some(status.to_string()),
-                    Ok(None) => None,
-                    Err(error) => {
-                        eprintln!("[Fusion] NeoForge child wait failed: {error}");
-                        None
-                    }
-                },
-                None => None,
+            let neoforge_state = match neoforge_child.as_mut() {
+                Some(child) => record_live_child_poll(child.try_wait()),
+                None => ChildPoll::Exited("already reaped".to_string()),
             };
 
-            if let Some(status) = neoforge_exit {
-                eprintln!("[Fusion] NeoForge child exited: {status}");
-                neoforge_child = None;
+            match neoforge_state {
+                ChildPoll::Running => {
+                    if let Some(child) = neoforge_child.as_ref() {
+                        live_child_pids.insert(child.id());
+                    }
+                }
+                ChildPoll::Exited(status) => {
+                    eprintln!("[Fusion] NeoForge child exited: {status}");
+                    neoforge_child = None;
+                }
+                ChildPoll::Failed(error) => {
+                    eprintln!("[Fusion] NeoForge child supervision failed: {error}");
+                    last_registered_windows.clear();
+
+                    if let Some(mut child) = neoforge_child.take() {
+                        terminate_owned_child(&mut child, "NeoForge");
+                    }
+                    if let Some(mut child) = fabric_child.take() {
+                        terminate_owned_child(&mut child, "Fabric");
+                    }
+
+                    eprintln!("[Fusion] Supervisor stopped: child state is uncertain");
+                    return;
+                }
+            }
+
+            if fabric_child.is_none() && neoforge_child.is_none() {
+                last_registered_windows.clear();
+                eprintln!("[Fusion] Both children exited; supervisor stopping");
+                return;
+            }
+
+            // Read-only Control UDS: bounded polling keeps child supervision responsive.
+            for _ in 0..1 {
+                let stream = match control_server.try_accept() {
+                    Ok(Some(stream)) => stream,
+                    Ok(None) => break,
+                    Err(error) => {
+                        eprintln!("[WindowControl] Accept failed: {error}");
+                        break;
+                    }
+                };
+
+                let result = control_server.handle_one(stream, |request, requester, deadline| {
+                    build_control_dry_run_response(
+                        request,
+                        requester,
+                        &window_runtime,
+                        &live_child_pids,
+                        deadline,
+                    )
+                });
+
+                match result {
+                    Ok(peer) => {
+                        eprintln!(
+                            "[WindowControl] Read-only request handled: peer_pid={} peer_pid_version={}",
+                            peer.pid, peer.pid_version
+                        );
+                    }
+                    Err(error) => {
+                        eprintln!("[WindowControl] Request rejected or failed: {error}");
+                    }
+                }
             }
 
             match window_discovery::discover_windows() {
@@ -3601,6 +3477,7 @@ fn main() {
                             eprintln!(
                                 "[WindowDiscovery] Registry unavailable: this process does not own the Window Manager"
                             );
+                            last_registered_windows.clear();
                             thread::sleep(std::time::Duration::from_secs(2));
                             continue;
                         }
@@ -3608,13 +3485,23 @@ fn main() {
                             eprintln!(
                                 "[WindowDiscovery] Registry read failed; skipping window association: {error}"
                             );
+                            last_registered_windows.clear();
                             thread::sleep(std::time::Duration::from_secs(2));
                             continue;
                         }
                     };
 
+                    let live_registrations: Vec<_> = registrations
+                        .into_iter()
+                        .filter(|registration| {
+                            registration.identity.pid == registration.registration.pid
+                                && registration.identity.pid_version > 0
+                                && live_child_pids.contains(&registration.identity.pid)
+                        })
+                        .collect();
+
                     let mut registered_windows =
-                        window_discovery::associate_windows(windows, &registrations);
+                        window_discovery::associate_windows(windows, &live_registrations);
 
                     registered_windows.retain(|record| {
                         record.loader.is_some()
@@ -3645,6 +3532,7 @@ fn main() {
                     }
                 }
                 Err(error) => {
+                    last_registered_windows.clear();
                     if !discovery_failed {
                         eprintln!("[WindowDiscovery] Discovery failed: {error}");
                         discovery_failed = true;

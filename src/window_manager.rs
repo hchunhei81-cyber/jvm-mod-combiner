@@ -21,11 +21,25 @@ pub struct ClientRegistration {
     pub protocol: u64,
 }
 
+/// A registration paired with the kernel-authenticated Unix peer identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticatedRegistration {
+    pub registration: ClientRegistration,
+    pub identity: window_peer::PeerIdentity,
+}
+
+impl std::ops::Deref for AuthenticatedRegistration {
+    type Target = ClientRegistration;
+
+    fn deref(&self) -> &Self::Target {
+        &self.registration
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RegistryEntry {
     connection_id: u64,
-    pid_version: i32,
-    registration: ClientRegistration,
+    authenticated: AuthenticatedRegistration,
 }
 
 type Registry = Arc<Mutex<HashMap<(u32, i32), RegistryEntry>>>;
@@ -62,15 +76,16 @@ impl WindowManagerHandle {
         &self.socket_path
     }
 
-    pub fn registrations(&self) -> Result<Vec<ClientRegistration>, RegistryError> {
+    pub fn registrations(&self) -> Result<Vec<AuthenticatedRegistration>, RegistryError> {
         let registry = self.registry.lock().map_err(|_| RegistryError::Poisoned)?;
 
         let mut registrations: Vec<_> = registry
             .values()
-            .map(|entry| entry.registration.clone())
+            .map(|entry| entry.authenticated.clone())
             .collect();
 
-        registrations.sort_by_key(|entry| entry.pid);
+        registrations.sort_by_key(|entry| (entry.identity.pid, entry.identity.pid_version));
+
         Ok(registrations)
     }
 }
@@ -98,7 +113,7 @@ fn remove_socket_if_owned(path: &Path, dev: u64, ino: u64) {
     }
 }
 
-fn private_runtime_dir() -> io::Result<PathBuf> {
+pub(crate) fn private_runtime_dir() -> io::Result<PathBuf> {
     let uid = unsafe { libc::getuid() };
     let dir = PathBuf::from(format!("/tmp/jvm-combiner-{uid}"));
 
@@ -406,8 +421,10 @@ fn handle_client(
                                 key,
                                 RegistryEntry {
                                     connection_id,
-                                    pid_version: identity.pid_version,
-                                    registration,
+                                    authenticated: AuthenticatedRegistration {
+                                        registration,
+                                        identity: identity.clone(),
+                                    },
                                 },
                             );
 
@@ -481,7 +498,7 @@ fn handle_client(
                     .get(&key)
                     .map(|entry| {
                         entry.connection_id == connection_id
-                            && entry.pid_version == identity.pid_version
+                            && entry.authenticated.identity == identity
                     })
                     .unwrap_or(false);
 

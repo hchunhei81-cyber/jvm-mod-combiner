@@ -22,8 +22,9 @@ bus_test/bus-agent.jar
 # Cover common backup suffixes without excluding ordinary source files.
 *.bak.*
 *.bak
-*.bakup
-*.bakup.*
+*.backup
+*.backup.*
+*.backup*
 backups/
 
 # --- Local Minecraft sandbox and save data ---

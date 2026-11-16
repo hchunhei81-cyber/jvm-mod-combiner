@@ -1,3 +1,4 @@
+Sitemap: https://hchunhei81-cyber.github.io/jvm-mod-combiner/sitemap.xml
 User-agent: *
 Allow: /
 

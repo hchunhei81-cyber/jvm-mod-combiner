@@ -1,19 +1,22 @@
-import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStreamReader;
+import java.io.InputStream;
 import java.io.OutputStreamWriter;
 import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.channels.Channels;
 import java.nio.channels.SocketChannel;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.lang.instrument.Instrumentation;
 
 public final class WindowBridge {
@@ -23,12 +26,7 @@ public final class WindowBridge {
     private static final Set<String> SUPPORTED_LOADERS =
             Set.of("fabric", "forge", "neoforge");
 
-    private static final Pattern REGISTERED =
-            Pattern.compile("\"type\"\\s*:\\s*\"registered\"");
-    private static final Pattern ACCEPTED =
-            Pattern.compile("\"accepted\"\\s*:\\s*true");
-    private static final Pattern ERROR =
-            Pattern.compile("\"error\"\\s*:\\s*\"([^\"]*)\"");
+    private static final int MAX_RESPONSE_BYTES = 16 * 1024;
 
     private WindowBridge() {}
 
@@ -128,9 +126,7 @@ public final class WindowBridge {
         try (SocketChannel channel = SocketChannel.open(StandardProtocolFamily.UNIX)) {
             channel.connect(UnixDomainSocketAddress.of(socketPath));
 
-            BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(
-                            Channels.newInputStream(channel), StandardCharsets.UTF_8));
+            InputStream input = Channels.newInputStream(channel);
 
             BufferedWriter writer = new BufferedWriter(
                     new OutputStreamWriter(
@@ -149,20 +145,8 @@ public final class WindowBridge {
             writer.newLine();
             writer.flush();
 
-            String response = reader.readLine();
-            if (response == null) {
-                throw new IOException("server closed before registration response");
-            }
-
-            if (!REGISTERED.matcher(response).find()) {
-                throw new IOException("invalid registration response");
-            }
-
-            if (!ACCEPTED.matcher(response).find()) {
-                Matcher error = ERROR.matcher(response);
-                String reason = error.find() ? error.group(1) : "unspecified error";
-                throw new RegistrationRejectedException(reason);
-            }
+            String response = readBoundedResponseLine(input);
+            validateRegistrationResponse(response, pid);
 
             System.out.println(
                     "[WindowBridge] Registered loader="
@@ -173,16 +157,378 @@ public final class WindowBridge {
                             + socketPath);
 
             while (!Thread.currentThread().isInterrupted()) {
-                if (reader.read() == -1) {
+                if (input.read() == -1) {
                     throw new IOException("server disconnected");
                 }
             }
         }
     }
 
+    private static String readBoundedResponseLine(InputStream input)
+            throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream(256);
+
+        while (true) {
+            int value = input.read();
+
+            if (value == -1) {
+                throw new IOException(
+                        "server closed before completing registration response");
+            }
+
+            if (value == '\n') {
+                break;
+            }
+
+            if (buffer.size() >= MAX_RESPONSE_BYTES) {
+                throw new IOException(
+                        "registration response exceeds 16 KiB limit");
+            }
+
+            buffer.write(value);
+        }
+
+        byte[] bytes = buffer.toByteArray();
+
+        // Accept CRLF as well as LF.
+        int length = bytes.length;
+        if (length > 0 && bytes[length - 1] == '\r') {
+            length--;
+        }
+
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes, 0, length))
+                    .toString();
+        } catch (CharacterCodingException error) {
+            throw new IOException(
+                    "registration response is not valid UTF-8",
+                    error);
+        }
+    }
+
+    private static void validateRegistrationResponse(
+            String response, long expectedPid)
+            throws IOException, RegistrationRejectedException {
+        Map<String, Object> fields =
+                new StrictJsonObjectParser(response).parse();
+
+        Object type = fields.get("type");
+        Object accepted = fields.get("accepted");
+
+        if (!"registered".equals(type)) {
+            throw new IOException(
+                    "registration response has invalid type");
+        }
+
+        if (!(accepted instanceof Boolean)) {
+            throw new IOException(
+                    "registration response has invalid accepted field");
+        }
+
+        if (Boolean.TRUE.equals(accepted)) {
+            if (fields.size() != 3
+                    || !fields.containsKey("pid")
+                    || !fields.keySet().containsAll(
+                            Set.of("type", "accepted", "pid"))) {
+                throw new IOException(
+                        "invalid successful registration response schema");
+            }
+
+            Object pidValue = fields.get("pid");
+
+            if (!(pidValue instanceof Long)) {
+                throw new IOException(
+                        "registration response PID is not an integer");
+            }
+
+            long responsePid = (Long) pidValue;
+
+            if (responsePid <= 0
+                    || responsePid > 0xffff_ffffL
+                    || responsePid != expectedPid) {
+                throw new IOException(
+                        "registration response PID mismatch");
+            }
+
+            return;
+        }
+
+        if (fields.size() != 3
+                || !fields.keySet().containsAll(
+                        Set.of("type", "accepted", "error"))) {
+            throw new IOException(
+                    "invalid rejected registration response schema");
+        }
+
+        Object errorValue = fields.get("error");
+
+        if (!(errorValue instanceof String)
+                || ((String) errorValue).isBlank()) {
+            throw new IOException(
+                    "registration rejection has no valid error message");
+        }
+
+        throw new RegistrationRejectedException((String) errorValue);
+    }
+
     private static final class RegistrationRejectedException extends Exception {
         private RegistrationRejectedException(String message) {
             super(message);
+        }
+    }
+
+    private static final class StrictJsonObjectParser {
+
+        private final String input;
+        private int position;
+
+        private StrictJsonObjectParser(String input) {
+            this.input = input;
+        }
+
+        private Map<String, Object> parse() throws IOException {
+            skipWhitespace();
+            expect('{');
+
+            Map<String, Object> result = new HashMap<>();
+
+            skipWhitespace();
+
+            if (consume('}')) {
+                throw invalid();
+            }
+
+            while (true) {
+                skipWhitespace();
+
+                String key = parseString();
+
+                if (result.containsKey(key)) {
+                    throw new IOException(
+                            "duplicate JSON response field: " + key);
+                }
+
+                skipWhitespace();
+                expect(':');
+                skipWhitespace();
+
+                Object value = parseValue();
+                result.put(key, value);
+
+                skipWhitespace();
+
+                if (consume('}')) {
+                    break;
+                }
+
+                expect(',');
+            }
+
+            skipWhitespace();
+
+            if (position != input.length()) {
+                throw invalid();
+            }
+
+            return result;
+        }
+
+        private Object parseValue() throws IOException {
+            if (position >= input.length()) {
+                throw invalid();
+            }
+
+            char current = input.charAt(position);
+
+            if (current == '"') {
+                return parseString();
+            }
+
+            if (current == 't') {
+                expectLiteral("true");
+                return Boolean.TRUE;
+            }
+
+            if (current == 'f') {
+                expectLiteral("false");
+                return Boolean.FALSE;
+            }
+
+            if (current >= '0' && current <= '9') {
+                return parsePositiveInteger();
+            }
+
+            throw invalid();
+        }
+
+        private String parseString() throws IOException {
+            expect('"');
+
+            StringBuilder result = new StringBuilder();
+
+            while (position < input.length()) {
+                char current = input.charAt(position++);
+
+                if (current == '"') {
+                    return result.toString();
+                }
+
+                if (current < 0x20) {
+                    throw invalid();
+                }
+
+                if (current != '\\') {
+                    result.append(current);
+                    continue;
+                }
+
+                if (position >= input.length()) {
+                    throw invalid();
+                }
+
+                char escaped = input.charAt(position++);
+
+                switch (escaped) {
+                    case '"':
+                        result.append('"');
+                        break;
+                    case '\\':
+                        result.append('\\');
+                        break;
+                    case '/':
+                        result.append('/');
+                        break;
+                    case 'b':
+                        result.append('\b');
+                        break;
+                    case 'f':
+                        result.append('\f');
+                        break;
+                    case 'n':
+                        result.append('\n');
+                        break;
+                    case 'r':
+                        result.append('\r');
+                        break;
+                    case 't':
+                        result.append('\t');
+                        break;
+                    case 'u':
+                        result.append(parseUnicodeEscape());
+                        break;
+                    default:
+                        throw invalid();
+                }
+            }
+
+            throw invalid();
+        }
+
+        private char parseUnicodeEscape() throws IOException {
+            if (position + 4 > input.length()) {
+                throw invalid();
+            }
+
+            int value = 0;
+
+            for (int i = 0; i < 4; i++) {
+                char character = input.charAt(position++);
+                int digit;
+
+                if (character >= '0' && character <= '9') {
+                    digit = character - '0';
+                } else if (character >= 'a' && character <= 'f') {
+                    digit = character - 'a' + 10;
+                } else if (character >= 'A' && character <= 'F') {
+                    digit = character - 'A' + 10;
+                } else {
+                    throw invalid();
+                }
+
+                value = (value << 4) | digit;
+            }
+
+            return (char) value;
+        }
+
+        private Long parsePositiveInteger() throws IOException {
+            int start = position;
+
+            if (input.charAt(position) == '0') {
+                position++;
+
+                if (position < input.length()) {
+                    char next = input.charAt(position);
+
+                    if (next >= '0' && next <= '9') {
+                        throw invalid();
+                    }
+                }
+            } else {
+                while (position < input.length()) {
+                    char current = input.charAt(position);
+
+                    if (current < '0' || current > '9') {
+                        break;
+                    }
+
+                    position++;
+                }
+            }
+
+            try {
+                return Long.parseLong(input.substring(start, position));
+            } catch (NumberFormatException error) {
+                throw invalid();
+            }
+        }
+
+        private void expectLiteral(String literal) throws IOException {
+            if (!input.startsWith(literal, position)) {
+                throw invalid();
+            }
+
+            position += literal.length();
+        }
+
+        private void expect(char expected) throws IOException {
+            if (!consume(expected)) {
+                throw invalid();
+            }
+        }
+
+        private boolean consume(char expected) {
+            if (position < input.length()
+                    && input.charAt(position) == expected) {
+                position++;
+                return true;
+            }
+
+            return false;
+        }
+
+        private void skipWhitespace() {
+            while (position < input.length()) {
+                char current = input.charAt(position);
+
+                if (current == ' '
+                        || current == '\t'
+                        || current == '\r'
+                        || current == '\n') {
+                    position++;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        private IOException invalid() {
+            return new IOException(
+                    "malformed registration response JSON at offset "
+                            + position);
         }
     }
 }

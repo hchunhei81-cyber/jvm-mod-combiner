@@ -166,24 +166,18 @@ mod tests {
             bridge_jar: root.join(BRIDGE_JAR),
         };
 
-        assert!(
-            runtime
-                .bridge_agent_arg("fabric")
-                .unwrap()
-                .ends_with("=fabric")
-        );
-        assert!(
-            runtime
-                .bridge_agent_arg("Forge")
-                .unwrap()
-                .ends_with("=forge")
-        );
-        assert!(
-            runtime
-                .bridge_agent_arg("neoforge")
-                .unwrap()
-                .ends_with("=neoforge")
-        );
+        assert!(runtime
+            .bridge_agent_arg("fabric")
+            .unwrap()
+            .ends_with("=fabric"));
+        assert!(runtime
+            .bridge_agent_arg("Forge")
+            .unwrap()
+            .ends_with("=forge"));
+        assert!(runtime
+            .bridge_agent_arg("neoforge")
+            .unwrap()
+            .ends_with("=neoforge"));
         assert!(runtime.bridge_agent_arg("unknown").is_err());
 
         fs::remove_dir_all(root).unwrap();

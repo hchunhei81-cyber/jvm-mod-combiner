@@ -35,6 +35,8 @@ pub enum DiscoveryError {
     #[cfg(not(target_os = "macos"))]
     UnsupportedPlatform,
     WindowServerUnavailable,
+    InvalidWindowCount(isize),
+    TooManyWindows(isize),
 }
 
 impl fmt::Display for DiscoveryError {
@@ -46,6 +48,12 @@ impl fmt::Display for DiscoveryError {
             }
             Self::WindowServerUnavailable => {
                 write!(f, "CoreGraphics window server is unavailable")
+            }
+            Self::InvalidWindowCount(count) => {
+                write!(f, "CoreGraphics returned invalid window count {count}")
+            }
+            Self::TooManyWindows(count) => {
+                write!(f, "CoreGraphics returned {count} windows; maximum is 4096")
             }
         }
     }
@@ -113,7 +121,7 @@ pub fn associate_windows(
 #[cfg(target_os = "macos")]
 mod macos {
     use super::{DiscoveredWindow, DiscoveryError, WindowBounds};
-    use std::ffi::{CStr, c_char, c_void};
+    use std::ffi::{c_char, c_void, CStr};
 
     type CFIndex = isize;
     type CFArrayRef = *const c_void;
@@ -121,6 +129,7 @@ mod macos {
     type CFStringRef = *const c_void;
     type CFNumberRef = *const c_void;
 
+    const MAX_DISCOVERED_WINDOWS: isize = 4096;
     const K_CF_NUMBER_SINT32_TYPE: i32 = 3;
     const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
@@ -182,6 +191,30 @@ mod macos {
             dictionary: CFDictionaryRef,
             rect: *mut CGRect,
         ) -> bool;
+    }
+
+    struct OwnedCfArray(CFArrayRef);
+
+    impl Drop for OwnedCfArray {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    CFRelease(self.0);
+                }
+            }
+        }
+    }
+
+    fn checked_window_count(count: CFIndex) -> Result<usize, DiscoveryError> {
+        if count < 0 {
+            return Err(DiscoveryError::InvalidWindowCount(count));
+        }
+
+        if count > MAX_DISCOVERED_WINDOWS {
+            return Err(DiscoveryError::TooManyWindows(count));
+        }
+
+        usize::try_from(count).map_err(|_| DiscoveryError::InvalidWindowCount(count))
     }
 
     unsafe fn dictionary_value(dictionary: CFDictionaryRef, key: CFStringRef) -> *const c_void {
@@ -272,13 +305,13 @@ mod macos {
             return Err(DiscoveryError::WindowServerUnavailable);
         }
 
-        // The Copy function returns an owned CFArray. Release it once after
-        // all borrowed dictionary/value references have been consumed.
-        let count = unsafe { CFArrayGetCount(array) };
-        let mut windows = Vec::with_capacity(count.max(0) as usize);
+        let array = OwnedCfArray(array);
+        let count = unsafe { CFArrayGetCount(array.0) };
+        let capacity = checked_window_count(count)?;
+        let mut windows = Vec::with_capacity(capacity);
 
         for index in 0..count {
-            let item = unsafe { CFArrayGetValueAtIndex(array, index) };
+            let item = unsafe { CFArrayGetValueAtIndex(array.0, index) };
 
             if item.is_null() {
                 continue;
@@ -287,7 +320,7 @@ mod macos {
             let dictionary = item as CFDictionaryRef;
 
             let window_id = match unsafe { read_i32(dictionary, kCGWindowNumber) } {
-                Some(value) if value >= 0 => value as u32,
+                Some(value) if value > 0 => value as u32,
                 _ => continue,
             };
 
@@ -313,9 +346,28 @@ mod macos {
             });
         }
 
-        unsafe { CFRelease(array) };
-
         Ok(windows)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn window_count_is_checked_before_allocation() {
+            assert_eq!(
+                checked_window_count(-1),
+                Err(DiscoveryError::InvalidWindowCount(-1))
+            );
+            assert_eq!(
+                checked_window_count(MAX_DISCOVERED_WINDOWS),
+                Ok(MAX_DISCOVERED_WINDOWS as usize)
+            );
+            assert_eq!(
+                checked_window_count(MAX_DISCOVERED_WINDOWS + 1),
+                Err(DiscoveryError::TooManyWindows(MAX_DISCOVERED_WINDOWS + 1))
+            );
+        }
     }
 }
 
@@ -393,11 +445,9 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].window.window_id, 201);
         assert_eq!(result[1].window.window_id, 202);
-        assert!(
-            result
-                .iter()
-                .all(|item| { item.loader.as_deref() == Some("neoforge") })
-        );
+        assert!(result
+            .iter()
+            .all(|item| { item.loader.as_deref() == Some("neoforge") }));
     }
 
     #[test]

@@ -63,6 +63,7 @@ pub enum LayoutError {
     NoDisplays,
     NoMainDisplay,
     MultipleMainDisplays(usize),
+    DuplicateDisplayId(u32),
     DisplayNotFound(u32),
     InvalidDisplayId(u32),
     InvalidDisplayBounds,
@@ -80,6 +81,7 @@ impl fmt::Display for LayoutError {
             Self::MultipleMainDisplays(count) => {
                 write!(f, "expected one main display, found {count}")
             }
+            Self::DuplicateDisplayId(id) => write!(f, "duplicate display ID {id}"),
             Self::DisplayNotFound(id) => write!(f, "display {id} was not found"),
             Self::InvalidDisplayId(id) => write!(f, "display ID {id} is invalid"),
             Self::InvalidDisplayBounds => write!(f, "display bounds are invalid"),
@@ -141,6 +143,18 @@ fn validate_display(display: &DisplayGeometry) -> Result<(), LayoutError> {
         || b.height <= 0.0
     {
         return Err(LayoutError::InvalidDisplayBounds);
+    }
+
+    Ok(())
+}
+
+fn validate_unique_display_ids(displays: &[DisplayGeometry]) -> Result<(), LayoutError> {
+    let mut ids = std::collections::HashSet::with_capacity(displays.len());
+
+    for display in displays {
+        if !ids.insert(display.display_id) {
+            return Err(LayoutError::DuplicateDisplayId(display.display_id));
+        }
     }
 
     Ok(())
@@ -262,6 +276,8 @@ pub fn plan_on_main_display(
         return Err(LayoutError::NoDisplays);
     }
 
+    validate_unique_display_ids(displays)?;
+
     let main: Vec<&DisplayGeometry> = displays.iter().filter(|display| display.is_main).collect();
 
     match main.as_slice() {
@@ -281,6 +297,8 @@ pub fn plan_on_display_id(
     if displays.is_empty() {
         return Err(LayoutError::NoDisplays);
     }
+
+    validate_unique_display_ids(displays)?;
 
     let display = displays
         .iter()
@@ -452,6 +470,33 @@ mod tests {
             plan_on_main_display(&displays, 2, LayoutDirection::Horizontal, constraints()).unwrap();
 
         assert_eq!(plan.display_id, 1);
+    }
+
+    #[test]
+    fn rejects_duplicate_main_display_ids() {
+        let displays = vec![
+            display(1, true, 0.0, 0.0, 1000.0, 800.0),
+            display(1, true, 1000.0, 0.0, 1000.0, 800.0),
+        ];
+
+        assert_eq!(
+            plan_on_main_display(&displays, 2, LayoutDirection::Horizontal, constraints()),
+            Err(LayoutError::DuplicateDisplayId(1))
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_non_main_display_ids() {
+        let displays = vec![
+            display(1, true, 0.0, 0.0, 1000.0, 800.0),
+            display(2, false, 1000.0, 0.0, 1000.0, 800.0),
+            display(2, false, 2000.0, 0.0, 1000.0, 800.0),
+        ];
+
+        assert_eq!(
+            plan_on_display_id(&displays, 2, 2, LayoutDirection::Horizontal, constraints()),
+            Err(LayoutError::DuplicateDisplayId(2))
+        );
     }
 
     #[test]

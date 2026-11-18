@@ -29,6 +29,8 @@ pub enum DisplayGeometryError {
     UnsupportedPlatform,
     CoreGraphics(i32),
     NoActiveDisplays,
+    TooManyActiveDisplays(u32),
+    DuplicateDisplayId(u32),
     DisplayModeUnavailable(u32),
     InvalidDisplayGeometry(u32),
     DisplayListChanged,
@@ -46,6 +48,15 @@ impl fmt::Display for DisplayGeometryError {
             }
             Self::NoActiveDisplays => {
                 write!(f, "CoreGraphics returned no active displays")
+            }
+            Self::TooManyActiveDisplays(count) => {
+                write!(
+                    f,
+                    "active display count {count} exceeds the supported limit"
+                )
+            }
+            Self::DuplicateDisplayId(id) => {
+                write!(f, "CoreGraphics returned duplicate display ID {id}")
             }
             Self::DisplayModeUnavailable(id) => {
                 write!(f, "display {id} has no available current display mode")
@@ -147,6 +158,8 @@ mod macos {
         }
     }
 
+    const MAX_ACTIVE_DISPLAYS: u32 = 64;
+
     fn active_display_ids() -> Result<Vec<CGDirectDisplayID>, DisplayGeometryError> {
         // The active display count can change while the list is being read.
         // Retry a bounded number of times rather than risking an undersized buffer.
@@ -164,6 +177,10 @@ mod macos {
                 return Err(DisplayGeometryError::NoActiveDisplays);
             }
 
+            if required_count > MAX_ACTIVE_DISPLAYS {
+                return Err(DisplayGeometryError::TooManyActiveDisplays(required_count));
+            }
+
             let capacity = usize::try_from(required_count)
                 .map_err(|_| DisplayGeometryError::DisplayListChanged)?;
 
@@ -176,6 +193,10 @@ mod macos {
 
             if list_result != 0 {
                 return Err(DisplayGeometryError::CoreGraphics(list_result));
+            }
+
+            if actual_count > MAX_ACTIVE_DISPLAYS {
+                return Err(DisplayGeometryError::TooManyActiveDisplays(actual_count));
             }
 
             if actual_count as usize > displays.len() {
@@ -196,6 +217,13 @@ mod macos {
 
     pub(super) fn discover_displays() -> Result<Vec<DisplayGeometry>, DisplayGeometryError> {
         let display_ids = active_display_ids()?;
+        let mut seen_ids = std::collections::HashSet::with_capacity(display_ids.len());
+
+        for &display_id in &display_ids {
+            if !seen_ids.insert(display_id) {
+                return Err(DisplayGeometryError::DuplicateDisplayId(display_id));
+            }
+        }
         let main_display_id = unsafe { CGMainDisplayID() };
 
         let mut geometries = Vec::with_capacity(display_ids.len());
@@ -270,6 +298,14 @@ mod macos {
                 is_builtin,
                 rotation_degrees,
             });
+        }
+
+        let mut seen_ids = std::collections::HashSet::with_capacity(geometries.len());
+
+        for display in &geometries {
+            if !seen_ids.insert(display.display_id) {
+                return Err(DisplayGeometryError::DuplicateDisplayId(display.display_id));
+            }
         }
 
         if !geometries.iter().any(|display| display.is_main) {

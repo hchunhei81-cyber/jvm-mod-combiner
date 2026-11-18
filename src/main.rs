@@ -1,3 +1,5 @@
+mod diagnostics;
+mod log_hub;
 mod display_geometry;
 mod display_topology;
 mod window_accessibility;
@@ -1849,7 +1851,7 @@ fn record_live_child_poll<T: std::fmt::Display>(
 
 #[cfg(test)]
 mod fusion_child_liveness_tests {
-    use super::{ChildPoll, record_live_child_poll};
+    use super::{record_live_child_poll, ChildPoll};
     use std::io;
 
     #[test]
@@ -1883,8 +1885,8 @@ fn start_data_bus() -> std::io::Result<()> {
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Write};
     use std::sync::{
-        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
     };
 
     // Each registration is tied to one specific TCP connection.
@@ -2231,11 +2233,292 @@ fn control_dry_run_result<T>(
     result.map_err(|error| control_dry_run_rejection(requester, format!("dry-run failed: {error}")))
 }
 
+#[derive(Debug, Clone, Default)]
+struct ControlSnapshot {
+    registrations: Option<Vec<window_manager::AuthenticatedRegistration>>,
+    live_child_pids: HashSet<u32>,
+    authorized_windows: Vec<window_discovery::WindowRecord>,
+}
+
+fn publish_diagnostic_snapshot(
+    control: &std::sync::RwLock<ControlSnapshot>,
+    diagnostics: &std::sync::RwLock<diagnostics::DiagnosticSnapshot>,
+    status: diagnostics::DiagnosticStatus,
+) {
+    let mut published = diagnostics::DiagnosticSnapshot {
+        status,
+        updated_at: Some(std::time::Instant::now()),
+        ..Default::default()
+    };
+
+    match control.read() {
+        Ok(source) => {
+            if let Some(registrations) = source.registrations.as_ref() {
+                for registration in registrations.iter().take(32) {
+                    let pid = registration.registration.pid;
+                    published.children.push(diagnostics::DiagnosticChild {
+                        pid,
+                        loader: registration.registration.loader.clone(),
+                        role: registration.registration.role.clone(),
+                        live: source.live_child_pids.contains(&pid),
+                    });
+                }
+            }
+
+            for record in source.authorized_windows.iter().take(128) {
+                let Some(loader) = record.loader.as_deref() else {
+                    continue;
+                };
+
+                let title: String = record
+                    .window
+                    .title
+                    .as_deref()
+                    .unwrap_or("<untitled>")
+                    .chars()
+                    .take(256)
+                    .collect();
+
+                let bounds = &record.window.bounds;
+                published.windows.push(diagnostics::DiagnosticWindow {
+                    window_id: record.window.window_id,
+                    pid: record.window.pid,
+                    loader: loader.to_owned(),
+                    title,
+                    bounds: diagnostics::DiagnosticBounds {
+                        x: bounds.x,
+                        y: bounds.y,
+                        width: bounds.width,
+                        height: bounds.height,
+                    },
+                });
+            }
+        }
+        Err(_) => {
+            published.status = diagnostics::DiagnosticStatus::Failed;
+            eprintln!("[Diagnostics] Control snapshot lock poisoned");
+        }
+    }
+
+    match diagnostics.write() {
+        Ok(mut target) => *target = published,
+        Err(_) => eprintln!("[Diagnostics] Diagnostic snapshot lock poisoned"),
+    }
+}
+
+fn same_peer_identity(left: &window_peer::PeerIdentity, right: &window_peer::PeerIdentity) -> bool {
+    left.pid == right.pid
+        && left.pid_version == right.pid_version
+        && left.audit_token == right.audit_token
+}
+
+fn authorize_control_window_ids(
+    window_ids: &[u32],
+    snapshot: &ControlSnapshot,
+) -> Result<Vec<window_discovery::WindowRecord>, String> {
+    if window_ids.is_empty() {
+        return Err("No window IDs were supplied".to_owned());
+    }
+
+    let registrations = snapshot
+        .registrations
+        .as_ref()
+        .ok_or_else(|| "Window Manager registry snapshot is unavailable".to_owned())?;
+
+    let mut requested_ids = HashSet::new();
+    let mut authorized = Vec::with_capacity(window_ids.len());
+
+    for window_id in window_ids {
+        if *window_id == 0 || !requested_ids.insert(*window_id) {
+            return Err(format!("Invalid or duplicate Window ID {window_id}"));
+        }
+
+        let matches: Vec<_> = snapshot
+            .authorized_windows
+            .iter()
+            .filter(|record| record.window.window_id == *window_id)
+            .collect();
+
+        if matches.len() != 1 {
+            return Err(format!(
+                "Window ID {window_id} has {} authorized snapshot matches; exactly one is required",
+                matches.len()
+            ));
+        }
+
+        let record = matches[0];
+
+        let identity = record
+            .identity
+            .as_ref()
+            .ok_or_else(|| format!("Window ID {window_id} has no authenticated peer identity"))?;
+
+        if record.window.pid == 0 || record.window.pid != identity.pid {
+            return Err(format!(
+                "Window ID {window_id} PID does not match its authenticated identity"
+            ));
+        }
+
+        if identity.pid_version <= 0 {
+            return Err(format!("Window ID {window_id} has an invalid pid_version"));
+        }
+
+        if !snapshot.live_child_pids.contains(&identity.pid) {
+            return Err(format!(
+                "Window ID {window_id} belongs to a process that is not a live Fusion child"
+            ));
+        }
+
+        let loader = record
+            .loader
+            .as_deref()
+            .ok_or_else(|| format!("Window ID {window_id} has no Loader identity"))?;
+
+        if !matches!(loader, "fabric" | "forge" | "neoforge") {
+            return Err(format!(
+                "Window ID {window_id} has unsupported Loader {loader:?}"
+            ));
+        }
+
+        let role = record
+            .role
+            .as_deref()
+            .ok_or_else(|| format!("Window ID {window_id} has no client role"))?;
+
+        if role != "minecraft_client" {
+            return Err(format!(
+                "Window ID {window_id} is not registered as a Minecraft client"
+            ));
+        }
+
+        let registration_matches: Vec<_> = registrations
+            .iter()
+            .filter(|registration| {
+                registration.registration.pid == record.window.pid
+                    && registration.registration.loader == loader
+                    && registration.registration.role == role
+                    && same_peer_identity(&registration.identity, identity)
+            })
+            .collect();
+
+        if registration_matches.len() != 1 {
+            return Err(format!(
+                "Window ID {window_id} has {} exact authenticated registry matches; exactly one is required",
+                registration_matches.len()
+            ));
+        }
+
+        authorized.push(record.clone());
+    }
+
+    Ok(authorized)
+}
+
+fn control_bounds_valid(bounds: &window_discovery::WindowBounds) -> bool {
+    let right = bounds.x + bounds.width;
+    let bottom = bounds.y + bounds.height;
+
+    bounds.x.is_finite()
+        && bounds.y.is_finite()
+        && bounds.width.is_finite()
+        && bounds.height.is_finite()
+        && right.is_finite()
+        && bottom.is_finite()
+        && bounds.width > 0.0
+        && bounds.height > 0.0
+}
+
+fn control_geometry_stable(
+    current: &window_discovery::WindowBounds,
+    original: &window_discovery::WindowBounds,
+) -> bool {
+    if !control_bounds_valid(current) || !control_bounds_valid(original) {
+        return false;
+    }
+
+    [
+        (current.x, original.x),
+        (current.y, original.y),
+        (current.width, original.width),
+        (current.height, original.height),
+    ]
+    .iter()
+    .all(|(actual, expected)| (actual - expected).abs() <= 2.0)
+}
+
+fn same_window_authorization(
+    left: &window_discovery::WindowRecord,
+    right: &window_discovery::WindowRecord,
+) -> bool {
+    if left.window.window_id != right.window.window_id
+        || left.window.pid != right.window.pid
+        || left.window.title != right.window.title
+        || left.window.owner_name != right.window.owner_name
+        || left.loader != right.loader
+        || left.role != right.role
+        || !control_geometry_stable(&left.window.bounds, &right.window.bounds)
+    {
+        return false;
+    }
+
+    match (left.identity.as_ref(), right.identity.as_ref()) {
+        (Some(left), Some(right)) => same_peer_identity(left, right),
+        _ => false,
+    }
+}
+
+// The closure is invoked only after every requested ID has passed
+// pre-authorization. This also makes the fail-before-AX property testable.
+fn run_control_dry_run_after_authorization<F>(
+    window_ids: &[u32],
+    snapshot: &std::sync::RwLock<ControlSnapshot>,
+    run_dry_run: F,
+) -> Result<
+    (
+        Vec<window_discovery::WindowRecord>,
+        Result<window_dry_run::WindowDryRunReport, String>,
+    ),
+    String,
+>
+where
+    F: FnOnce(
+        &[window_discovery::WindowRecord],
+    ) -> Result<window_dry_run::WindowDryRunReport, String>,
+{
+    let initial_snapshot = snapshot
+        .read()
+        .map_err(|_| "Control snapshot lock is poisoned".to_owned())?
+        .clone();
+
+    let authorized = authorize_control_window_ids(window_ids, &initial_snapshot)?;
+
+    // Do not move this call above authorize_control_window_ids().
+    let report_result = run_dry_run(&authorized);
+
+    Ok((authorized, report_result))
+}
+
+fn validate_control_report_selection(
+    requested_display_id: Option<u32>,
+    requested_direction: window_layout::LayoutDirection,
+    report_display_id: u32,
+    report_direction: window_layout::LayoutDirection,
+) -> Result<(), &'static str> {
+    if requested_display_id.is_some_and(|requested| requested != report_display_id) {
+        return Err("dry-run returned an unexpected display ID");
+    }
+
+    if report_direction != requested_direction {
+        return Err("dry-run returned an unexpected layout direction");
+    }
+
+    Ok(())
+}
+
 fn build_control_dry_run_response(
     request: window_control::DryRunRequest,
     requester: &window_peer::PeerIdentity,
-    runtime: &window_integration::WindowRuntime,
-    live_child_pids: &HashSet<u32>,
+    snapshot: &std::sync::RwLock<ControlSnapshot>,
     deadline: std::time::Instant,
 ) -> serde_json::Value {
     use window_layout::{LayoutConstraints, LayoutDirection};
@@ -2258,56 +2541,127 @@ fn build_control_dry_run_response(
         return response;
     }
 
-    let registrations_result = runtime.registrations();
-    if let Some(response) = reject_if_expired() {
-        return response;
-    }
-
-    let registrations = match registrations_result {
-        Ok(Some(registrations)) => registrations,
-        Ok(None) => {
-            return reject("Fusion parent does not own the Window Manager registry".to_owned());
-        }
-        Err(error) => {
-            return reject(format!("registry read failed: {error}"));
-        }
-    };
-
-    let trusted_candidates: Vec<_> = registrations
-        .iter()
-        .filter(|registration| {
-            registration.identity.pid == registration.registration.pid
-                && registration.identity.pid_version > 0
-                && live_child_pids.contains(&registration.identity.pid)
-                && registration.registration.role == "minecraft_client"
-                && matches!(
-                    registration.registration.loader.as_str(),
-                    "fabric" | "forge" | "neoforge"
-                )
-        })
-        .collect();
-
     let constraints = LayoutConstraints::default();
 
-    if let Some(response) = reject_if_expired() {
-        return response;
-    }
-
-    let report_result = window_dry_run::build_window_dry_run_with_deadline(
-        &request.window_ids,
-        direction,
-        request.display_id,
-        constraints,
-        Some(deadline),
-    );
+    let (initial_authorized, report_result) =
+        match run_control_dry_run_after_authorization(&request.window_ids, snapshot, |_| {
+            window_dry_run::build_window_dry_run_with_deadline(
+                &request.window_ids,
+                direction,
+                request.display_id,
+                constraints,
+                Some(deadline),
+            )
+        }) {
+            Ok(result) => result,
+            Err(error) => return reject(format!("window pre-authorization failed: {error}")),
+        };
 
     let report = match control_dry_run_result(requester, deadline, report_result) {
         Ok(report) => report,
         Err(response) => return response,
     };
 
+    if let Err(error) = validate_control_report_selection(
+        request.display_id,
+        direction,
+        report.display_id,
+        report.direction,
+    ) {
+        return reject(error.to_owned());
+    }
+
     if report.entries.len() != request.window_ids.len() {
         return reject("dry-run returned an incomplete window set".to_owned());
+    }
+
+    let mut reported_ids = HashSet::new();
+
+    for entry in &report.entries {
+        if !reported_ids.insert(entry.window_id) {
+            return reject(format!(
+                "dry-run returned duplicate Window ID {}",
+                entry.window_id
+            ));
+        }
+
+        let expected: Vec<_> = initial_authorized
+            .iter()
+            .filter(|record| record.window.window_id == entry.window_id)
+            .collect();
+
+        if expected.len() != 1 {
+            return reject(format!(
+                "dry-run returned unexpected Window ID {}",
+                entry.window_id
+            ));
+        }
+
+        let expected = expected[0];
+
+        if entry.pid != expected.window.pid {
+            return reject(format!(
+                "dry-run PID mismatch for Window ID {}",
+                entry.window_id
+            ));
+        }
+
+        if expected.window.title.as_deref() != Some(entry.title.as_str())
+            || expected.window.owner_name.as_deref() != Some(entry.owner_name.as_str())
+        {
+            return reject(format!(
+                "dry-run title or owner mismatch for Window ID {}",
+                entry.window_id
+            ));
+        }
+
+        if !control_geometry_stable(&entry.current_bounds, &expected.window.bounds) {
+            return reject(format!(
+                "dry-run geometry mismatch for Window ID {}",
+                entry.window_id
+            ));
+        }
+    }
+
+    if reported_ids.len() != request.window_ids.len()
+        || request
+            .window_ids
+            .iter()
+            .any(|id| !reported_ids.contains(id))
+    {
+        return reject("dry-run returned a different window ID set".to_owned());
+    }
+
+    if let Some(response) = reject_if_expired() {
+        return response;
+    }
+
+    // Re-authorize against the newest supervisor snapshot after AX work.
+    let latest_snapshot = match snapshot.read() {
+        Ok(snapshot) => snapshot.clone(),
+        Err(_) => return reject("Control snapshot lock is poisoned".to_owned()),
+    };
+
+    let latest_authorized =
+        match authorize_control_window_ids(&request.window_ids, &latest_snapshot) {
+            Ok(records) => records,
+            Err(error) => {
+                return reject(format!("post-dry-run authorization failed: {error}"));
+            }
+        };
+
+    for original in &initial_authorized {
+        let current: Vec<_> = latest_authorized
+            .iter()
+            .filter(|record| record.window.window_id == original.window.window_id)
+            .collect();
+
+        if current.len() != 1 || !same_window_authorization(original, current[0]) {
+            return reject(format!(
+                "Window ID {} authorization changed during dry-run",
+                original.window.window_id
+            ));
+        }
     }
 
     let mut response_entries = Vec::with_capacity(report.entries.len());
@@ -2317,30 +2671,49 @@ fn build_control_dry_run_response(
             return response;
         }
 
-        let matches: Vec<_> = trusted_candidates
+        let current_record = match latest_authorized
             .iter()
-            .filter(|registration| registration.identity.pid == entry.pid)
-            .collect();
+            .find(|record| record.window.window_id == entry.window_id)
+        {
+            Some(record) => record,
+            None => return reject(format!("Window ID {} lost authorization", entry.window_id)),
+        };
 
-        if matches.len() != 1 {
-            return reject(format!(
-                "window {} PID {} has {} eligible authenticated registrations; exactly one is required",
-                entry.window_id,
-                entry.pid,
-                matches.len()
-            ));
-        }
-
-        let registration = matches[0];
+        let loader = match current_record.loader.as_deref() {
+            Some(loader) => loader,
+            None => {
+                return reject(format!(
+                    "Window ID {} lost its Loader identity",
+                    entry.window_id
+                ));
+            }
+        };
 
         let current = &entry.current_bounds;
         let target = &entry.target_bounds;
 
+        if !control_bounds_valid(target) {
+            return reject(format!(
+                "dry-run returned invalid target geometry for Window ID {}",
+                entry.window_id
+            ));
+        }
+
+        let peer_pid_version = match current_record.identity.as_ref() {
+            Some(identity) => identity.pid_version,
+            None => {
+                return reject(format!(
+                    "Window ID {} lost its peer identity",
+                    entry.window_id
+                ));
+            }
+        };
+
         response_entries.push(serde_json::json!({
             "window_id": entry.window_id,
             "pid": entry.pid,
-            "loader": registration.registration.loader,
-            "peer_pid_version": registration.identity.pid_version,
+            "loader": loader,
+            "peer_pid_version": peer_pid_version,
             "title": entry.title,
             "owner": entry.owner_name,
             "accessibility_index": entry.accessibility_index,
@@ -2383,6 +2756,242 @@ fn build_control_dry_run_response(
     }
 
     response
+}
+
+#[cfg(test)]
+mod control_authorization_tests {
+    use super::*;
+
+    fn fixture() -> ControlSnapshot {
+        let identity = window_peer::PeerIdentity {
+            pid: 4242,
+            pid_version: 17,
+            audit_token: [11, 22, 33, 44, 55, 66, 77, 88],
+        };
+
+        let registration = window_manager::AuthenticatedRegistration {
+            registration: window_manager::ClientRegistration {
+                pid: 4242,
+                loader: "fabric".to_owned(),
+                role: "minecraft_client".to_owned(),
+                protocol: 1,
+            },
+            identity: identity.clone(),
+        };
+
+        let record = window_discovery::WindowRecord {
+            window: window_discovery::DiscoveredWindow {
+                window_id: 101,
+                pid: 4242,
+                owner_name: Some("Minecraft".to_owned()),
+                title: Some("Minecraft 1.21.4".to_owned()),
+                bounds: window_discovery::WindowBounds {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 800.0,
+                    height: 600.0,
+                },
+            },
+            identity: Some(identity),
+            loader: Some("fabric".to_owned()),
+            role: Some("minecraft_client".to_owned()),
+        };
+
+        ControlSnapshot {
+            registrations: Some(vec![registration]),
+            live_child_pids: [4242].into_iter().collect(),
+            authorized_windows: vec![record],
+        }
+    }
+
+    #[test]
+    fn authorization_accepts_geometry_within_two_points() {
+        let mut left = fixture().authorized_windows[0].clone();
+        let mut right = left.clone();
+
+        right.window.bounds.x += 2.0;
+        right.window.bounds.height -= 2.0;
+
+        assert!(same_window_authorization(&left, &right));
+
+        // Keep the binding mutable only for the explicit test mutations.
+        left.window.bounds.x = 0.0;
+    }
+
+    #[test]
+    fn authorization_rejects_geometry_change_over_two_points() {
+        let left = fixture().authorized_windows[0].clone();
+        let mut right = left.clone();
+
+        right.window.bounds.x += 2.01;
+
+        assert!(!same_window_authorization(&left, &right));
+    }
+
+    #[test]
+    fn authorization_rejects_non_finite_geometry() {
+        let left = fixture().authorized_windows[0].clone();
+        let mut right = left.clone();
+
+        right.window.bounds.x = f64::NAN;
+
+        assert!(!same_window_authorization(&left, &right));
+    }
+
+    #[test]
+    fn authorization_rejects_invalid_window_dimensions() {
+        let left = fixture().authorized_windows[0].clone();
+        let mut right = left.clone();
+
+        right.window.bounds.width = 0.0;
+
+        assert!(!same_window_authorization(&left, &right));
+    }
+
+    #[test]
+    fn dry_run_geometry_must_match_authorized_snapshot() {
+        let snapshot = fixture();
+        let expected = &snapshot.authorized_windows[0];
+
+        let within_tolerance = window_discovery::WindowBounds {
+            x: 1.5,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+
+        let outside_tolerance = window_discovery::WindowBounds {
+            x: 2.1,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+
+        assert!(control_geometry_stable(
+            &within_tolerance,
+            &expected.window.bounds
+        ));
+        assert!(!control_geometry_stable(
+            &outside_tolerance,
+            &expected.window.bounds
+        ));
+    }
+
+    #[test]
+    fn valid_window_id_is_authorized() {
+        let snapshot = fixture();
+        let authorized = authorize_control_window_ids(&[101], &snapshot).unwrap();
+
+        assert_eq!(authorized.len(), 1);
+        assert_eq!(authorized[0].window.window_id, 101);
+    }
+
+    #[test]
+    fn unknown_window_id_is_rejected() {
+        let snapshot = fixture();
+
+        assert!(authorize_control_window_ids(&[999], &snapshot).is_err());
+    }
+
+    #[test]
+    fn duplicate_window_snapshot_match_is_rejected() {
+        let mut snapshot = fixture();
+        snapshot
+            .authorized_windows
+            .push(snapshot.authorized_windows[0].clone());
+
+        assert!(authorize_control_window_ids(&[101], &snapshot).is_err());
+    }
+
+    #[test]
+    fn dead_child_pid_is_rejected() {
+        let mut snapshot = fixture();
+        snapshot.live_child_pids.clear();
+
+        assert!(authorize_control_window_ids(&[101], &snapshot).is_err());
+    }
+
+    #[test]
+    fn audit_token_mismatch_is_rejected() {
+        let mut snapshot = fixture();
+        snapshot.registrations.as_mut().unwrap()[0]
+            .identity
+            .audit_token[0] ^= 1;
+
+        assert!(authorize_control_window_ids(&[101], &snapshot).is_err());
+    }
+
+    #[test]
+    fn unsupported_loader_is_rejected() {
+        let mut snapshot = fixture();
+        snapshot.authorized_windows[0].loader = Some("unknown".to_owned());
+        snapshot.registrations.as_mut().unwrap()[0]
+            .registration
+            .loader = "unknown".to_owned();
+
+        assert!(authorize_control_window_ids(&[101], &snapshot).is_err());
+    }
+
+    #[test]
+    fn wrong_client_role_is_rejected() {
+        let mut snapshot = fixture();
+        snapshot.authorized_windows[0].role = Some("server".to_owned());
+        snapshot.registrations.as_mut().unwrap()[0]
+            .registration
+            .role = "server".to_owned();
+
+        assert!(authorize_control_window_ids(&[101], &snapshot).is_err());
+    }
+
+    #[test]
+    fn preauthorization_failure_never_calls_dry_run_closure() {
+        let snapshot = std::sync::RwLock::new(fixture());
+        let calls = std::cell::Cell::new(0usize);
+
+        let result = run_control_dry_run_after_authorization(&[999], &snapshot, |_| {
+            calls.set(calls.get() + 1);
+            Err("dry-run should not have been called".to_owned())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(calls.get(), 0);
+    }
+
+    #[test]
+    fn successful_preauthorization_calls_dry_run_closure_once() {
+        let snapshot = std::sync::RwLock::new(fixture());
+        let calls = std::cell::Cell::new(0usize);
+
+        let result = run_control_dry_run_after_authorization(&[101], &snapshot, |_| {
+            calls.set(calls.get() + 1);
+            Err("test closure reached".to_owned())
+        });
+
+        assert!(result.is_ok());
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn report_selection_must_match_requested_display_and_direction() {
+        use window_layout::LayoutDirection::{Horizontal, Vertical};
+
+        assert_eq!(
+            validate_control_report_selection(Some(1), Horizontal, 2, Horizontal),
+            Err("dry-run returned an unexpected display ID")
+        );
+        assert_eq!(
+            validate_control_report_selection(Some(1), Horizontal, 1, Vertical),
+            Err("dry-run returned an unexpected layout direction")
+        );
+        assert_eq!(
+            validate_control_report_selection(None, Horizontal, 2, Horizontal),
+            Ok(())
+        );
+        assert_eq!(
+            validate_control_report_selection(Some(1), Horizontal, 1, Horizontal),
+            Ok(())
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2536,6 +3145,21 @@ fn run_window_control_dry_run(args: &[String]) -> Result<(), String> {
     );
 
     Ok(())
+}
+
+
+fn spawn_log_reader<R>(
+    reader: R,
+    hub: std::sync::Arc<log_hub::LogHub>,
+    source: &'static str,
+    stream: &'static str,
+) -> std::io::Result<thread::JoinHandle<()>>
+where
+    R: std::io::Read + Send + 'static,
+{
+    thread::Builder::new()
+        .name(format!("log-{source}-{stream}"))
+        .spawn(move || log_hub::pump_reader(reader, hub, source, stream))
 }
 
 fn main() {
@@ -2951,7 +3575,7 @@ fn main() {
 
     if is_window_layout {
         use window_layout::{
-            LayoutConstraints, LayoutDirection, plan_on_display_id, plan_on_main_display,
+            plan_on_display_id, plan_on_main_display, LayoutConstraints, LayoutDirection,
         };
 
         println!("=== Window Layout Planner (read-only) ===");
@@ -3307,6 +3931,79 @@ fn main() {
             control_server.socket_path().display()
         );
 
+        // One dedicated worker, one executing request, and at most one
+        // queued connection. AX calls never execute on the supervisor thread.
+        let control_snapshot =
+            std::sync::Arc::new(std::sync::RwLock::new(ControlSnapshot::default()));
+
+        let diagnostic_snapshot = std::sync::Arc::new(std::sync::RwLock::new(
+            diagnostics::DiagnosticSnapshot::default(),
+        ));
+        let _diagnostics_server =
+            diagnostics::DiagnosticsServer::start(std::sync::Arc::clone(&diagnostic_snapshot))
+                .expect("[Diagnostics] Fusion 无法启动只读 Diagnostics UDS");
+
+        let log_hub = log_hub::LogHub::new();
+        let _log_server = log_hub::LogServer::start(std::sync::Arc::clone(&log_hub))
+            .expect("[LogHub] Fusion 无法启动只读 Log UDS");
+        log_hub.push("fusion", "stdout", "INFO", "Fusion log pipeline initialized");
+        log_hub.push(
+            "fusion",
+            "stdout",
+            "INFO",
+            &format!("Read-only log socket: {}", _log_server.socket_path().display()),
+        );
+
+        eprintln!(
+            "[Diagnostics] Read-only dashboard socket: {}",
+            _diagnostics_server.socket_path().display()
+        );
+
+        publish_diagnostic_snapshot(
+            control_snapshot.as_ref(),
+            diagnostic_snapshot.as_ref(),
+            diagnostics::DiagnosticStatus::Discovering,
+        );
+
+        let worker_snapshot = std::sync::Arc::clone(&control_snapshot);
+
+        let (control_tx, control_rx) = std::sync::mpsc::sync_channel::<(
+            std::os::unix::net::UnixStream,
+            std::time::Instant,
+        )>(1);
+
+        let _control_worker = thread::Builder::new()
+            .name("window-control-worker".to_owned())
+            .spawn(move || {
+                while let Ok((stream, deadline)) = control_rx.recv() {
+                    let result = window_control::WindowControlServer::handle_one_until(
+                        stream,
+                        deadline,
+                        |request, requester, deadline| {
+                            build_control_dry_run_response(
+                                request,
+                                requester,
+                                worker_snapshot.as_ref(),
+                                deadline,
+                            )
+                        },
+                    );
+
+                    match result {
+                        Ok(peer) => eprintln!(
+                            "[WindowControlWorker] Read-only request handled: peer_pid={} peer_pid_version={}",
+                            peer.pid, peer.pid_version
+                        ),
+                        Err(error) => eprintln!(
+                            "[WindowControlWorker] Request rejected or failed: {error}"
+                        ),
+                    }
+                }
+
+                eprintln!("[WindowControlWorker] Request channel closed");
+            })
+            .expect("[WindowControl] Failed to start dedicated worker");
+
         // 直接启动当前 Rust 可执行文件，避免 cargo run 引入中间进程。
         let executable = env::current_exe().expect("[Fusion] 无法获取当前 Rust 可执行文件路径");
 
@@ -3318,7 +4015,9 @@ fn main() {
             .current_dir(&current_dir)
             .env("JVM_COMBINER_BUS_EXTERNAL", "1")
             .env("JVM_COMBINER_WINDOW_EXTERNAL", "1")
-            .env("JVM_COMBINER_WINDOW_SOCKET", &window_socket_path);
+            .env("JVM_COMBINER_WINDOW_SOCKET", &window_socket_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
 
         let mut fabric_child = Some(
             fabric_cmd
@@ -3327,6 +4026,17 @@ fn main() {
         );
         let fabric_pid = fabric_child.as_ref().unwrap().id();
         eprintln!("[Fusion] Fabric Rust child started: pid={fabric_pid}");
+        log_hub.push("fusion", "stdout", "INFO", &format!("Fabric child started: pid={fabric_pid}"));
+
+        {
+            let child = fabric_child.as_mut().unwrap();
+            let stdout = child.stdout.take().expect("Fabric stdout pipe missing");
+            let stderr = child.stderr.take().expect("Fabric stderr pipe missing");
+            spawn_log_reader(stdout, std::sync::Arc::clone(&log_hub), "fabric", "stdout")
+                .expect("Failed to start Fabric stdout reader");
+            spawn_log_reader(stderr, std::sync::Arc::clone(&log_hub), "fabric", "stderr")
+                .expect("Failed to start Fabric stderr reader");
+        }
 
         let mut neoforge_command =
             match build_neoforge_command(&sandbox_dir, &current_dir, &window_runtime) {
@@ -3342,6 +4052,10 @@ fn main() {
                 }
             };
 
+        neoforge_command
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
         let mut neoforge_child = match neoforge_command.spawn() {
             Ok(child) => Some(child),
             Err(error) => {
@@ -3356,6 +4070,17 @@ fn main() {
         };
         let neoforge_pid = neoforge_child.as_ref().unwrap().id();
         eprintln!("[Fusion] NeoForge Java child started: pid={neoforge_pid}");
+        log_hub.push("fusion", "stdout", "INFO", &format!("NeoForge child started: pid={neoforge_pid}"));
+
+        {
+            let child = neoforge_child.as_mut().unwrap();
+            let stdout = child.stdout.take().expect("NeoForge stdout pipe missing");
+            let stderr = child.stderr.take().expect("NeoForge stderr pipe missing");
+            spawn_log_reader(stdout, std::sync::Arc::clone(&log_hub), "neoforge", "stdout")
+                .expect("Failed to start NeoForge stdout reader");
+            spawn_log_reader(stderr, std::sync::Arc::clone(&log_hub), "neoforge", "stderr")
+                .expect("Failed to start NeoForge stderr reader");
+        }
 
         // Read-only window monitoring. The Fusion parent owns the
         // Window Manager and is therefore the authoritative registry reader.
@@ -3378,6 +4103,7 @@ fn main() {
                 }
                 ChildPoll::Exited(status) => {
                     eprintln!("[Fusion] Fabric child exited: {status}");
+                    log_hub.push("fusion", "stdout", "WARN", &format!("Fabric child exited: {status}"));
                     fabric_child = None;
                 }
                 ChildPoll::Failed(error) => {
@@ -3409,6 +4135,7 @@ fn main() {
                 }
                 ChildPoll::Exited(status) => {
                     eprintln!("[Fusion] NeoForge child exited: {status}");
+                    log_hub.push("fusion", "stdout", "WARN", &format!("NeoForge child exited: {status}"));
                     neoforge_child = None;
                 }
                 ChildPoll::Failed(error) => {
@@ -3433,37 +4160,55 @@ fn main() {
                 return;
             }
 
-            // Read-only Control UDS: bounded polling keeps child supervision responsive.
-            for _ in 0..1 {
-                let stream = match control_server.try_accept() {
-                    Ok(Some(stream)) => stream,
-                    Ok(None) => break,
-                    Err(error) => {
-                        eprintln!("[WindowControl] Accept failed: {error}");
-                        break;
-                    }
-                };
+            // Publish an owned snapshot. The worker never accesses WindowRuntime.
+            let registrations_snapshot = match window_runtime.registrations() {
+                Ok(Some(registrations)) => Some(registrations),
+                Ok(None) => None,
+                Err(error) => {
+                    eprintln!("[WindowControl] Registry snapshot refresh failed: {error}");
+                    None
+                }
+            };
 
-                let result = control_server.handle_one(stream, |request, requester, deadline| {
-                    build_control_dry_run_response(
-                        request,
-                        requester,
-                        &window_runtime,
-                        &live_child_pids,
-                        deadline,
-                    )
-                });
+            if let Ok(mut snapshot) = control_snapshot.write() {
+                snapshot.registrations = registrations_snapshot;
+                snapshot.live_child_pids = live_child_pids.clone();
 
-                match result {
-                    Ok(peer) => {
-                        eprintln!(
-                            "[WindowControl] Read-only request handled: peer_pid={} peer_pid_version={}",
-                            peer.pid, peer.pid_version
-                        );
+                // Invalidate the previous discovery result before refreshing.
+                // Requests arriving during discovery must fail closed.
+                snapshot.authorized_windows.clear();
+            } else {
+                eprintln!("[WindowControl] Snapshot lock poisoned; requests will fail closed");
+            }
+
+            publish_diagnostic_snapshot(
+                control_snapshot.as_ref(),
+                diagnostic_snapshot.as_ref(),
+                diagnostics::DiagnosticStatus::Discovering,
+            );
+
+            // Accept and enqueue only. Never read, authenticate, or run AX here.
+            match control_server.try_accept() {
+                Ok(Some(stream)) => {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+
+                    match control_tx.try_send((stream, deadline)) {
+                        Ok(()) => {
+                            eprintln!("[WindowControl] Request queued");
+                        }
+                        Err(std::sync::mpsc::TrySendError::Full(_stream)) => {
+                            eprintln!(
+                                "[WindowControl] Worker busy and queue full; connection dropped"
+                            );
+                        }
+                        Err(std::sync::mpsc::TrySendError::Disconnected(_request)) => {
+                            eprintln!("[WindowControl] Worker unavailable; connection dropped");
+                        }
                     }
-                    Err(error) => {
-                        eprintln!("[WindowControl] Request rejected or failed: {error}");
-                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!("[WindowControl] Accept failed: {error}");
                 }
             }
 
@@ -3478,6 +4223,18 @@ fn main() {
                                 "[WindowDiscovery] Registry unavailable: this process does not own the Window Manager"
                             );
                             last_registered_windows.clear();
+
+                            if let Ok(mut snapshot) = control_snapshot.write() {
+                                snapshot.registrations = None;
+                                snapshot.authorized_windows.clear();
+                            }
+
+                            publish_diagnostic_snapshot(
+                                control_snapshot.as_ref(),
+                                diagnostic_snapshot.as_ref(),
+                                diagnostics::DiagnosticStatus::Unavailable,
+                            );
+
                             thread::sleep(std::time::Duration::from_secs(2));
                             continue;
                         }
@@ -3486,10 +4243,24 @@ fn main() {
                                 "[WindowDiscovery] Registry read failed; skipping window association: {error}"
                             );
                             last_registered_windows.clear();
+
+                            if let Ok(mut snapshot) = control_snapshot.write() {
+                                snapshot.registrations = None;
+                                snapshot.authorized_windows.clear();
+                            }
+
+                            publish_diagnostic_snapshot(
+                                control_snapshot.as_ref(),
+                                diagnostic_snapshot.as_ref(),
+                                diagnostics::DiagnosticStatus::Unavailable,
+                            );
+
                             thread::sleep(std::time::Duration::from_secs(2));
                             continue;
                         }
                     };
+
+                    let registrations_for_authorization = registrations.clone();
 
                     let live_registrations: Vec<_> = registrations
                         .into_iter()
@@ -3507,6 +4278,28 @@ fn main() {
                         record.loader.is_some()
                             && record.role.as_deref() == Some("minecraft_client")
                     });
+
+                    // Publish a coherent snapshot only after discovery and
+                    // authenticated registration association have succeeded.
+                    if let Ok(mut snapshot) = control_snapshot.write() {
+                        snapshot.registrations = Some(registrations_for_authorization);
+                        snapshot.live_child_pids = live_child_pids.clone();
+                        snapshot.authorized_windows = registered_windows.clone();
+                    } else {
+                        eprintln!(
+                            "[WindowControl] Snapshot lock poisoned; authorization publication failed"
+                        );
+                    }
+
+                    publish_diagnostic_snapshot(
+                        control_snapshot.as_ref(),
+                        diagnostic_snapshot.as_ref(),
+                        if registered_windows.is_empty() {
+                            diagnostics::DiagnosticStatus::Empty
+                        } else {
+                            diagnostics::DiagnosticStatus::Ready
+                        },
+                    );
 
                     if registered_windows != last_registered_windows {
                         eprintln!(
@@ -3533,6 +4326,13 @@ fn main() {
                 }
                 Err(error) => {
                     last_registered_windows.clear();
+
+                    publish_diagnostic_snapshot(
+                        control_snapshot.as_ref(),
+                        diagnostic_snapshot.as_ref(),
+                        diagnostics::DiagnosticStatus::Failed,
+                    );
+
                     if !discovery_failed {
                         eprintln!("[WindowDiscovery] Discovery failed: {error}");
                         discovery_failed = true;
@@ -3720,7 +4520,10 @@ mod classpath_resolver_tests {
     use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_TEST_TREE_ID: AtomicU64 = AtomicU64::new(0);
 
     struct TestTree {
         root: PathBuf,
@@ -3733,15 +4536,24 @@ mod classpath_resolver_tests {
                 .expect("system clock error")
                 .as_nanos();
 
-            let root = std::env::temp_dir().join(format!(
-                "jvm-combiner-r1-test-{}-{}",
-                std::process::id(),
-                nonce
-            ));
+            loop {
+                let sequence = NEXT_TEST_TREE_ID.fetch_add(1, Ordering::Relaxed);
 
-            fs::create_dir_all(&root).expect("create test root");
+                let root = std::env::temp_dir().join(format!(
+                    "jvm-combiner-r1-test-{}-{}-{}",
+                    std::process::id(),
+                    nonce,
+                    sequence
+                ));
 
-            Self { root }
+                match fs::create_dir(&root) {
+                    Ok(()) => return Self { root },
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => {
+                        panic!("create test root {}: {error}", root.display());
+                    }
+                }
+            }
         }
 
         fn artifact(&self, relative: &str) -> PathBuf {

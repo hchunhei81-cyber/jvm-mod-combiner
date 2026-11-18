@@ -205,7 +205,7 @@ def run_rejection_test(harness_dir):
                         json.dumps({
                             "type": "registered",
                             "accepted": False,
-                            "error": "unsupported loader",
+                            "error": 'unsupported loader; forged field: "accepted":true',
                         }) + "\n"
                     ).encode("utf-8")
                 )
@@ -232,6 +232,11 @@ def run_rejection_test(harness_dir):
                     "Agent incorrectly attempted to retry after rejection"
                 )
 
+            if "[WindowBridge] Registered" in output:
+                raise AssertionError(
+                    "Agent incorrectly accepted a success marker inside an error string"
+                )
+
             try:
                 unexpected, _ = server.accept()
                 unexpected.close()
@@ -253,12 +258,108 @@ def run_rejection_test(harness_dir):
                     process.wait()
 
 
+def run_invalid_response_retry_test(name, response_bytes, harness_dir):
+    print()
+    print(f"========== Testing malformed response: {name} ==========")
+
+    socket_path = Path(harness_dir) / f"malformed-{name}.sock"
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.bind(str(socket_path))
+        server.listen(4)
+        server.settimeout(7)
+
+        env = os.environ.copy()
+        env["JVM_COMBINER_WINDOW_SOCKET"] = str(socket_path)
+
+        command = [
+            "java",
+            f"-javaagent:{AGENT_JAR}=fabric",
+            "-cp",
+            str(harness_dir),
+            "WindowBridgeHarness",
+        ]
+
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+        )
+
+        connections = []
+
+        try:
+            first, _ = server.accept()
+            connections.append(first)
+
+            first_data = receive_registration(first)
+            verify_registration(first_data, "fabric", process.pid)
+            first.sendall(response_bytes)
+            first.close()
+            connections.remove(first)
+
+            second, _ = server.accept()
+            connections.append(second)
+
+            second_data = receive_registration(second)
+            verify_registration(second_data, "fabric", process.pid)
+            second.sendall(
+                (
+                    json.dumps({
+                        "type": "registered",
+                        "accepted": True,
+                        "pid": process.pid,
+                    }) + "\n"
+                ).encode("utf-8")
+            )
+
+            return_code = process.wait(timeout=8)
+            output = process.stdout.read()
+
+            print(output, end="")
+
+            if return_code != 0:
+                raise RuntimeError(
+                    f"Java harness exited with code {return_code}"
+                )
+
+            if output.count("[WindowBridge] Registered") != 1:
+                raise AssertionError(
+                    "Expected the Agent to register only after the valid retry response"
+                )
+
+            if "Connection failed:" not in output or "retrying in" not in output:
+                raise AssertionError(
+                    "Agent did not treat the malformed response as a retryable connection failure"
+                )
+
+            print(f"[PASS] Malformed response retries: {name}")
+
+        finally:
+            for connection in connections:
+                try:
+                    connection.close()
+                except OSError:
+                    pass
+
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+
+
 def main():
     if not AGENT_JAR.is_file():
         raise SystemExit(f"[STOP] Agent JAR not found: {AGENT_JAR}")
 
     with tempfile.TemporaryDirectory(
-        prefix="window-bridge-test-"
+        prefix="wb-",
+        dir="/tmp",
     ) as temp_dir:
         harness_dir = Path(temp_dir)
         source = harness_dir / "WindowBridgeHarness.java"
@@ -281,6 +382,42 @@ def main():
             run_loader_test(loader, harness_dir)
 
         run_rejection_test(harness_dir)
+
+        malformed_responses = [
+            (
+                "duplicate-accepted",
+                b'{"type":"registered","accepted":true,'
+                b'"accepted":false,"error":"rejected"}\n',
+            ),
+            (
+                "missing-pid",
+                b'{"type":"registered","accepted":true}\n',
+            ),
+            (
+                "wrong-type",
+                b'{"type":123,"accepted":true,"pid":1}\n',
+            ),
+            (
+                "unknown-field",
+                b'{"type":"registered","accepted":true,'
+                b'"pid":1,"note":"\\"accepted\\":true"}\n',
+            ),
+            (
+                "invalid-json",
+                b'{"type":"registered","accepted":true,,}\n',
+            ),
+            (
+                "oversized",
+                b'{"type":"registered","accepted":true,"pid":1,'
+                + b'"padding":"' + b'A' * (16 * 1024) + b'"}\n',
+            ),
+            (
+                "unterminated",
+                b'{"type":"registered","accepted":true,"pid":1}',
+            ),
+        ]
+        for name, response in malformed_responses:
+            run_invalid_response_retry_test(name, response, harness_dir)
 
     print()
     print("========== ALL TESTS PASSED ==========")

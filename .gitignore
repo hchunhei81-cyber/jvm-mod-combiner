@@ -3,6 +3,22 @@
 target/
 *.class
 
+# --- Python build output and virtual environments ---
+# Python's build directory and virtual environments are generated artifacts.
+__pycache__/
+
+# --- Node.js dependencies ---
+# Dependencies can be recreated from the package manifest and lockfile.
+node_modules/
+
+# --- Temporary Swift prototype ---
+# Keep this experimental directory out of version control until it is ready.
+swift/
+
+# --- Temporary terminal UI prototype ---
+# Keep this experimental directory out of version control until it is ready.
+
+
 # --- Runtime diagnostics and generated data ---
 # Keep crash reports, logs, and data files out of version control.
 crash-reports/
@@ -26,6 +42,14 @@ bus_test/bus-agent.jar
 *.backup.*
 *.backup*
 backups/
+
+# --- local env files ---
+# These contains the local settings
+*.env
+*.env.*
+env/
+
+
 
 # --- Local Minecraft sandbox and save data ---
 # The sandbox and saves are local runtime data, not project sources.

@@ -129,8 +129,7 @@ pub struct DiagnosticsServer {
 
 impl DiagnosticsServer {
     pub fn start(snapshot: Arc<RwLock<DiagnosticSnapshot>>) -> io::Result<Self> {
-        let dir = window_manager::private_runtime_dir()?;
-        let socket_path = dir.join("diagnostics.sock");
+        let socket_path = window_manager::unique_socket_path("diagnostics")?;
         Self::start_at(socket_path, snapshot)
     }
 

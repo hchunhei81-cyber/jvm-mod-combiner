@@ -337,8 +337,7 @@ pub struct LogServer {
 
 impl LogServer {
     pub fn start(hub: Arc<LogHub>) -> io::Result<Self> {
-        let dir = window_manager::private_runtime_dir()?;
-        let socket_path = dir.join("logs.sock");
+        let socket_path = window_manager::unique_socket_path("logs")?;
         let listener = UnixListener::bind(&socket_path)?;
 
         let metadata = match fs::symlink_metadata(&socket_path) {

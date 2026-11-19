@@ -162,6 +162,60 @@ pub fn default_socket_path() -> io::Result<PathBuf> {
     Ok(dir.join(format!("wm-{}-{timestamp}.sock", std::process::id())))
 }
 
+pub(crate) fn unique_socket_path(prefix: &str) -> io::Result<PathBuf> {
+    if prefix.is_empty()
+        || !prefix
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid socket filename prefix",
+        ));
+    }
+
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    let dir = private_runtime_dir()?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_nanos();
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+
+    Ok(dir.join(format!(
+        "{prefix}-{}-{timestamp}-{sequence}.sock",
+        std::process::id()
+    )))
+}
+
+#[cfg(test)]
+mod unique_socket_path_tests {
+    use super::*;
+
+    #[test]
+    fn generated_socket_paths_are_unique() {
+        let first = unique_socket_path("diagnostics").unwrap();
+        let second = unique_socket_path("diagnostics").unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), second.parent());
+        assert!(
+            first
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("diagnostics-")
+        );
+    }
+
+    #[test]
+    fn invalid_socket_prefix_is_rejected() {
+        assert!(unique_socket_path("../diagnostics").is_err());
+        assert!(unique_socket_path("").is_err());
+    }
+}
+
 pub fn start(socket_path: &Path) -> io::Result<WindowManagerHandle> {
     if socket_path.exists() {
         return Err(io::Error::new(

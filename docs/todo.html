@@ -20,7 +20,7 @@
           "name": "JVM Mod Combiner",
           "url": "https://github.com/hchunhei81-cyber/jvm-mod-combiner"
         },
-        "datePublished": "2026-11-15"
+        "datePublished": "2026-11-19"
       }
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -163,6 +163,38 @@
             <li><input type="checkbox" disabled /><span data-i18n="window6">Review trusted process-instance identity and transaction authorization before enabling any write</span></li>
             <li><input type="checkbox" disabled /><span data-i18n="window7">Resolve the partial-apply/failed-rollback incident; keep the mutation gate closed meanwhile</span></li>
             <li><input type="checkbox" disabled /><span data-i18n="window8">Investigate embedding/composition and Windows/Linux support separately</span></li>
+          </ul>
+        </section>
+
+        <section class="doc-group" aria-labelledby="ops-title">
+          <span class="doc-status open" data-i18n="opsStatus">Source implemented · live IPC pending</span>
+          <h3 id="ops-title" data-i18n="opsTitle">Read-only diagnostics and operator UI</h3>
+          <p data-i18n="opsIntro">
+            Fusion provides process/window snapshots and bounded logs over local
+            Unix sockets. The terminal UI is read-only; its performance page
+            reports metrics as unavailable.
+          </p>
+          <ul class="doc-checks">
+            <li><input type="checkbox" checked disabled /><span data-i18n="ops1">Publish process/window snapshots over local diagnostics socket</span></li>
+            <li><input type="checkbox" checked disabled /><span data-i18n="ops2">Capture bounded child logs with cursors and gap/eviction metadata</span></li>
+            <li><input type="checkbox" checked disabled /><span data-i18n="ops3">Implement terminal dashboard, process, window, diagnostics, and log views</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="ops4">Run the UI against Fusion and validate the complete IPC lifecycle</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="ops5">Add verified performance telemetry before exposing metric values</span></li>
+          </ul>
+        </section>
+
+        <section class="doc-group" aria-labelledby="swift-title">
+          <span class="doc-status open" data-i18n="swiftStatus">Experimental scaffold · not integrated</span>
+          <h3 id="swift-title" data-i18n="swiftTitle">Local Swift overlay prototype</h3>
+          <p data-i18n="swiftIntro">
+            The Swift tree contains a model and IPC scaffold only; the current
+            entry point creates and displays no native window and is not
+            connected to Fusion.
+          </p>
+          <ul class="doc-checks">
+            <li><input type="checkbox" checked disabled /><span data-i18n="swift1">Type-check overlay model, command protocol, and local socket server</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="swift2">Choose whether to retain/package the prototype and add a reproducible test target</span></li>
+            <li><input type="checkbox" disabled /><span data-i18n="swift3">Implement native window display and Fusion integration only after separate safety/UX review</span></li>
           </ul>
         </section>
 

@@ -20,7 +20,7 @@
           "name": "JVM Mod Combiner",
           "url": "https://github.com/hchunhei81-cyber/jvm-mod-combiner"
         },
-        "datePublished": "2026-11-15"
+        "datePublished": "2026-11-19"
       }
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -226,35 +226,38 @@
 
         <section class="doc-group" aria-labelledby="latest-title">
           <span class="doc-status open" data-i18n="latestStatus"
-            >LATEST UPDATE · 2026-11-15</span
+            >LATEST UPDATE · 2026-11-19</span
           >
           <h3 id="latest-title" data-i18n="latestTitle">
-            NeoForge process ownership and bounded read-only window control
+            Bridge identity, read-only diagnostics, and bounded window control
           </h3>
           <p data-i18n="latestText">
-            Fusion directly owns the NeoForge Java child. Read-only Control UDS
-            dry-run requests now carry deadlines through window discovery and
-            AX inspection, with target-title filtering and a bounded AX window
-            count. Mutation and rollback remain gated off.
+            Fusion directly owns the NeoForge Java child and authenticates the
+            local Window Manager bridge peer. Read-only process/window
+            diagnostics and bounded logs are available to the terminal UI.
+            Window control remains a dry-run; mutation and rollback remain
+            gated off after the unresolved partial-apply incident.
           </p>
           <div class="doc-callout">
             <strong data-i18n="branchLabel">Implementation snapshot:</strong>
             <span data-i18n="branchText">
-              Source work includes direct child-process ownership, fail-closed
-              live-child association, a read-only Control UDS dry-run, a
-              server-side execution deadline, a client post-connect I/O budget,
-              and deadline-aware AX inspection. Unix socket connection
-              establishment itself is not covered by the client timeout.
+              Source work includes kernel PID/audit-token checks for the Java
+              Bridge, live-child association, read-only display/layout
+              inspection, deadline-aware Control/AX dry-run, diagnostic
+              snapshots, and bounded logs. DataBus registration names remain
+              self-asserted. Unix socket connection establishment itself is
+              not covered by the client timeout.
             </span>
           </div>
           <div class="doc-callout">
             <strong data-i18n="verifyLabel">Verification status:</strong>
             <span data-i18n="verifyText">
-              All 216 Rust binary unit tests pass, including Control, dry-run
-              deadlines, window discovery, and command guards. Live Minecraft
-              window discovery, AX permission behavior, and actual AX timing
-              remain unverified. The mutation gate remains closed; no apply or
-              restore was run.
+              All 286 Rust tests pass; the Java bridge harness covers
+              registration, reconnect, rejection, and malformed responses.
+              The terminal UI and local Swift scaffold type-check. Live Fusion
+              IPC, Minecraft window discovery, AX permission behavior, and
+              recovery remain unverified. The mutation gate remains closed;
+              no apply or restore was run.
             </span>
           </div>
         </section>
@@ -300,8 +303,15 @@
             <li>
               <input type="checkbox" checked disabled />
               <span data-i18n="done5"
-                >Window Manager/Java bridge registration tests and read-only
-                macOS window discovery prototype</span
+                >Window Manager/Java bridge tests, kernel peer identity checks,
+                live-child association, and read-only macOS discovery</span
+              >
+            </li>
+            <li>
+              <input type="checkbox" checked disabled />
+              <span data-i18n="done6"
+                >Read-only process/window diagnostics and bounded log sockets;
+                terminal UI type-checks</span
               >
             </li>
           </ul>
@@ -388,9 +398,15 @@
             <li>
               <input type="checkbox" disabled />
               <span data-i18n="next6"
-                >Validate window registration, discovery, and macOS permission
-                handling with live Minecraft clients; do not imply window
-                movement or embedding.</span
+                >Validate read-only window discovery, Control UDS, macOS
+                Accessibility, and terminal UI IPC with live Fusion/Minecraft;
+                keep mutation gated off.</span
+            >
+            <li>
+              <input type="checkbox" disabled />
+              <span data-i18n="next7"
+                >Resolve the partial-apply/failed-rollback incident before
+                considering any window setter.</span
               >
             </li>
           </ul>

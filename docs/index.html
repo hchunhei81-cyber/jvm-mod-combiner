@@ -20,7 +20,7 @@
           "name": "JVM Mod Combiner",
           "url": "https://github.com/hchunhei81-cyber/jvm-mod-combiner"
         },
-        "datePublished": "2026-11-15"
+        "datePublished": "2026-11-19"
       }
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -295,12 +295,12 @@
             data-search="diagnostics reflection structure 诊断 反射"
           >
             <span class="card-index">06 / DEBUG</span>
-            <h3 data-i18n="f6Title">运行时结构诊断</h3>
+            <h3 data-i18n="f6Title">运行时诊断与日志</h3>
             <p data-i18n="f6Desc">
-              输出 Minecraft 实例字段、类型和值，辅助分析混淆环境。
+              本地只读终端控制台汇总进程、窗口、诊断和有界日志；真实性能遥测尚不可用。
             </p>
-            <span class="card-status done" data-i18n="diagnosticsVerified"
-              >基础诊断已验证</span
+            <span class="card-status progress" data-i18n="diagnosticsVerified"
+              >源码已实现 · 真实 Fusion IPC 待验证</span
             >
           </article>
           <article
@@ -310,7 +310,7 @@
             <span class="card-index">07 / WINDOWS</span>
             <h3 data-i18n="f7Title">窗口注册与观察</h3>
             <p data-i18n="f7Desc">
-              Fusion 直接持有 NeoForge Java 子进程；只读 Control UDS dry-run 以当前存活子进程身份关联窗口并限制 AX 查询。窗口修改 Gate 仍关闭。
+              Window Manager 验证 Bridge 对端身份，Fusion 以存活子进程关联窗口；Control UDS 仅做只读 dry-run，窗口修改 Gate 仍关闭。
             </p>
             <span class="card-status progress" data-i18n="windowPrototypeStatus"
               >只读控制已实现 · 真实环境验证待完成</span

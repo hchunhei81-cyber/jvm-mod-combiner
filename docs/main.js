@@ -48,7 +48,7 @@
       playerStateVerified: "状态读取与发布已验证",
       pocNeedsStability: "概念验证完成 · 持续稳定中",
       windowPrototypeStatus: "只读控制已实现 · 真实环境验证待完成",
-      diagnosticsVerified: "基础诊断已验证",
+      diagnosticsVerified: "源码已实现 · 真实 Fusion IPC 待验证",
       noResults: "没有找到匹配的功能。",
       f1Title: "Rust 启动内核",
       f1Desc: "解析版本依赖、组织 JVM 类路径，并通过 JNI 启动目标 Java 环境。",
@@ -61,11 +61,12 @@
       f5Title: "双端实体镜像",
       f5Desc:
         "Fabric 到 NeoForge 的 RemotePlayer 镜像已完成概念验证。已提交源码包含 NeoForge 怪物接收与 ACK/重试流程，但仍需打包和运行时测试；怪物移除尚未实现。",
-      f6Title: "运行时结构诊断",
-      f6Desc: "输出 Minecraft 实例字段、类型和值，辅助分析混淆环境。",
+      f6Title: "运行时诊断与日志",
+      f6Desc:
+        "Fusion 通过本地只读接口提供进程/窗口快照和有界日志，终端 UI 可查看；真实性能遥测尚不可用。另有 Java 反射探针用于检查 Minecraft 类结构。",
       f7Title: "窗口注册与观察",
       f7Desc:
-        "Fusion 直接持有 NeoForge Java 子进程；只读 Control UDS dry-run 以存活子进程身份关联窗口并对 AX 查询实施 deadline。窗口修改 Gate 仍关闭。",
+        "Window Manager 使用内核 PID/audit token 验证 Java Bridge；Fusion 只关联当前确认存活的子进程。Control UDS 仅执行只读 dry-run，窗口修改 Gate 仍关闭。",
       architectureTitle: "系统架构",
       architectureDesc: "选择一个模块，查看它在整个启动和同步流程中的职责。",
       archRust: "依赖解析 · JNI",
@@ -167,7 +168,7 @@
       playerStateVerified: "State extraction and publishing verified",
       pocNeedsStability: "PoC verified · Stabilization ongoing",
       windowPrototypeStatus: "Read-only control implemented · live validation pending",
-      diagnosticsVerified: "Basic diagnostics verified",
+      diagnosticsVerified: "Source implemented · live Fusion IPC pending",
       noResults: "No matching features found.",
       f1Title: "Rust launcher kernel",
       f1Desc:
@@ -184,12 +185,12 @@
       f5Title: "Cross-instance entity mirror",
       f5Desc:
         "The Fabric-to-NeoForge RemotePlayer mirror is a verified proof of concept. Committed Java sources add a NeoForge monster receiver and ACK/retry path, but these changes need packaging and runtime tests; monster removal is not implemented.",
-      f6Title: "Runtime diagnostics",
+      f6Title: "Runtime diagnostics and logs",
       f6Desc:
-        "Inspects Minecraft instance fields, types, and values to help analyze obfuscated environments.",
+        "Fusion exposes read-only process/window snapshots and bounded logs for the terminal UI; performance telemetry is unavailable. A separate Java reflection probe inspects Minecraft class structures.",
       f7Title: "Window registration and observation",
       f7Desc:
-        "Fusion directly owns the NeoForge Java child; the read-only Control UDS dry-run associates windows only with confirmed live child identities and applies deadlines to AX inspection. The mutation gate remains closed.",
+        "The Window Manager validates the Java Bridge with kernel PID/audit-token identity; Fusion associates only confirmed live children. Control UDS is read-only, and the mutation gate remains closed.",
       architectureTitle: "System architecture",
       architectureDesc:
         "Select a module to inspect its role in the launch and synchronization pipeline.",

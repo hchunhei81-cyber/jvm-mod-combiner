@@ -20,7 +20,7 @@
           "name": "JVM Mod Combiner",
           "url": "https://github.com/hchunhei81-cyber/jvm-mod-combiner"
         },
-        "datePublished": "2026-11-15"
+        "datePublished": "2026-11-19"
       }
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -252,6 +252,23 @@
               API/read-back errors, and test partial-write and rollback failures
               without touching live windows. Keep the mutation gate closed until
               recovery is validated.
+            </p>
+          </article>
+
+          <article class="doc-card">
+            <span class="doc-status open" data-i18n="p11Status">Source implemented · live workflow pending</span>
+            <h3 data-i18n="p11Title">Read-only diagnostics and bounded logs</h3>
+            <p data-i18n="p11Text">
+              Multi-process failures require process-specific state and output.
+              Fusion now exposes read-only process/window snapshots and bounded
+              child logs over local Unix sockets; the terminal UI displays
+              dashboard, process, window, diagnostics, and log views. Type
+              checks and unit tests do not establish live Fusion IPC behavior.
+            </p>
+            <p data-i18n="p11Limit">
+              <strong>Limit:</strong> Performance metrics are unavailable until
+              real telemetry is published. The separate Swift overlay scaffold
+              is not integrated and creates/displays no native window.
             </p>
           </article>
         </div>

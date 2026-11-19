@@ -1,6 +1,6 @@
 {
   "source": "main",
-  "generatedAt": "2026-11-13",
+  "generatedAt": "2026-11-19",
   "commits": [
     {
       "sha": "acb08d3656b4bf27a42ada6550e1f2becce77a89",
@@ -621,6 +621,78 @@
       "author": "hchunhei81-cyber"
     },
     {
+      "sha": "49f1b09d9601aacc65e4972bcfd50d57bf077eda",
+      "date": "2026-11-12T22:28:59+08:00",
+      "message": "update the progress in files",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "fb4f2d5ef7a2027b2c9f26c9a41ab2c7118282e8",
+      "date": "2026-11-13T17:02:43+08:00",
+      "message": "feat(window): detect macOS display backing geometry",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "0b12827fd15d956c65fb55fe2b204e677dde3af6",
+      "date": "2026-11-13T17:22:33+08:00",
+      "message": "feat(window): analyze macOS display topology",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "13bf77ff46381bb9c24a520771017aa254066c35",
+      "date": "2026-11-13T17:30:39+08:00",
+      "message": "feat(window): calculate virtual desktop bounds",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "e66fa1f6d9ebc562eec9692e26e5f65898aaa659",
+      "date": "2026-11-13T17:38:28+08:00",
+      "message": "feat(window): add pure window layout planner",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "3e838b187846ca4b6a7032facc333cea1ae17346",
+      "date": "2026-11-13T18:01:56+08:00",
+      "message": "fix(classpath): preserve dependency precedence with deduplicated artifacts",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "35bfb2c7097d543d4b55beadaad6932397d210ed",
+      "date": "2026-11-13T18:15:24+08:00",
+      "message": "feat(window): add verified macOS accessibility window control",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "6612b5018037dba0f272f7ba9dd471406d3245d8",
+      "date": "2026-11-13T18:18:15+08:00",
+      "message": "feat(window): add verified macOS accessibility window control",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "5ba16d09d9664ce368d8c45aa5d862ea34e50f2d",
+      "date": "2026-11-13T18:25:10+08:00",
+      "message": "feat(window): add read-only window identity verification",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "8f1589df6b86df77aad904aef5829a49bc375dfe",
+      "date": "2026-11-13T18:56:39+08:00",
+      "message": "feat(window): add verified window layout dry run",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "eddccff4353a07048fd90a28afd348a5ca47ace7",
+      "date": "2026-11-13T19:05:30+08:00",
+      "message": "fix(window): verify accessibility rollback geometry",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "5bb467d9dbb264c69c7c03703279f819080b98c8",
+      "date": "2026-11-13T19:36:25+08:00",
+      "message": "fix(window): revalidate identity before accessibility mutation",
+      "author": "hchunhei81-cyber"
+    },
+    {
       "sha": "946de0a17803db98180aaef6687c2be6fd3e715f",
       "date": "2026-11-13T19:45:00+08:00",
       "message": "refactor(window): extract testable accessibility transaction",
@@ -636,6 +708,90 @@
       "sha": "5dd3e18a7ddded71fe2c030cd3fda9df131c86ed",
       "date": "2026-11-13T21:21:19+08:00",
       "message": "feat(window): add recoverable window transaction adapter",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "788ae1236ad4afd350ef7038f6fb8366ea553f26",
+      "date": "2026-11-13T23:08:43+08:00",
+      "message": "docs: document macOS window rollback failure and update progress",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "a99c73de078ade0583f107a044e4e50b91e87744",
+      "date": "2026-11-13T23:10:29+08:00",
+      "message": "Implement window restore and apply functionality with command-line argument parsing",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "c82256e0a2929e099cf39759ad66cabc41ffcd6e",
+      "date": "2026-11-14T20:21:01+08:00",
+      "message": "test: pass full window manager and transaction suite",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "25217ad5986ede3b327e86fd044aa4382fe458ff",
+      "date": "2026-11-15T16:10:52+08:00",
+      "message": "Update theme color and modify page titles across documentation",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "da0ab112903ae98e5154169229b629d7e73d8425",
+      "date": "2026-11-15T16:22:05+08:00",
+      "message": "feat: add Google site verification file",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "d8dbb49013994d75fcfa2c64e5c536c364e7433b",
+      "date": "2026-11-15T16:33:31+08:00",
+      "message": "feat: add structured data and update links in documentation",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "576f4a27f33a5c0b6141bc608b7159f27cb25b06",
+      "date": "2026-11-15T19:04:09+08:00",
+      "message": "Update documentation and code for NeoForge process ownership and read-only window control",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "17d9f7b740f140156e3ce0c0f99e3f4d291d4ca0",
+      "date": "2026-11-15T19:14:32+08:00",
+      "message": "Refactor window discovery and control logic",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "5f7291435bfe37a88e77bbaf888f286130c6fb73",
+      "date": "2026-11-15T20:26:14+08:00",
+      "message": "fix: update .gitignore to correctly exclude backup files",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "80dfc444f7d3a8221ec05941482ce86e84720503",
+      "date": "2026-11-16T17:18:12+08:00",
+      "message": "feat: add sitemap1.xml and update robots.txt to reference it",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "9e87d2912f01f5687581b7b157f2d0b8f82a6484",
+      "date": "2026-11-18T19:44:26+08:00",
+      "message": "feat: add terminal UI for JVM Mod Combiner with diagnostics and logging features",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "a9e2d97864d8ad73b3ec1828f6ea81a70239cf41",
+      "date": "2026-11-18T19:44:39+08:00",
+      "message": "fix: update .gitignore to include Python, Node.js, Swift, and local environment files",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "15138be2773bc894db5a9db9033be8ae5fb41740",
+      "date": "2026-11-18T19:44:56+08:00",
+      "message": "Refactor WindowBridge registration response handling and add tests for malformed responses",
+      "author": "hchunhei81-cyber"
+    },
+    {
+      "sha": "f5d5efd5e81bc807e3d0f410b71060d35a61915e",
+      "date": "2026-11-19T18:30:57+08:00",
+      "message": "fix: optimize log entry retrieval and adjust local entry limit in terminal UI",
       "author": "hchunhei81-cyber"
     }
   ]

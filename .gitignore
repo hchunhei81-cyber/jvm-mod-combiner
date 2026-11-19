@@ -13,7 +13,6 @@ node_modules/
 
 # --- Temporary Swift prototype ---
 # Keep this experimental directory out of version control until it is ready.
-swift/
 
 # --- Temporary terminal UI prototype ---
 # Keep this experimental directory out of version control until it is ready.

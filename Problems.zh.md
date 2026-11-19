@@ -6,7 +6,7 @@
 >
 > 部分问题已经解决，部分问题仅通过临时方案绕过，另一些问题仍在调查中。每个章节都会区分已验证的结果与尚未确认的解释。
 
-**项目状态：** 实验性原型。Fabric、Forge 和 NeoForge 的启动实验已取得重要进展，但尚未实现完整的跨 Loader 互操作。已提交的 Java Agent 源码包含敌对生物镜像和 ACK/重试实现，但仍需打包并运行时验证。Fusion 现直接持有 NeoForge Java 子进程，并加入只读 Control UDS dry-run 路径及有界 AX inspection；窗口修改仍被 Gate 禁用，以上工作不代表真实窗口验证。
+**项目状态：** 实验性原型。Fabric、Forge 和 NeoForge 的启动实验已取得重要进展，但尚未实现完整的跨 Loader 互操作。已提交的 Java Agent 源码包含敌对生物镜像和 ACK/重试实现，但仍需打包并运行时验证。Fusion 直接持有 NeoForge Java 子进程、验证本地 Window Manager Bridge 对端，并通过只读接口提供进程/窗口诊断和有界日志。Control UDS dry-run 不会修改窗口；窗口修改 Gate 仍关闭，真实窗口恢复尚未验证。
 
 ---
 
@@ -1490,6 +1490,11 @@ Bridge 支持连接重试，并在服务端明确拒绝后停止重试。Rust �
 生命周期和 PID 关联；Java 测试程序覆盖 Fabric、Forge、NeoForge 标签的
 注册、重连和拒绝行为。
 
+Window Manager 还会校验由 macOS 内核提供的本地对端 PID 和 audit token，
+并校验客户端声明的 Loader、role、protocol 和注册 PID。Fusion 只会将注册
+关联到当前监督轮次确认存活的子进程。该信任链与 TCP DataBus 不同：
+DataBus 客户端名称仍由客户端自报，不是经过认证的进程身份。
+
 macOS 实现可枚举屏幕上的窗口，并按 PID 将窗口与已注册 JVM 关联。用户
 授予辅助功能权限后，可选的 Accessibility API 探针可以读取窗口标题和
 边界。位置/尺寸事务和回滚实现作为暂存 Rust 基础设施保留，但公开修改接口
@@ -1555,6 +1560,29 @@ AX 枚举超过 32 个窗口时会拒绝请求而非截断列表。dry-run 会�
 
 这些保护措施没有解决部分修改事件，也不授权窗口写入。Mutation Gate 仍关闭；
 不声称已验证真实 Minecraft 窗口、apply 或 restore。
+
+## 8.10 只读诊断与有界日志
+
+<badge color="warning">源码已实现；真实操作流程待验证</badge>
+
+多进程启动器的故障排查需要区分启动器状态、子进程状态、窗口注册和不同 JVM
+各自的输出。单一错误提示或无界合并控制台不足以判断失败进程及发生阶段。
+
+Fusion 现在通过本地 Unix socket 提供只读进程/窗口诊断快照和有界子进程日志。
+日志接口包含来源、输出流、严重级别、游标以及缺口/淘汰信息，消费者可以识别
+环形缓冲区是否已覆盖旧记录。Ink 终端 UI 提供 Dashboard、Processes、Windows、
+Diagnostics 和 Logs 页面。Rust 测试通过、UI 类型检查通过、本地 Swift 脚手架
+也通过类型检查；这些结果不能证明 TUI 与运行中 Fusion 的完整 IPC 流程正常。
+
+性能页面会明确显示指标不可用：目前没有已验证的 CPU、内存或队列深度遥测。
+另外的 Swift overlay 代码只是本地数据模型/IPC 脚手架；其入口不会创建或显示
+原生 `NSWindow`，没有集成到 Fusion，也不会操作窗口。
+
+**剩余工作**
+
+- 使用运行中的 Fusion 验证本地诊断和日志 socket，包括重连、游标缺口和关闭行为。
+- 接入真实性能遥测后，再显示性能数值。
+- 决定是否保留并打包 Swift 脚手架；不得将其描述为可用的原生 overlay。
 
 # 9. ClassLoader 隔离和 Mixin 兼容性
 
@@ -1831,7 +1859,8 @@ Fabric 依赖解析器会读取 Minecraft 版本元数据并应用平台规则�
 | DataBus 连接启动竞态 | <badge color="success">已解决</badge> |
 | 具名客户端注册和路由 | <badge color="success">已验证</badge> |
 | 源码级单向状态消息拒绝 | <badge color="warning">已实现；运行时验证待完成</badge> |
-| DataBus 注册身份认证 | <badge color="warning">未实现；注册名由客户端自报</badge> |
+| Window Manager Bridge 对端认证 | <badge color="success">已实现内核 PID/audit-token 校验；运行时验证待完成</badge> |
+| DataBus 客户端注册身份认证 | <badge color="warning">未实现；注册名由客户端自报</badge> |
 | Java Agent 注入 | <badge color="success">已验证</badge> |
 | Fabric 玩家发现 | <badge color="success">已验证</badge> |
 | NeoForge 玩家发现 | <badge color="success">已验证</badge> |
@@ -1847,6 +1876,8 @@ Fabric 依赖解析器会读取 Minecraft 版本元数据并应用平台规则�
 | AX 消息超时、32 窗口上限和目标标题过滤 | <badge color="warning">已实现并通过单元测试；AX 调用不能被强制取消</badge> |
 | 窗口修改 Gate | <badge color="success">保持关闭；setter 返回 `WindowMutationDisabled`</badge> |
 | macOS 窗口位置/尺寸事务与回滚 | <badge color="danger">暂存于 Gate 后；真实恢复尚未解决</badge> |
+| 只读诊断和有界日志 API | <badge color="success">已实现；真实 UI/IPC 流程待验证</badge> |
+| 终端 UI 性能遥测 | <badge color="warning">不可用；尚无已验证指标来源</badge> |
 | 窗口嵌入或合成 | <badge color="warning">尚未实现</badge> |
 | 怪物移除事件 | <badge color="warning">尚未实现</badge> |
 | 双向玩家镜像 | <badge color="warning">尚未完成</badge> |

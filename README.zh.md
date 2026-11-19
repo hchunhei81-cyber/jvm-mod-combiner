@@ -119,7 +119,10 @@ Rust 负责：
 - [x] 已实现 macOS 只读屏幕窗口发现和可选的只读辅助功能 API 检查；该检查需要用户授予 macOS 辅助功能权限。
 - [x] Fusion 直接持有 NeoForge Java 子进程；只有当前监督轮次确认存活的子进程 PID 才能用于窗口注册关联。
 - [x] 只读 Control UDS dry-run 路径已实现，服务端执行 deadline 贯穿窗口发现与 AX inspection，并限制 AX 消息等待及目标标题几何读取。
-- [x] Rust 二进制单元测试 216 项全部通过，包含 Control、dry-run deadline、窗口发现和命令保护；Java Bridge 测试覆盖三种 Loader 标签的注册、重连和拒绝。
+- [x] Window Manager 使用 macOS 内核提供的 PID 和 audit token 验证本地 Java Bridge 对端；Loader、role、protocol 和注册 PID 也会分别校验。这与 DataBus 的客户端自报身份是不同机制。
+- [x] 已实现只读显示器发现、拓扑分析、窗口布局规划和 Control UDS dry-run；dry-run 会重新验证存活子进程/窗口关联，并将有界 deadline 贯穿窗口发现与 AX inspection。
+- [x] Fusion 通过本地 Unix socket 提供只读进程/窗口快照和有界日志；只读终端 UI 可查看进程、窗口、诊断和日志。
+- [x] Rust 测试 286 项全部通过；Java Window Bridge 测试覆盖 Fabric、Forge、NeoForge 的注册、重连、拒绝及格式错误响应。
 
 ### 正在开发
 
@@ -132,15 +135,23 @@ Rust 负责：
 - [ ] 改善高延迟和丢包条件下的同步。
 - [ ] 重新打包并运行时测试已提交的敌对生物接收、镜像及 ACK/重试实现。
 - [ ] 实现可靠的敌对生物移除消息，并验证重连和世界切换恢复。
+- [ ] 在真实 Fusion 会话中运行终端 UI 并验证诊断/日志 IPC；性能页面目前没有真实指标来源。
 - [ ] 使用真实 Minecraft 窗口验证只读窗口发现、Control UDS 行为和辅助功能权限流程。
-- [ ] 完成可信进程实例身份与事务授权审查。窗口修改和回滚代码仍暂存于 fail-closed 的 `WindowMutationDisabled` Gate 后；此前部分修改后回滚失败的问题仍未解决。
+- [ ] 解决此前部分修改后回滚失败的问题，并完成可信进程实例身份/事务授权审查。窗口修改和回滚代码仍暂存于 fail-closed 的 `WindowMutationDisabled` Gate 后。
 - [ ] 研究窗口嵌入/合成以及 Windows/Linux 窗口支持。
 
 Control 客户端对连接后的请求读写使用 2 秒绝对预算；标准 Unix socket
 `connect()` 本身不受该超时约束。服务端 dry-run 使用独立的 5 秒 deadline。
 deadline 检查可以阻止后续阶段，但无法取消已经执行中的 AX 系统调用。
+窗口控制目前严格只读：`window-apply` 会在不修改窗口的情况下退出，
+旧的 `window-restore` 命令已停用。
 
 **当前源码说明：** Java 源码位于 [`bus_test/`](bus_test/)。已提交源码包含 Fabric 怪物采样、NeoForge 生成/更新镜像处理，以及基于序列号的 ACK/重试实现。这些改动仍需重新构建到 `bus_test/bus-agent.jar` 并在 Minecraft 中运行时验证；可靠的怪物移除尚未实现。
+
+[`terminal-ui/`](terminal-ui/) 中的终端 UI 通过本地只读接口读取诊断快照和日志。
+性能页面目前只是占位内容，因为 Rust 内核和 JVM 尚未发布真实性能指标。
+本地 Swift overlay 源码仍是未集成的实验性脚手架：它定义了窗口数据模型和
+带授权令牌的命令协议，但当前入口不会创建或显示原生 `NSWindow`，也不会执行窗口操作。
 
 ### 尚未实现
 
@@ -409,7 +420,8 @@ JVM Mod Combiner 探索不同的架构：
 - [ ] 同一 JVM 中的真实 Loader 隔离。
 - [ ] 动态依赖解析。
 - [x] 实现本地窗口注册、PID 关联和 macOS 窗口观察。
-- [ ] 在真实窗口中验证源码已有的 macOS 位置/尺寸事务与安全恢复；部分修改后回滚失败的问题仍未解决。
+- [ ] 使用真实窗口验证 macOS 只读发现，并解决此前部分修改后回滚失败的问题。
+- [ ] 在进程实例身份、授权和真实恢复行为得到独立验证前，保持公开窗口修改 Gate 关闭。
 - [ ] 窗口嵌入/合成以及双 Minecraft 窗口实测。
 - [ ] Windows / Linux 验证。
 - [ ] 性能和稳定性测试。

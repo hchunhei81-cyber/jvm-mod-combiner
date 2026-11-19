@@ -80,15 +80,30 @@ Fabric is the sole authoritative player-state publisher. NeoForge operates as a 
 - [x] Test registration, reconnect, explicit rejection, and manager-side client cleanup.
 - [x] Let Fusion own the NeoForge Java child directly; associate registrations only with child PIDs confirmed live during the current supervision pass.
 - [x] Fail closed on child polling errors and clear stale monitoring snapshots.
+- [x] Authenticate the local Java Bridge peer with macOS kernel PID/audit-token identity; validate declared loader, role, protocol, and PID separately. This does not authenticate TCP DataBus registration names.
 - [x] Implement read-only macOS window discovery, exact AX identity matching, target-title geometry filtering, a 32-window scan limit, and 500 ms AX messaging timeouts.
-- [x] Add a read-only Control UDS dry-run path with peer-identity checks, a 500 ms request-read budget, a 5-second server execution deadline, and deadline checks through dry-run and AX inspection.
+- [x] Add read-only display discovery/topology, layout planning, and a Control UDS dry-run with peer-identity checks, a 500 ms request-read budget, a 5-second server execution deadline, and deadline checks through dry-run and AX inspection.
 - [x] Bound client-side post-connect request I/O with a 2-second absolute deadline. The standard Unix socket `connect()` call itself is not covered by that timeout.
-- [x] Keep transaction and snapshot infrastructure staged; the public mutation gate remains closed and returns `WindowMutationDisabled`.
+- [x] Keep transaction and snapshot infrastructure staged; the public mutation gate remains closed and returns `WindowMutationDisabled`. `window-apply` is disabled and the legacy `window-restore` command is retired.
 - [ ] Validate read-only discovery, Control UDS behavior, and Accessibility permission handling against live Minecraft windows.
 - [ ] Complete trusted process-instance identity and transaction authorization review before considering any mutation path.
 - [ ] Resolve the observed partial-apply/failed-rollback incident and validate recovery separately; the current read-only path does not resolve it.
+- [ ] Improve candidate-level AX read/decode diagnostics where inspection currently suppresses individual errors.
 - [ ] Define and test window arrangement/embedding UX separately from basic movement.
 - [ ] Add Windows and Linux support.
+
+### Read-only diagnostics and operator UI
+
+- [x] Publish process/window snapshots through a local diagnostics Unix socket.
+- [x] Capture Fusion and child-process output in a bounded log ring buffer and expose cursors, gaps, and eviction counts over a local log socket.
+- [x] Add a read-only terminal UI for dashboard, process, window, diagnostics, and log views.
+- [ ] Run the terminal UI against a live Fusion session and verify its local IPC lifecycle; the performance view currently reports metrics as unavailable.
+
+### Experimental Swift overlay scaffold
+
+- [x] Add a model-level overlay manager, command validation, versioned/token-checked IPC, and a bounded local Unix-socket server in the local Swift source tree.
+- [ ] Decide whether this prototype belongs in the shipped repository and add a reproducible build/test target if retained.
+- [ ] Implement native window creation/display and connect it to Fusion only after separate safety and UX review; the current Swift entry point performs no native window operation.
 
 ---
 
@@ -177,7 +192,8 @@ The TCP DataBus is already implemented. The next step is to evolve it from a bas
 - [ ] Handle malformed messages safely.
 - [ ] Add rate limiting and message-size limits.
 - [ ] Add heartbeat timeout detection.
-- [ ] Add structured diagnostics and traffic statistics.
+- [x] Expose structured process/window diagnostics and bounded log-stream metadata through local read-only sockets.
+- [ ] Add DataBus traffic statistics and real runtime performance telemetry.
 
 ### 11. Synchronize More Than Player Coordinates
 
@@ -240,7 +256,8 @@ The TCP DataBus is already implemented. The next step is to evolve it from a bas
 
 ### 15. Rendering and Window Integration
 
-- [x] Prototype loader-process registration, PID-based window association, macOS window discovery/Accessibility inspection, and source-level position/size transactions.
+- [x] Prototype authenticated loader-process registration, child-PID window association, read-only macOS display/window discovery, and layout dry-run.
+- [ ] Keep source-level position/size mutation and rollback disabled until identity, authorization, and recovery are reviewed.
 - [ ] Validate discovery against live Minecraft windows and macOS permission behavior.
 - [ ] Resolve and safely validate partial mutation and rollback failure; do not assume recovery succeeded.
 - [ ] Investigate whether two Minecraft windows can be managed as one user-facing experience.
@@ -248,7 +265,7 @@ The TCP DataBus is already implemented. The next step is to evolve it from a bas
 - [ ] Evaluate platform-specific window composition.
 - [ ] Investigate shared rendering resources only after the process and gameplay synchronization layers are stable.
 
-**Limit:** Position/size mutation exists in source, but a real partial mutation was not successfully rolled back. Live recovery remains unresolved; embedding/composition is not implemented. **Priority:** Reliable gameplay synchronization comes before cross-process GPU sharing.
+**Limit:** Position/size transaction code is staged behind a fail-closed gate; a real partial mutation was not successfully rolled back. Live recovery remains unresolved, and embedding/composition is not implemented. **Priority:** Reliable gameplay synchronization comes before cross-process GPU sharing.
 
 ### 16. Advanced Mod Compatibility
 
@@ -308,7 +325,7 @@ Rust launcher, Fabric and NeoForge startup, Java Agent injection, TCP DataBus, a
 
 <badge color="warning">Next milestone</badge>
 
-Rebuild/package the committed Java Agent sources, constrain the self-asserted DataBus registration identity, and runtime-test one-way sender authorization plus the hostile-mob mirror/ACK path.
+Rebuild/package the committed Java Agent sources, constrain the self-asserted DataBus registration identity, and runtime-test one-way sender authorization plus the hostile-mob mirror/ACK path. Validate the diagnostics UI against Fusion; keep window mutation disabled until recovery is proven safe.
 
 The next milestone also includes testing unauthorized reverse `player_move` rejection, reconnect behavior, and RemotePlayer lifecycle recovery. The DataBus policy exists in Rust source, but it is not a substitute for authenticating local clients or for runtime verification. Window control now has direct NeoForge child ownership and a deadline-bounded read-only Control/AX path; live AX behavior remains unverified, and the mutation gate stays closed until identity, authorization, and recovery are reviewed.
 

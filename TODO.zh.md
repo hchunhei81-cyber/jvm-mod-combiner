@@ -74,15 +74,30 @@ Fabric 是玩家状态的唯一权威发布方。NeoForge 作为仅接收端客�
 - [x] 测试注册、重连、明确拒绝和管理器端客户端清理。
 - [x] 由 Fusion 直接持有 NeoForge Java 子进程；仅将当前监督轮次确认存活的子进程 PID 用于注册关联。
 - [x] 子进程轮询错误时 fail-closed，并清除过期监控快照。
+- [x] 使用 macOS 内核提供的 PID/audit token 验证本地 Java Bridge 对端，并单独校验声明的 Loader、role、protocol 和 PID；这不等于验证 TCP DataBus 注册名。
 - [x] 实现只读 macOS 窗口发现、精确 AX 身份匹配、目标标题几何过滤、32 个窗口上限和 500ms AX 消息超时。
-- [x] 增加只读 Control UDS dry-run 路径，保留对端身份检查，并将 500ms 请求读取预算、5 秒服务端执行 deadline 贯穿 dry-run 与 AX inspection。
+- [x] 实现只读显示器发现/拓扑、布局规划和 Control UDS dry-run，并保留对端身份检查；500ms 请求读取预算、5 秒服务端执行 deadline 贯穿 dry-run 与 AX inspection。
 - [x] 对连接后的客户端请求读写设置 2 秒绝对 deadline。标准 Unix socket `connect()` 本身不受该超时约束。
-- [x] 事务和快照基础设施保持暂存状态；公开 Mutation Gate 仍关闭并返回 `WindowMutationDisabled`。
+- [x] 事务和快照基础设施保持暂存状态；公开 Mutation Gate 仍关闭并返回 `WindowMutationDisabled`。`window-apply` 已禁用，旧 `window-restore` 命令已停用。
 - [ ] 使用真实 Minecraft 窗口验证只读发现、Control UDS 行为和辅助功能权限流程。
 - [ ] 完成可信进程实例身份与事务授权审查后，才考虑任何窗口修改路径。
 - [ ] 单独解决并验证部分修改后回滚失败事件；当前只读路径并未解决该问题。
+- [ ] 补充候选窗口 AX 属性读取/解码错误的逐项诊断；当前部分 inspection 路径仍会压缩单个候选的错误。
 - [ ] 将窗口排列/嵌入的交互设计与基础位置修改分开评估。
 - [ ] 添加 Windows 和 Linux 支持。
+
+### 只读诊断与操作界面
+
+- [x] 通过本地 diagnostics Unix socket 发布进程/窗口快照。
+- [x] 将 Fusion 和子进程输出写入有界日志环形缓冲区，并通过本地日志 socket 提供游标、缺口和淘汰统计。
+- [x] 增加只读终端 UI，包含 Dashboard、Processes、Windows、Diagnostics 和 Logs 页面。
+- [ ] 在真实 Fusion 会话中运行终端 UI，验证本地 IPC 生命周期；性能视图目前显示指标不可用。
+
+### 实验性 Swift Overlay 脚手架
+
+- [x] 本地 Swift 源码包含模型级 Overlay Manager、命令校验、带版本/令牌校验的 IPC，以及有界 Unix socket 服务端。
+- [ ] 决定是否将该原型纳入正式仓库；若保留，增加可重复的构建和测试目标。
+- [ ] 单独完成安全与交互审查后，再实现原生窗口创建/显示并连接 Fusion；当前 Swift 入口不执行原生窗口操作。
 
 ---
 

@@ -8,6 +8,28 @@
 >
 > The solutions described here are engineering proposals, not completed features. They will be evaluated and revised as implementation progresses.
 
+## Current Implementation Boundaries
+
+Some of the architecture proposed below is represented by source code, but
+that does not mean the corresponding user-facing feature is complete:
+
+- **Window control is read-only.** Registration, process/window association,
+  display inspection, layout planning, and Control UDS dry-run exist. The
+  public mutation gate is closed because a real partial change was not
+  successfully rolled back. Do not retry setters until identity and recovery
+  are independently reviewed and validated.
+- **There are two identity systems.** The Window Manager validates a local
+  Java Bridge peer using kernel process credentials and supervision state.
+  The TCP DataBus still accepts a client-supplied registration name; do not
+  treat the Window Manager checks as DataBus authentication.
+- **Diagnostics are observational.** Fusion exposes process/window snapshots
+  and bounded logs, and the terminal UI displays them. Runtime integration
+  still needs testing; performance values are unavailable until actual
+  telemetry is published.
+- **The Swift overlay is a scaffold, not an overlay feature.** It contains
+  model and IPC code, but is not integrated into Fusion and does not create or
+  display a native window.
+
 ---
 
 ## 1. The Double-Stuttering Problem: Lockstep Synchronization

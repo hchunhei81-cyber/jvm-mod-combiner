@@ -110,8 +110,10 @@ Tested primarily on macOS with Apple Silicon and Temurin JDK 21.
 - [x] A Rust Window Manager and Java bridge register Fabric, Forge, and NeoForge JVM processes; tests cover registration, reconnection, rejection, and PID-based window association.
 - [x] macOS read-only on-screen window discovery and an optional read-only Accessibility API probe are implemented. The probe requires the user's macOS Accessibility permission.
 - [x] Fusion directly owns the NeoForge Java child; only child PIDs confirmed live in the current supervision pass can authorize window-registration association.
-- [x] A read-only Control UDS dry-run path carries a server execution deadline through window discovery and AX inspection, with bounded AX messaging and target-title filtering.
-- [x] All 216 Rust binary unit tests pass, including Control, dry-run deadline, window discovery, and command-guard coverage; Java bridge tests cover registration, reconnect, and rejection for all three loader labels.
+- [x] The Window Manager authenticates local bridge peers with macOS kernel-provided PID and audit-token identity; loader, role, protocol, and registered PID are validated separately from the DataBus identity.
+- [x] Read-only display discovery, display-topology analysis, layout planning, and a Control UDS dry-run are implemented. The dry-run revalidates the live-child/window association and carries bounded deadlines through window discovery and AX inspection.
+- [x] Fusion exposes read-only process/window snapshots and bounded child logs over local Unix sockets; a read-only terminal UI displays processes, windows, diagnostics, and logs.
+- [x] All 286 Rust tests pass. The Java Window Bridge harness passes registration, reconnect, rejection, and malformed-response cases for Fabric, Forge, and NeoForge.
 
 ### Currently in progress
 
@@ -124,14 +126,24 @@ Tested primarily on macOS with Apple Silicon and Temurin JDK 21.
 - [ ] Improve synchronization behavior under latency and packet loss.
 - [ ] Rebuild and runtime-test the committed hostile-mob receiver, mirror, and ACK/retry implementation.
 - [ ] Implement reliable hostile-mob removal messages and verify reconnect/world-transition recovery.
+- [ ] Run the terminal UI against a live Fusion session and verify its diagnostics/log IPC behavior; performance metrics are currently unavailable.
 - [ ] Validate read-only window discovery, Control UDS behavior, and Accessibility permission handling against live Minecraft windows.
-- [ ] Complete trusted process-instance identity and transaction authorization review. Mutation and rollback code remains staged behind the fail-closed `WindowMutationDisabled` gate; a previous partial-apply/failed-rollback incident remains unresolved.
+- [ ] Resolve the previous partial-apply/failed-rollback incident and complete trusted process-instance/transaction authorization review. Mutation and rollback code remain staged behind the fail-closed `WindowMutationDisabled` gate.
 - [ ] Investigate embedding/composition and Windows/Linux window support.
 
 The Control client applies a 2-second absolute budget to post-connect request I/O;
 the standard Unix socket `connect()` call itself is not bounded by that timeout.
 Server-side dry-run work has its own 5-second deadline. Deadline checks stop
 subsequent stages but cannot cancel an AX system call already in progress.
+The control path is deliberately read-only: `window-apply` exits without
+changing a window, and the legacy `window-restore` command is retired.
+
+The terminal UI in [`terminal-ui/`](terminal-ui/) reads local diagnostic and
+log snapshots. Its performance page is a placeholder until the Rust kernel and
+JVMs publish real metrics. The local Swift overlay sources are an experimental,
+unintegrated scaffold: they define a model and authenticated command protocol,
+but the current entry point creates or displays no native `NSWindow` and does
+not perform window operations.
 
 **Current authority model:** Fabric is the sole authoritative source of player
 movement state. NeoForge receives Fabric state and maintains a remote-player
@@ -161,6 +173,7 @@ removal is not implemented.
 - [ ] Automatic conflict resolution for Mixin configurations.
 - [ ] Complete cross-loader event translation.
 - [ ] Production-ready Windows and Linux support.
+- [ ] Native overlay windows integrated with Fusion.
 
 **Important:** The current player synchronization implementation is a proof of concept. It does not establish complete mod compatibility or full gameplay equivalence between different Minecraft versions.
 
@@ -426,7 +439,8 @@ requests, diagnostics, or interaction messages.
 - [ ] Real-loader isolation in one JVM.
 - [ ] Dynamic dependency resolution.
 - [x] Local window registration, PID association, and macOS window observation.
-- [ ] Verify the source-level macOS position/size transaction and safe recovery against live windows; a partial-apply/rollback failure remains unresolved.
+- [ ] Validate read-only macOS discovery against live windows and resolve the historical partial-apply/failed-rollback incident.
+- [ ] Keep the public window mutation gate closed until process-instance identity, authorization, and real recovery behavior are independently verified.
 - [ ] Window embedding/composition and live dual-Minecraft validation.
 - [ ] Windows and Linux verification.
 - [ ] Performance and stability testing.

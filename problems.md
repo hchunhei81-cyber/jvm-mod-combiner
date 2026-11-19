@@ -6,7 +6,7 @@
 >
 > Some problems have been resolved, some have only been worked around, and others remain under investigation. Each section distinguishes verified results from unconfirmed explanations.
 
-**Project status:** Experimental prototype. Fabric, Forge, and NeoForge startup experiments have achieved significant milestones, but complete cross-loader interoperability is not yet implemented. Fusion directly owns the NeoForge Java child, and a read-only Control UDS dry-run path has bounded request and AX inspection stages. Window mutation remains gated off; this is not live-window validation.
+**Project status:** Experimental prototype. Fabric, Forge, and NeoForge startup experiments have achieved significant milestones, but complete cross-loader interoperability is not yet implemented. Fusion directly owns the NeoForge Java child, authenticates the local Window Manager bridge peer, and exposes read-only process/window diagnostics and bounded logs. Control UDS dry-run is read-only; window mutation remains gated off, and live-window recovery is not verified.
 
 ---
 
@@ -1522,6 +1522,13 @@ rejection behavior. Rust tests cover registration lifecycle and PID association;
 the Java harness verifies registration, reconnect, and rejection for Fabric,
 Forge, and NeoForge labels.
 
+The Window Manager also checks the local peer's kernel-provided PID and audit
+token and validates the declared loader, role, protocol, and registered PID.
+Fusion associates a registration only with a child PID confirmed live in the
+current supervision pass. This trust chain is separate from the TCP DataBus:
+DataBus client names remain self-asserted and are not authenticated process
+identities.
+
 On macOS, the project can enumerate on-screen windows and associate them with
 registered JVMs by PID. An optional Accessibility API probe reads window titles
 and bounds when the user has granted Accessibility permission. Position/size
@@ -1611,6 +1618,38 @@ stages without sleeping or claiming that AX calls can be interrupted.
 These safeguards do not resolve the partial-mutation incident and do not
 authorize writes. The mutation gate remains closed, and no live Minecraft
 window, apply, or restore validation is claimed.
+
+## 8.10 Read-Only Diagnostics and Bounded Logs
+
+<badge color="warning">Source implemented; live operator workflow pending</badge>
+
+Troubleshooting a multi-process launcher requires distinguishing launcher
+state, child-process state, window registrations, and output from separate
+JVMs. A single failure message or an unbounded combined console does not
+provide enough context to tell which process or stage failed.
+
+Fusion now exposes read-only process/window diagnostic snapshots and a
+bounded child-output log stream over local Unix sockets. The log interface
+includes source, stream, severity, cursors, and gap/eviction information so a
+consumer can detect when old records have rolled out of the ring buffer. The
+Ink terminal UI presents dashboard, process, window, diagnostics, and log
+views. Rust tests pass, the UI type-checks, and the local Swift scaffold
+type-checks; these checks do not prove the complete TUI-to-live-Fusion IPC
+workflow.
+
+The performance view deliberately reports metrics as unavailable: no verified
+CPU, memory, or queue-depth telemetry is currently published. The separate
+Swift overlay code is only a local model/IPC scaffold; its entry point creates
+and displays no native `NSWindow`, is not integrated with Fusion, and does
+not implement window manipulation.
+
+**Remaining work**
+
+- Exercise the local diagnostics and log sockets with a running Fusion session
+  and verify reconnect, cursor-gap, and shutdown behavior.
+- Add real performance telemetry before presenting performance values.
+- Decide whether to retain and package the Swift scaffold; do not describe it
+  as a functioning native overlay.
 
 # 9. ClassLoader Isolation and Mixin Compatibility
 
@@ -1887,7 +1926,8 @@ Validate the same launch pipeline on:
 | DataBus connection startup race | <badge color="success">Resolved</badge> |
 | Named client registration and routing | <badge color="success">Verified</badge> |
 | Source-level one-way state message rejection | <badge color="warning">Implemented; runtime test pending</badge> |
-| Authenticated sandbox registration | <badge color="warning">Not implemented</badge> |
+| Authenticated Window Manager bridge peer | <badge color="success">Kernel PID/audit-token checks implemented; live validation pending</badge> |
+| Authenticated DataBus client registration | <badge color="warning">Not implemented; client-supplied names remain unauthenticated</badge> |
 | Java Agent injection | <badge color="success">Verified</badge> |
 | Fabric player discovery | <badge color="success">Verified</badge> |
 | NeoForge player discovery | <badge color="success">Verified</badge> |
@@ -1903,6 +1943,8 @@ Validate the same launch pipeline on:
 | AX message timeout, 32-window cap, and target-title filtering | <badge color="warning">Implemented and unit-tested; AX system calls remain non-cancellable</badge> |
 | Window mutation gate | <badge color="success">Closed; setters reject with `WindowMutationDisabled`</badge> |
 | macOS window position/size transaction and rollback | <badge color="danger">Staged behind gate; live recovery unresolved</badge> |
+| Read-only diagnostics and bounded log API | <badge color="success">Implemented; live UI/IPC workflow pending</badge> |
+| Terminal UI performance telemetry | <badge color="warning">Unavailable; no verified metrics source</badge> |
 | Window embedding or composition | <badge color="warning">Not implemented</badge> |
 | Bidirectional player mirroring | <badge color="warning">Not a current goal</badge> |
 | Cross-version world consistency | <badge color="warning">Under investigation</badge> |

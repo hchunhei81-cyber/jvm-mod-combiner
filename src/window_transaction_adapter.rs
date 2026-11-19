@@ -416,9 +416,11 @@ mod tests {
 
     #[test]
     fn accepts_fresh_original_state() {
-        assert!(snapshot()
-            .validate_fresh(&window(), WindowTransactionPhase::Original)
-            .is_ok());
+        assert!(
+            snapshot()
+                .validate_fresh(&window(), WindowTransactionPhase::Original)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -426,9 +428,11 @@ mod tests {
         let mut current = window();
         current.bounds = bounds(0.0, 24.0, 700.0, 900.0);
 
-        assert!(snapshot()
-            .validate_fresh(&current, WindowTransactionPhase::Target)
-            .is_ok());
+        assert!(
+            snapshot()
+                .validate_fresh(&current, WindowTransactionPhase::Target)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -827,9 +831,11 @@ mod execution_tests {
                 .iter()
                 .find(|item| item.window_id == snapshot.window_id)
                 .unwrap();
-            assert!(snapshot
-                .validate_fresh(current, WindowTransactionPhase::Original)
-                .is_ok());
+            assert!(
+                snapshot
+                    .validate_fresh(current, WindowTransactionPhase::Original)
+                    .is_ok()
+            );
         }
     }
 

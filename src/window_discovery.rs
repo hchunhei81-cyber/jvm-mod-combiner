@@ -121,7 +121,7 @@ pub fn associate_windows(
 #[cfg(target_os = "macos")]
 mod macos {
     use super::{DiscoveredWindow, DiscoveryError, WindowBounds};
-    use std::ffi::{c_char, c_void, CStr};
+    use std::ffi::{CStr, c_char, c_void};
 
     type CFIndex = isize;
     type CFArrayRef = *const c_void;
@@ -445,9 +445,11 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].window.window_id, 201);
         assert_eq!(result[1].window.window_id, 202);
-        assert!(result
-            .iter()
-            .all(|item| { item.loader.as_deref() == Some("neoforge") }));
+        assert!(
+            result
+                .iter()
+                .all(|item| { item.loader.as_deref() == Some("neoforge") })
+        );
     }
 
     #[test]

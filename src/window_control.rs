@@ -1,7 +1,7 @@
 use crate::window_manager;
 use crate::window_peer::{self, PeerIdentity};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use std::fs;
 use std::io::{self, Read, Write};
@@ -1248,13 +1248,15 @@ mod tests {
 
     #[test]
     fn rejects_unknown_fields() {
-        assert!(request(json!({
-            "type": "dry_run",
-            "protocol": 1,
-            "window_ids": [101, 202],
-            "unexpected": true
-        }))
-        .is_err());
+        assert!(
+            request(json!({
+                "type": "dry_run",
+                "protocol": 1,
+                "window_ids": [101, 202],
+                "unexpected": true
+            }))
+            .is_err()
+        );
     }
 
     fn request_raw(raw: &str) -> io::Result<DryRunRequest> {
@@ -1280,33 +1282,39 @@ mod tests {
 
     #[test]
     fn rejects_wrong_protocol() {
-        assert!(request(json!({
-            "type": "dry_run",
-            "protocol": 2,
-            "window_ids": [101, 202]
-        }))
-        .is_err());
+        assert!(
+            request(json!({
+                "type": "dry_run",
+                "protocol": 2,
+                "window_ids": [101, 202]
+            }))
+            .is_err()
+        );
     }
 
     #[test]
     fn rejects_duplicate_window_ids() {
-        assert!(request(json!({
-            "type": "dry_run",
-            "protocol": 1,
-            "window_ids": [101, 101]
-        }))
-        .is_err());
+        assert!(
+            request(json!({
+                "type": "dry_run",
+                "protocol": 1,
+                "window_ids": [101, 101]
+            }))
+            .is_err()
+        );
     }
 
     #[test]
     fn rejects_invalid_direction() {
-        assert!(request(json!({
-            "type": "dry_run",
-            "protocol": 1,
-            "window_ids": [101, 202],
-            "direction": "apply"
-        }))
-        .is_err());
+        assert!(
+            request(json!({
+                "type": "dry_run",
+                "protocol": 1,
+                "window_ids": [101, 202],
+                "direction": "apply"
+            }))
+            .is_err()
+        );
     }
 
     #[test]
@@ -1382,11 +1390,13 @@ mod tests {
     fn rejects_too_many_window_ids() {
         let ids: Vec<u32> = (1..=17).collect();
 
-        assert!(request(json!({
-            "type": "dry_run",
-            "protocol": 1,
-            "window_ids": ids
-        }))
-        .is_err());
+        assert!(
+            request(json!({
+                "type": "dry_run",
+                "protocol": 1,
+                "window_ids": ids
+            }))
+            .is_err()
+        );
     }
 }

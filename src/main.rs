@@ -1,7 +1,8 @@
 mod diagnostics;
-mod log_hub;
 mod display_geometry;
 mod display_topology;
+mod log_hub;
+mod overlay_ipc;
 mod window_accessibility;
 mod window_control;
 mod window_discovery;
@@ -1798,6 +1799,44 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
     }
 }
 
+fn revoke_control_authority(control_snapshot: &std::sync::RwLock<ControlSnapshot>) {
+    let mut snapshot = match control_snapshot.write() {
+        Ok(snapshot) => snapshot,
+        Err(poisoned) => {
+            eprintln!(
+                "[SECURITY] Control snapshot lock poisoned; recovering to revoke all authority"
+            );
+            control_snapshot.clear_poison();
+            poisoned.into_inner()
+        }
+    };
+
+    snapshot.authorized_windows.clear();
+    snapshot.registrations = None;
+    snapshot.live_child_pids.clear();
+
+    eprintln!("[SECURITY] All published window authorization state revoked");
+}
+
+fn fail_closed_shutdown(
+    control_snapshot: &std::sync::RwLock<ControlSnapshot>,
+    last_registered_windows: &mut Vec<window_discovery::WindowRecord>,
+    fabric_child: &mut Option<std::process::Child>,
+    neoforge_child: &mut Option<std::process::Child>,
+) {
+    // Revoke published authority before terminating either client.
+    revoke_control_authority(control_snapshot);
+    last_registered_windows.clear();
+
+    if let Some(mut child) = fabric_child.take() {
+        terminate_owned_child(&mut child, "Fabric");
+    }
+
+    if let Some(mut child) = neoforge_child.take() {
+        terminate_owned_child(&mut child, "NeoForge");
+    }
+}
+
 fn terminate_owned_child(child: &mut std::process::Child, name: &str) {
     match child.try_wait() {
         Ok(Some(status)) => {
@@ -1850,8 +1889,116 @@ fn record_live_child_poll<T: std::fmt::Display>(
 }
 
 #[cfg(test)]
+mod fusion_fail_closed_tests {
+    use super::{
+        ControlSnapshot, authorize_control_window_ids, control_authorization_tests,
+        fail_closed_shutdown,
+    };
+    use std::process::{Child, Command};
+    use std::sync::RwLock;
+
+    fn populated_snapshot() -> RwLock<ControlSnapshot> {
+        let mut snapshot = control_authorization_tests::fixture();
+        snapshot.live_child_pids.extend([101, 202]);
+        RwLock::new(snapshot)
+    }
+
+    fn assert_authority_revoked(snapshot: &RwLock<ControlSnapshot>) {
+        let state = snapshot.read().expect("snapshot lock should be healthy");
+        assert!(state.registrations.is_none());
+        assert!(state.live_child_pids.is_empty());
+        assert!(state.authorized_windows.is_empty());
+    }
+
+    fn spawn_test_child() -> Child {
+        Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("failed to spawn isolated test child")
+    }
+
+    #[test]
+    fn fail_closed_shutdown_revokes_authority_and_reaps_both_children() {
+        let snapshot = populated_snapshot();
+
+        // Window ID 101 must be authorized before shutdown.
+        assert!(
+            authorize_control_window_ids(&[101], &snapshot.read().unwrap()).is_ok(),
+            "fixture must begin with a valid authorization"
+        );
+
+        let mut windows = snapshot.read().unwrap().authorized_windows.clone();
+        assert_eq!(windows.len(), 1, "test must begin with a cached window");
+
+        let mut fabric = Some(spawn_test_child());
+        let mut neoforge = Some(spawn_test_child());
+
+        let fabric_pid = fabric.as_ref().unwrap().id();
+        let neoforge_pid = neoforge.as_ref().unwrap().id();
+
+        fail_closed_shutdown(&snapshot, &mut windows, &mut fabric, &mut neoforge);
+
+        assert!(
+            authorize_control_window_ids(&[101], &snapshot.read().unwrap()).is_err(),
+            "previously authorized Window ID 101 must be rejected after revocation"
+        );
+        assert!(
+            windows.is_empty(),
+            "cached registered windows must be cleared"
+        );
+        assert!(fabric.is_none(), "Fabric child handle must be consumed");
+        assert!(neoforge.is_none(), "NeoForge child handle must be consumed");
+        assert!(windows.is_empty());
+        assert_authority_revoked(&snapshot);
+
+        // Both PIDs belonged to children created by this test. A successful
+        // kill + wait is required before the production helper returns.
+        assert_ne!(fabric_pid, neoforge_pid);
+        eprintln!(
+            "[PASS] Both owned test children terminated and reaped: {fabric_pid}, {neoforge_pid}"
+        );
+    }
+
+    #[test]
+    fn fail_closed_shutdown_recovers_poisoned_snapshot_lock() {
+        let snapshot = populated_snapshot();
+
+        let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = snapshot.write().expect("initial write lock");
+            panic!("intentional test-only lock poisoning");
+        }));
+        assert!(poison_result.is_err());
+        assert!(snapshot.is_poisoned());
+
+        let mut windows = Vec::new();
+        let mut fabric = None;
+        let mut neoforge = None;
+
+        fail_closed_shutdown(&snapshot, &mut windows, &mut fabric, &mut neoforge);
+
+        assert!(!snapshot.is_poisoned(), "poison flag must be cleared");
+        assert_authority_revoked(&snapshot);
+        eprintln!("[PASS] Poisoned authorization snapshot recovered and revoked");
+    }
+
+    #[test]
+    fn fail_closed_shutdown_is_safe_when_children_are_already_absent() {
+        let snapshot = populated_snapshot();
+        let mut windows = Vec::new();
+        let mut fabric = None;
+        let mut neoforge = None;
+
+        fail_closed_shutdown(&snapshot, &mut windows, &mut fabric, &mut neoforge);
+
+        assert_authority_revoked(&snapshot);
+        assert!(fabric.is_none());
+        assert!(neoforge.is_none());
+    }
+}
+
+#[cfg(test)]
 mod fusion_child_liveness_tests {
-    use super::{record_live_child_poll, ChildPoll};
+    use super::{ChildPoll, record_live_child_poll};
     use std::io;
 
     #[test]
@@ -1885,8 +2032,8 @@ fn start_data_bus() -> std::io::Result<()> {
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Write};
     use std::sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     };
 
     // Each registration is tied to one specific TCP connection.
@@ -2762,7 +2909,7 @@ fn build_control_dry_run_response(
 mod control_authorization_tests {
     use super::*;
 
-    fn fixture() -> ControlSnapshot {
+    pub(super) fn fixture() -> ControlSnapshot {
         let identity = window_peer::PeerIdentity {
             pid: 4242,
             pid_version: 17,
@@ -3146,7 +3293,6 @@ fn run_window_control_dry_run(args: &[String]) -> Result<(), String> {
 
     Ok(())
 }
-
 
 fn spawn_log_reader<R>(
     reader: R,
@@ -3575,7 +3721,7 @@ fn main() {
 
     if is_window_layout {
         use window_layout::{
-            plan_on_display_id, plan_on_main_display, LayoutConstraints, LayoutDirection,
+            LayoutConstraints, LayoutDirection, plan_on_display_id, plan_on_main_display,
         };
 
         println!("=== Window Layout Planner (read-only) ===");
@@ -3946,12 +4092,20 @@ fn main() {
         let log_hub = log_hub::LogHub::new();
         let _log_server = log_hub::LogServer::start(std::sync::Arc::clone(&log_hub))
             .expect("[LogHub] Fusion 无法启动只读 Log UDS");
-        log_hub.push("fusion", "stdout", "INFO", "Fusion log pipeline initialized");
         log_hub.push(
             "fusion",
             "stdout",
             "INFO",
-            &format!("Read-only log socket: {}", _log_server.socket_path().display()),
+            "Fusion log pipeline initialized",
+        );
+        log_hub.push(
+            "fusion",
+            "stdout",
+            "INFO",
+            &format!(
+                "Read-only log socket: {}",
+                _log_server.socket_path().display()
+            ),
         );
 
         eprintln!(
@@ -4007,6 +4161,35 @@ fn main() {
         // 直接启动当前 Rust 可执行文件，避免 cargo run 引入中间进程。
         let executable = env::current_exe().expect("[Fusion] 无法获取当前 Rust 可执行文件路径");
 
+        // Overlay must be authenticated and ready before Minecraft children start.
+        let mut overlay_supervisor = match overlay_ipc::OverlaySupervisor::start() {
+            Ok(supervisor) => {
+                let socket = supervisor.socket_path().display().to_string();
+                eprintln!("[Fusion] Overlay backend authenticated: {socket}");
+                log_hub.push(
+                    "fusion",
+                    "stdout",
+                    "INFO",
+                    &format!("Overlay backend authenticated: {socket}"),
+                );
+                supervisor
+            }
+            Err(error) => {
+                eprintln!("[Fusion] Overlay startup failed; refusing to launch children: {error}");
+                log_hub.push(
+                    "fusion",
+                    "stderr",
+                    "ERROR",
+                    &format!("Overlay startup failed: {error}"),
+                );
+                return;
+            }
+        };
+
+        // Shared cleanup state exists before either Minecraft child starts.
+        let mut last_registered_windows = Vec::new();
+        let mut neoforge_child: Option<std::process::Child> = None;
+
         // Fabric：Rust 子进程内嵌 JVM，Bridge PID 应对应此 Rust 进程。
         let mut fabric_cmd = std::process::Command::new(&executable);
         fabric_cmd
@@ -4019,23 +4202,72 @@ fn main() {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        let mut fabric_child = Some(
-            fabric_cmd
-                .spawn()
-                .expect("[Fusion] 无法启动 Fabric Rust 子进程"),
-        );
-        let fabric_pid = fabric_child.as_ref().unwrap().id();
-        eprintln!("[Fusion] Fabric Rust child started: pid={fabric_pid}");
-        log_hub.push("fusion", "stdout", "INFO", &format!("Fabric child started: pid={fabric_pid}"));
+        let mut fabric_child = match fabric_cmd.spawn() {
+            Ok(child) => Some(child),
+            Err(error) => {
+                eprintln!("[Fusion] Fabric Rust spawn failed: {error}");
 
-        {
-            let child = fabric_child.as_mut().unwrap();
-            let stdout = child.stdout.take().expect("Fabric stdout pipe missing");
-            let stderr = child.stderr.take().expect("Fabric stderr pipe missing");
+                fail_closed_shutdown(
+                    control_snapshot.as_ref(),
+                    &mut last_registered_windows,
+                    &mut None,
+                    &mut neoforge_child,
+                );
+
+                eprintln!("[Fusion] Fail-closed shutdown: Fabric spawn failed");
+                return;
+            }
+        };
+        let fabric_pid = match fabric_child.as_ref() {
+            Some(child) => child.id(),
+            None => {
+                fail_closed_shutdown(
+                    control_snapshot.as_ref(),
+                    &mut last_registered_windows,
+                    &mut fabric_child,
+                    &mut neoforge_child,
+                );
+                return;
+            }
+        };
+        eprintln!("[Fusion] Fabric Rust child started: pid={fabric_pid}");
+        log_hub.push(
+            "fusion",
+            "stdout",
+            "INFO",
+            &format!("Fabric child started: pid={fabric_pid}"),
+        );
+
+        let fabric_reader_setup = (|| -> Result<(), String> {
+            let child = fabric_child
+                .as_mut()
+                .ok_or_else(|| "Fabric child handle missing".to_owned())?;
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| "Fabric stdout pipe missing".to_owned())?;
+            let stderr = child
+                .stderr
+                .take()
+                .ok_or_else(|| "Fabric stderr pipe missing".to_owned())?;
+
             spawn_log_reader(stdout, std::sync::Arc::clone(&log_hub), "fabric", "stdout")
-                .expect("Failed to start Fabric stdout reader");
+                .map_err(|error| format!("Fabric stdout reader: {error}"))?;
             spawn_log_reader(stderr, std::sync::Arc::clone(&log_hub), "fabric", "stderr")
-                .expect("Failed to start Fabric stderr reader");
+                .map_err(|error| format!("Fabric stderr reader: {error}"))?;
+            Ok(())
+        })();
+
+        if let Err(error) = fabric_reader_setup {
+            eprintln!("[Fusion] Fabric log reader setup failed: {error}");
+            fail_closed_shutdown(
+                control_snapshot.as_ref(),
+                &mut last_registered_windows,
+                &mut fabric_child,
+                &mut neoforge_child,
+            );
+            eprintln!("[Fusion] Fail-closed shutdown: Fabric log pipeline unavailable");
+            return;
         }
 
         let mut neoforge_command =
@@ -4044,10 +4276,16 @@ fn main() {
                 Err(error) => {
                     eprintln!("[Fusion] NeoForge command build failed: {error}");
 
-                    if let Some(mut child) = fabric_child.take() {
-                        terminate_owned_child(&mut child, "Fabric");
-                    }
+                    fail_closed_shutdown(
+                        control_snapshot.as_ref(),
+                        &mut last_registered_windows,
+                        &mut fabric_child,
+                        &mut neoforge_child,
+                    );
 
+                    eprintln!(
+                        "[Fusion] Fail-closed shutdown: NeoForge command construction failed"
+                    );
                     return;
                 }
             };
@@ -4056,38 +4294,113 @@ fn main() {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        let mut neoforge_child = match neoforge_command.spawn() {
-            Ok(child) => Some(child),
+        match neoforge_command.spawn() {
+            Ok(child) => {
+                neoforge_child = Some(child);
+            }
             Err(error) => {
                 eprintln!("[Fusion] NeoForge Java spawn failed: {error}");
 
-                if let Some(mut child) = fabric_child.take() {
-                    terminate_owned_child(&mut child, "Fabric");
-                }
+                fail_closed_shutdown(
+                    control_snapshot.as_ref(),
+                    &mut last_registered_windows,
+                    &mut fabric_child,
+                    &mut neoforge_child,
+                );
 
+                eprintln!("[Fusion] Fail-closed shutdown: NeoForge spawn failed");
+                return;
+            }
+        }
+        let neoforge_pid = match neoforge_child.as_ref() {
+            Some(child) => child.id(),
+            None => {
+                eprintln!("[Fusion] NeoForge child handle unexpectedly missing");
+                fail_closed_shutdown(
+                    control_snapshot.as_ref(),
+                    &mut last_registered_windows,
+                    &mut fabric_child,
+                    &mut neoforge_child,
+                );
+                eprintln!("[Fusion] Fail-closed shutdown: NeoForge child handle missing");
                 return;
             }
         };
-        let neoforge_pid = neoforge_child.as_ref().unwrap().id();
         eprintln!("[Fusion] NeoForge Java child started: pid={neoforge_pid}");
-        log_hub.push("fusion", "stdout", "INFO", &format!("NeoForge child started: pid={neoforge_pid}"));
+        log_hub.push(
+            "fusion",
+            "stdout",
+            "INFO",
+            &format!("NeoForge child started: pid={neoforge_pid}"),
+        );
 
-        {
-            let child = neoforge_child.as_mut().unwrap();
-            let stdout = child.stdout.take().expect("NeoForge stdout pipe missing");
-            let stderr = child.stderr.take().expect("NeoForge stderr pipe missing");
-            spawn_log_reader(stdout, std::sync::Arc::clone(&log_hub), "neoforge", "stdout")
-                .expect("Failed to start NeoForge stdout reader");
-            spawn_log_reader(stderr, std::sync::Arc::clone(&log_hub), "neoforge", "stderr")
-                .expect("Failed to start NeoForge stderr reader");
+        let neoforge_reader_setup = (|| -> Result<(), String> {
+            let child = neoforge_child
+                .as_mut()
+                .ok_or_else(|| "NeoForge child handle missing".to_owned())?;
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| "NeoForge stdout pipe missing".to_owned())?;
+            let stderr = child
+                .stderr
+                .take()
+                .ok_or_else(|| "NeoForge stderr pipe missing".to_owned())?;
+
+            spawn_log_reader(
+                stdout,
+                std::sync::Arc::clone(&log_hub),
+                "neoforge",
+                "stdout",
+            )
+            .map_err(|error| format!("NeoForge stdout reader: {error}"))?;
+            spawn_log_reader(
+                stderr,
+                std::sync::Arc::clone(&log_hub),
+                "neoforge",
+                "stderr",
+            )
+            .map_err(|error| format!("NeoForge stderr reader: {error}"))?;
+            Ok(())
+        })();
+
+        if let Err(error) = neoforge_reader_setup {
+            eprintln!("[Fusion] NeoForge log reader setup failed: {error}");
+            fail_closed_shutdown(
+                control_snapshot.as_ref(),
+                &mut last_registered_windows,
+                &mut fabric_child,
+                &mut neoforge_child,
+            );
+            eprintln!("[Fusion] Fail-closed shutdown: NeoForge log pipeline unavailable");
+            return;
         }
 
         // Read-only window monitoring. The Fusion parent owns the
         // Window Manager and is therefore the authoritative registry reader.
-        let mut last_registered_windows = Vec::new();
         let mut discovery_failed = false;
 
         loop {
+            if let Err(error) = overlay_supervisor.check_alive() {
+                eprintln!("[Fusion] Overlay backend supervision failed: {error}");
+                log_hub.push(
+                    "fusion",
+                    "stderr",
+                    "ERROR",
+                    &format!("Overlay backend supervision failed: {error}"),
+                );
+
+                fail_closed_shutdown(
+                    control_snapshot.as_ref(),
+                    &mut last_registered_windows,
+                    &mut fabric_child,
+                    &mut neoforge_child,
+                );
+
+                eprintln!("[Fusion] Fail-closed shutdown: Overlay backend unavailable");
+                return;
+            }
+
             let mut live_child_pids = HashSet::new();
 
             let fabric_state = match fabric_child.as_mut() {
@@ -4103,20 +4416,22 @@ fn main() {
                 }
                 ChildPoll::Exited(status) => {
                     eprintln!("[Fusion] Fabric child exited: {status}");
-                    log_hub.push("fusion", "stdout", "WARN", &format!("Fabric child exited: {status}"));
+                    log_hub.push(
+                        "fusion",
+                        "stdout",
+                        "WARN",
+                        &format!("Fabric child exited: {status}"),
+                    );
                     fabric_child = None;
                 }
                 ChildPoll::Failed(error) => {
+                    fail_closed_shutdown(
+                        control_snapshot.as_ref(),
+                        &mut last_registered_windows,
+                        &mut fabric_child,
+                        &mut neoforge_child,
+                    );
                     eprintln!("[Fusion] Fabric child supervision failed: {error}");
-                    last_registered_windows.clear();
-
-                    if let Some(mut child) = fabric_child.take() {
-                        terminate_owned_child(&mut child, "Fabric");
-                    }
-                    if let Some(mut child) = neoforge_child.take() {
-                        terminate_owned_child(&mut child, "NeoForge");
-                    }
-
                     eprintln!("[Fusion] Supervisor stopped: child state is uncertain");
                     return;
                 }
@@ -4135,27 +4450,34 @@ fn main() {
                 }
                 ChildPoll::Exited(status) => {
                     eprintln!("[Fusion] NeoForge child exited: {status}");
-                    log_hub.push("fusion", "stdout", "WARN", &format!("NeoForge child exited: {status}"));
+                    log_hub.push(
+                        "fusion",
+                        "stdout",
+                        "WARN",
+                        &format!("NeoForge child exited: {status}"),
+                    );
                     neoforge_child = None;
                 }
                 ChildPoll::Failed(error) => {
+                    fail_closed_shutdown(
+                        control_snapshot.as_ref(),
+                        &mut last_registered_windows,
+                        &mut fabric_child,
+                        &mut neoforge_child,
+                    );
                     eprintln!("[Fusion] NeoForge child supervision failed: {error}");
-                    last_registered_windows.clear();
-
-                    if let Some(mut child) = neoforge_child.take() {
-                        terminate_owned_child(&mut child, "NeoForge");
-                    }
-                    if let Some(mut child) = fabric_child.take() {
-                        terminate_owned_child(&mut child, "Fabric");
-                    }
-
                     eprintln!("[Fusion] Supervisor stopped: child state is uncertain");
                     return;
                 }
             }
 
             if fabric_child.is_none() && neoforge_child.is_none() {
-                last_registered_windows.clear();
+                fail_closed_shutdown(
+                    control_snapshot.as_ref(),
+                    &mut last_registered_windows,
+                    &mut fabric_child,
+                    &mut neoforge_child,
+                );
                 eprintln!("[Fusion] Both children exited; supervisor stopping");
                 return;
             }

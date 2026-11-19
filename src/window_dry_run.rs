@@ -438,9 +438,11 @@ mod tests {
             bounds(100.0, 80.0, 800.0, 600.0),
         );
 
-        assert!(verify_window_identity(&original, &current)
-            .unwrap_err()
-            .contains("PID changed"));
+        assert!(
+            verify_window_identity(&original, &current)
+                .unwrap_err()
+                .contains("PID changed")
+        );
     }
 
     #[test]
@@ -460,9 +462,11 @@ mod tests {
             bounds(100.0, 80.0, 800.0, 600.0),
         );
 
-        assert!(verify_window_identity(&original, &current)
-            .unwrap_err()
-            .contains("title changed"));
+        assert!(
+            verify_window_identity(&original, &current)
+                .unwrap_err()
+                .contains("title changed")
+        );
     }
 
     #[test]
@@ -482,9 +486,11 @@ mod tests {
             bounds(100.0, 80.0, 800.0, 600.0),
         );
 
-        assert!(verify_window_identity(&original, &current)
-            .unwrap_err()
-            .contains("owner changed"));
+        assert!(
+            verify_window_identity(&original, &current)
+                .unwrap_err()
+                .contains("owner changed")
+        );
     }
 
     #[test]
@@ -504,9 +510,11 @@ mod tests {
             bounds(100.0, 80.0, 800.0, 600.0),
         );
 
-        assert!(verify_window_identity(&original, &current)
-            .unwrap_err()
-            .contains("Window ID changed"));
+        assert!(
+            verify_window_identity(&original, &current)
+                .unwrap_err()
+                .contains("Window ID changed")
+        );
     }
 
     #[test]
@@ -526,9 +534,11 @@ mod tests {
             bounds(104.0, 80.0, 800.0, 600.0),
         );
 
-        assert!(verify_window_identity(&original, &current)
-            .unwrap_err()
-            .contains("geometry changed"));
+        assert!(
+            verify_window_identity(&original, &current)
+                .unwrap_err()
+                .contains("geometry changed")
+        );
     }
 
     #[test]

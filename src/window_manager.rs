@@ -518,16 +518,18 @@ fn handle_client(
     let mut reader = BufReader::new(stream);
     let registration_deadline = Instant::now() + Duration::from_secs(5);
 
-    let (line, registration_too_large) =
-        match read_registration_line_until(&mut reader, registration_deadline) {
-            Ok(result) => result,
-            Err(error) => {
-                eprintln!(
+    let (line, registration_too_large) = match read_registration_line_until(
+        &mut reader,
+        registration_deadline,
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!(
                 "[WindowManager] registration read failed connection_id={connection_id}: {error}"
             );
-                return;
-            }
-        };
+            return;
+        }
+    };
 
     let registration_line_terminated = line.ends_with('\n');
 
@@ -1056,10 +1058,12 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
 
-        assert!(manager
-            .registrations()
-            .expect("registry should be readable")
-            .is_empty());
+        assert!(
+            manager
+                .registrations()
+                .expect("registry should be readable")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1138,10 +1142,12 @@ mod tests {
         assert_eq!(response["accepted"], false);
         assert_eq!(response["error"], "unsupported loader");
         assert!(response.get("pid").is_none());
-        assert!(manager
-            .registrations()
-            .expect("registry should be readable")
-            .is_empty());
+        assert!(
+            manager
+                .registrations()
+                .expect("registry should be readable")
+                .is_empty()
+        );
 
         drop(stream);
     }
@@ -1175,10 +1181,12 @@ mod tests {
             "registration message exceeds 16 KiB limit"
         );
 
-        assert!(manager
-            .registrations()
-            .expect("registry should be readable")
-            .is_empty());
+        assert!(
+            manager
+                .registrations()
+                .expect("registry should be readable")
+                .is_empty()
+        );
 
         drop(stream);
     }
@@ -1204,10 +1212,12 @@ mod tests {
         assert_eq!(response["type"], "registered");
         assert_eq!(response["accepted"], false);
         assert_eq!(response["error"], "registration message must end with LF");
-        assert!(manager
-            .registrations()
-            .expect("registry should be readable")
-            .is_empty());
+        assert!(
+            manager
+                .registrations()
+                .expect("registry should be readable")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1374,10 +1384,12 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
 
-        assert!(manager
-            .registrations()
-            .expect("registry should be readable")
-            .is_empty());
+        assert!(
+            manager
+                .registrations()
+                .expect("registry should be readable")
+                .is_empty()
+        );
     }
 
     #[test]

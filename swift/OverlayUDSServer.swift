@@ -336,6 +336,18 @@ final class OverlayUDSServer: @unchecked Sendable {
             return .failed(errno)
         }
 
+        // The listener is nonblocking. Explicitly normalize every
+        // accepted client to blocking mode because readExactly()
+        // and writeAll() use blocking I/O with socket timeouts.
+        let clientFlags = fcntl(client, F_GETFL)
+
+        guard clientFlags >= 0,
+              fcntl(client, F_SETFL, clientFlags & ~O_NONBLOCK) == 0 else {
+            let errorCode = errno
+            _ = Darwin.close(client)
+            return .failed(errorCode)
+        }
+
         return .accepted(client)
     }
 

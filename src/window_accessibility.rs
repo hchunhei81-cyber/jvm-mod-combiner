@@ -1,6 +1,6 @@
 use crate::window_discovery::{DiscoveredWindow, WindowBounds};
 use std::error::Error;
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::{CStr, c_char, c_void};
 use std::fmt;
 use std::ptr;
 use std::ptr::NonNull;
@@ -2587,9 +2587,11 @@ mod matching_tests {
         assert_eq!(error.stage, "verifying rollback recovery");
         assert!(error.detail.contains("AX restoration failed"));
         assert!(error.detail.contains("simulated AX failure"));
-        assert!(error
-            .detail
-            .contains("CoreGraphics final verification failed"));
+        assert!(
+            error
+                .detail
+                .contains("CoreGraphics final verification failed")
+        );
         assert!(error.detail.contains("simulated CG failure"));
     }
 

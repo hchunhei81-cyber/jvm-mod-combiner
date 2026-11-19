@@ -3308,7 +3308,77 @@ where
         .spawn(move || log_hub::pump_reader(reader, hub, source, stream))
 }
 
+fn cli_meta_action(args: &[String]) -> Option<&'static str> {
+    if args.len() != 2 {
+        return None;
+    }
+    match args[1].as_str() {
+        "-h" | "--help" | "help" => Some("help"),
+        "-V" | "--version" | "version" => Some("version"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod cli_meta_action_tests {
+    use super::cli_meta_action;
+
+    #[test]
+    fn recognizes_standalone_help_and_version() {
+        for arg in ["-h", "--help", "help"] {
+            assert_eq!(cli_meta_action(&["app".into(), arg.into()]), Some("help"));
+        }
+        for arg in ["-V", "--version", "version"] {
+            assert_eq!(
+                cli_meta_action(&["app".into(), arg.into()]),
+                Some("version")
+            );
+        }
+    }
+
+    #[test]
+    fn does_not_consume_other_or_combined_arguments() {
+        assert_eq!(cli_meta_action(&["app".into()]), None);
+        assert_eq!(
+            cli_meta_action(&["app".into(), "--help".into(), "fabric".into()]),
+            None
+        );
+        assert_eq!(
+            cli_meta_action(&["app".into(), "--mode".into(), "fusion".into()]),
+            None
+        );
+    }
+}
+
 fn main() {
+    let args: Vec<String> = env::args().collect();
+
+    match cli_meta_action(&args) {
+        Some("help") => {
+            println!("JVM Mod Combiner");
+            println!();
+            println!("Usage:");
+            println!("  jvm-mod-combiner [fabric|forge|neoforge|fusion]");
+            println!("  jvm-mod-combiner --mode <MODE>");
+            println!();
+            println!("Read-only window commands:");
+            println!("  --mode window-discovery");
+            println!("  --mode window-accessibility --pid <PID>");
+            println!("  --mode window-verify --window-id <ID>");
+            println!(
+                "  --mode window-dry-run --window-ids <ID,ID> [--direction horizontal|vertical|overlap]"
+            );
+            println!("  window-control-dry-run --control-socket <PATH> --window-ids <ID,ID>");
+            println!();
+            println!("Window mutation and legacy restore are disabled.");
+            return;
+        }
+        Some("version") => {
+            println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+            return;
+        }
+        _ => {}
+    }
     let args: Vec<String> = env::args().collect();
 
     if is_window_control_dry_run_invocation(&args) {

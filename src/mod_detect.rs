@@ -1,7 +1,7 @@
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use zip::ZipArchive;
 
@@ -130,46 +130,60 @@ fn valid_mod_id(id: &str) -> bool {
         })
 }
 
-fn fabric_dependencies(value: &JsonValue) -> Vec<ModDependency> {
+fn fabric_version_requirement(value: &JsonValue, field: &str) -> Result<String, String> {
+    match value {
+        JsonValue::String(requirement) if !requirement.trim().is_empty() => Ok(requirement.clone()),
+        JsonValue::Array(items) if !items.is_empty() => {
+            let mut alternatives = Vec::with_capacity(items.len());
+            for (index, item) in items.iter().enumerate() {
+                let requirement = item.as_str().ok_or_else(|| {
+                    format!("{field}[{index}] must be a string version requirement")
+                })?;
+                if requirement.trim().is_empty() {
+                    return Err(format!("{field}[{index}] must not be empty"));
+                }
+                alternatives.push(requirement.to_owned());
+            }
+            Ok(alternatives.join(" || "))
+        }
+        JsonValue::String(_) => Err(format!("{field} version requirement must not be empty")),
+        JsonValue::Array(_) => Err(format!("{field} version alternatives must not be empty")),
+        _ => Err(format!("{field} must be a string or array of strings")),
+    }
+}
+
+fn fabric_dependencies(value: &JsonValue) -> Result<Vec<ModDependency>, String> {
     let mut result = Vec::new();
 
-    if let Some(dependencies) = value.get("depends").and_then(JsonValue::as_object) {
+    for (field, mandatory) in [("depends", true), ("recommends", false)] {
+        let Some(raw_dependencies) = value.get(field) else {
+            continue;
+        };
+        let dependencies = raw_dependencies
+            .as_object()
+            .ok_or_else(|| format!("Fabric {field} must be an object"))?;
+
         for (id, requirement) in dependencies {
+            if !valid_mod_id(id) {
+                return Err(format!("Fabric {field} contains invalid Mod ID: {id}"));
+            }
+
+            let version_requirement =
+                fabric_version_requirement(requirement, &format!("Fabric {field}.{id}"))?;
+
             if matches!(id.as_str(), "minecraft" | "java" | "fabricloader") {
                 continue;
             }
 
-            let version = requirement.as_str().map(str::to_owned).or_else(|| {
-                requirement.as_array().map(|items| {
-                    items
-                        .iter()
-                        .filter_map(JsonValue::as_str)
-                        .collect::<Vec<_>>()
-                        .join(" || ")
-                })
-            });
-
             result.push(ModDependency {
                 mod_id: id.clone(),
-                mandatory: true,
-                version_requirement: version,
+                mandatory,
+                version_requirement: Some(version_requirement),
             });
         }
     }
 
-    if let Some(dependencies) = value.get("recommends").and_then(JsonValue::as_object) {
-        for id in dependencies.keys() {
-            if !matches!(id.as_str(), "minecraft" | "java" | "fabricloader") {
-                result.push(ModDependency {
-                    mod_id: id.clone(),
-                    mandatory: false,
-                    version_requirement: None,
-                });
-            }
-        }
-    }
-
-    result
+    Ok(result)
 }
 
 fn parse_fabric(path: &Path, raw: &str) -> Result<ModMetadata, String> {
@@ -198,15 +212,38 @@ fn parse_fabric(path: &Path, raw: &str) -> Result<ModMetadata, String> {
         .unwrap_or(&id)
         .to_owned();
 
-    let minecraft_requirement = value
-        .get("depends")
-        .and_then(|v| v.get("minecraft"))
-        .and_then(JsonValue::as_str)
-        .map(str::to_owned);
+    let mut minecraft_requirement = None;
+    if let Some(depends) = value.get("depends") {
+        let dependencies = depends
+            .as_object()
+            .ok_or("Fabric depends must be an object")?;
+
+        if let Some(requirement) = dependencies.get("minecraft") {
+            minecraft_requirement = Some(fabric_version_requirement(
+                requirement,
+                "Fabric depends.minecraft",
+            )?);
+        }
+    }
 
     let mut conflicts = Vec::new();
-    if let Some(items) = value.get("breaks").and_then(JsonValue::as_object) {
-        conflicts.extend(items.keys().cloned());
+    if let Some(raw_breaks) = value.get("breaks") {
+        let items = raw_breaks
+            .as_object()
+            .ok_or("Fabric breaks must be an object")?;
+
+        for (conflict_id, requirement) in items {
+            if !valid_mod_id(conflict_id) {
+                return Err(format!(
+                    "Fabric breaks contains invalid Mod ID: {conflict_id}"
+                ));
+            }
+
+            // Validate the predicate even though v1 planning is ID-based.
+            let _ =
+                fabric_version_requirement(requirement, &format!("Fabric breaks.{conflict_id}"))?;
+            conflicts.push(conflict_id.clone());
+        }
     }
 
     Ok(ModMetadata {
@@ -216,7 +253,7 @@ fn parse_fabric(path: &Path, raw: &str) -> Result<ModMetadata, String> {
         jar_path: path.to_path_buf(),
         loaders: [LoaderKind::Fabric].into_iter().collect(),
         minecraft_requirement,
-        dependencies: fabric_dependencies(&value),
+        dependencies: fabric_dependencies(&value)?,
         conflicts,
         metadata_source: "fabric.mod.json".to_owned(),
     })
@@ -487,15 +524,158 @@ fn dependency_version_matches(
     }
 }
 
+/// Inspect original central-directory records before ZipArchive's name map
+/// can collapse duplicate filenames.
+fn reject_duplicate_metadata_entries(
+    path: &Path,
+    central_directory_start: u64,
+) -> Result<(), String> {
+    let mut file = File::open(path)
+        .map_err(|error| format!("cannot reopen JAR central directory: {error}"))?;
+    let file_len = file
+        .metadata()
+        .map_err(|error| format!("cannot inspect JAR length: {error}"))?
+        .len();
+
+    if central_directory_start >= file_len {
+        return Err("invalid ZIP central directory offset".to_owned());
+    }
+
+    file.seek(SeekFrom::Start(central_directory_start))
+        .map_err(|error| format!("cannot seek to ZIP central directory: {error}"))?;
+
+    let mut fabric_count = 0usize;
+    let mut forge_count = 0usize;
+    let mut neo_count = 0usize;
+
+    loop {
+        let position = file
+            .stream_position()
+            .map_err(|error| format!("cannot read ZIP directory position: {error}"))?;
+
+        if position.checked_add(4).is_none_or(|end| end > file_len) {
+            return Err("truncated ZIP central directory".to_owned());
+        }
+
+        let mut signature = [0u8; 4];
+        file.read_exact(&mut signature)
+            .map_err(|error| format!("cannot read ZIP directory signature: {error}"))?;
+
+        let magic = u32::from_le_bytes(signature);
+
+        match magic {
+            // Central directory file header.
+            0x02014b50 => {
+                let mut header = [0u8; 42];
+                file.read_exact(&mut header)
+                    .map_err(|error| format!("truncated ZIP central directory header: {error}"))?;
+
+                let name_len = u16::from_le_bytes([header[24], header[25]]) as u64;
+                let extra_len = u16::from_le_bytes([header[26], header[27]]) as u64;
+                let comment_len = u16::from_le_bytes([header[28], header[29]]) as u64;
+
+                let variable_len = name_len
+                    .checked_add(extra_len)
+                    .and_then(|value| value.checked_add(comment_len))
+                    .ok_or_else(|| "ZIP central directory length overflow".to_owned())?;
+
+                let variable_end = file
+                    .stream_position()
+                    .map_err(|error| format!("cannot inspect ZIP directory position: {error}"))?
+                    .checked_add(variable_len)
+                    .ok_or_else(|| "ZIP central directory offset overflow".to_owned())?;
+
+                if variable_end > file_len {
+                    return Err("truncated ZIP central directory variable fields".to_owned());
+                }
+
+                let mut name = vec![0u8; name_len as usize];
+                file.read_exact(&mut name)
+                    .map_err(|error| format!("cannot read ZIP entry name: {error}"))?;
+
+                match name.as_slice() {
+                    b"fabric.mod.json" => fabric_count += 1,
+                    b"META-INF/mods.toml" => forge_count += 1,
+                    b"META-INF/neoforge.mods.toml" => neo_count += 1,
+                    _ => {}
+                }
+
+                if fabric_count > 1 || forge_count > 1 || neo_count > 1 {
+                    return Err("duplicate Mod metadata ZIP entry".to_owned());
+                }
+
+                file.seek(SeekFrom::Start(variable_end))
+                    .map_err(|error| format!("cannot skip ZIP directory fields: {error}"))?;
+            }
+
+            // ZIP64 end of central directory or classic EOCD.
+            0x06064b50 | 0x06054b50 => return Ok(()),
+
+            // Optional central directory digital signature.
+            0x05054b50 => {
+                let mut length = [0u8; 2];
+                file.read_exact(&mut length)
+                    .map_err(|error| format!("truncated ZIP directory signature: {error}"))?;
+
+                let length = u16::from_le_bytes(length) as u64;
+                let end = file
+                    .stream_position()
+                    .map_err(|error| format!("cannot inspect ZIP directory position: {error}"))?
+                    .checked_add(length)
+                    .ok_or_else(|| "ZIP directory signature offset overflow".to_owned())?;
+
+                if end > file_len {
+                    return Err("truncated ZIP directory signature data".to_owned());
+                }
+
+                file.seek(SeekFrom::Start(end))
+                    .map_err(|error| format!("cannot skip ZIP directory signature: {error}"))?;
+            }
+
+            _ => {
+                return Err(format!(
+                    "invalid ZIP central directory record signature at offset {position}"
+                ));
+            }
+        }
+    }
+}
+
 pub fn scan_mod_jar(path: &Path) -> Result<ModMetadata, String> {
     let file = File::open(path).map_err(|e| format!("cannot open JAR: {e}"))?;
     let mut archive = ZipArchive::new(file).map_err(|e| format!("invalid JAR/ZIP: {e}"))?;
 
-    let fabric = archive.file_names().any(|n| n == "fabric.mod.json");
-    let forge = archive.file_names().any(|n| n == "META-INF/mods.toml");
-    let neo = archive
-        .file_names()
-        .any(|n| n == "META-INF/neoforge.mods.toml");
+    reject_duplicate_metadata_entries(path, archive.central_directory_start())?;
+
+    let mut fabric_count = 0usize;
+    let mut forge_count = 0usize;
+    let mut neo_count = 0usize;
+
+    // Enumerate central-directory entries by index. file_names() may
+    // expose deduplicated names and is therefore unsuitable for duplicate
+    // metadata detection.
+    for index in 0..archive.len() {
+        let name = archive
+            .by_index(index)
+            .map_err(|error| format!("cannot inspect ZIP entry {index}: {error}"))?
+            .name()
+            .to_owned();
+
+        match name.as_str() {
+            "fabric.mod.json" => fabric_count += 1,
+            "META-INF/mods.toml" => forge_count += 1,
+            "META-INF/neoforge.mods.toml" => neo_count += 1,
+            _ => {}
+        }
+    }
+
+    if fabric_count > 1 || forge_count > 1 || neo_count > 1 {
+        return Err("duplicate Mod metadata ZIP entry".to_owned());
+    }
+
+    let fabric = fabric_count == 1;
+    let forge = forge_count == 1;
+    let neo = neo_count == 1;
 
     let count = usize::from(fabric) + usize::from(forge) + usize::from(neo);
     if count == 0 {
@@ -558,7 +738,19 @@ pub fn scan_mod_directories(directories: &[PathBuf]) -> ModScanReport {
             };
 
             let path = entry.path();
-            if !path.is_file()
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) => {
+                    report.issues.push(ScanIssue {
+                        jar_path: path,
+                        reason: format!("cannot inspect directory entry type: {error}"),
+                    });
+                    continue;
+                }
+            };
+
+            // DirEntry::file_type does not follow symlinks.
+            if !file_type.is_file()
                 || !path
                     .extension()
                     .is_some_and(|ext| ext.eq_ignore_ascii_case("jar"))
@@ -762,6 +954,148 @@ version="1"
 
         assert!(scan_mod_jar(&path).unwrap_err().contains("multiple Loader"));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_malformed_fabric_dependency_shapes() {
+        let path = PathBuf::from("malformed-fabric.jar");
+        let cases = [
+            r#"{"id":"bad_dep","version":"1","depends":[]}"#,
+            r#"{"id":"bad_dep","version":"1","depends":{"helper":7}}"#,
+            r#"{"id":"bad_dep","version":"1","depends":{"helper":["*","",">=1"]}}"#,
+            r#"{"id":"bad_dep","version":"1","recommends":null}"#,
+            r#"{"id":"bad_dep","version":"1","breaks":{"helper":false}}"#,
+        ];
+
+        for raw in cases {
+            assert!(
+                parse_fabric(&path, raw).is_err(),
+                "malformed metadata was accepted: {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_metadata_zip_entries() {
+        fn put_u16(out: &mut Vec<u8>, value: u16) {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+
+        fn put_u32(out: &mut Vec<u8>, value: u32) {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+
+        fn crc32(data: &[u8]) -> u32 {
+            let mut crc = !0u32;
+            for &byte in data {
+                crc ^= byte as u32;
+                for _ in 0..8 {
+                    crc = if crc & 1 != 0 {
+                        (crc >> 1) ^ 0xEDB88320
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            !crc
+        }
+
+        // Construct a raw ZIP because ZipWriter intentionally rejects duplicate names.
+        let name = b"fabric.mod.json";
+        let payload = br#"{"id":"duplicate","version":"1"}"#;
+        let checksum = crc32(payload);
+
+        let mut bytes = Vec::new();
+        let mut central = Vec::new();
+
+        for _ in 0..2 {
+            let local_offset = bytes.len() as u32;
+
+            // Local file header.
+            put_u32(&mut bytes, 0x04034b50);
+            put_u16(&mut bytes, 20);
+            put_u16(&mut bytes, 0);
+            put_u16(&mut bytes, 0);
+            put_u16(&mut bytes, 0);
+            put_u16(&mut bytes, 0);
+            put_u32(&mut bytes, checksum);
+            put_u32(&mut bytes, payload.len() as u32);
+            put_u32(&mut bytes, payload.len() as u32);
+            put_u16(&mut bytes, name.len() as u16);
+            put_u16(&mut bytes, 0);
+            bytes.extend_from_slice(name);
+            bytes.extend_from_slice(payload);
+
+            // Central directory entry.
+            put_u32(&mut central, 0x02014b50);
+            put_u16(&mut central, 20);
+            put_u16(&mut central, 20);
+            put_u16(&mut central, 0);
+            put_u16(&mut central, 0);
+            put_u16(&mut central, 0);
+            put_u16(&mut central, 0);
+            put_u32(&mut central, checksum);
+            put_u32(&mut central, payload.len() as u32);
+            put_u32(&mut central, payload.len() as u32);
+            put_u16(&mut central, name.len() as u16);
+            put_u16(&mut central, 0);
+            put_u16(&mut central, 0);
+            put_u16(&mut central, 0);
+            put_u16(&mut central, 0);
+            put_u32(&mut central, 0);
+            put_u32(&mut central, local_offset);
+            central.extend_from_slice(name);
+        }
+
+        let central_offset = bytes.len() as u32;
+        let central_size = central.len() as u32;
+        bytes.extend_from_slice(&central);
+
+        // End of central directory.
+        put_u32(&mut bytes, 0x06054b50);
+        put_u16(&mut bytes, 0);
+        put_u16(&mut bytes, 0);
+        put_u16(&mut bytes, 2);
+        put_u16(&mut bytes, 2);
+        put_u32(&mut bytes, central_size);
+        put_u32(&mut bytes, central_offset);
+        put_u16(&mut bytes, 0);
+
+        let path = test_path("duplicate-metadata.jar");
+        std::fs::write(&path, bytes).unwrap();
+
+        let result = scan_mod_jar(&path);
+        assert!(
+            result.unwrap_err().contains("duplicate Mod metadata"),
+            "scanner must reject duplicate metadata ZIP entries"
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_scan_ignores_jar_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = test_path("symlink-scan");
+        let outside = test_path("outside-valid.jar");
+        std::fs::create_dir_all(&root).unwrap();
+
+        std::fs::write(
+            &outside,
+            make_jar(&[("fabric.mod.json", r#"{"id":"outside_mod","version":"1"}"#)]),
+        )
+        .unwrap();
+
+        symlink(&outside, root.join("linked.jar")).unwrap();
+
+        let report = scan_mod_directories(std::slice::from_ref(&root));
+        assert!(report.mods.is_empty());
+        assert!(report.issues.is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_file(outside);
     }
 
     fn test_metadata(

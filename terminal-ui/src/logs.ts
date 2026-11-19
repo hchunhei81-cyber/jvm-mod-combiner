@@ -41,9 +41,10 @@ const SOCKET_PATH =
 
 const REQUEST_TIMEOUT_MS = 1500;
 const REFRESH_INTERVAL_MS = 250;
+const CATCH_UP_INTERVAL_MS = 25;
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const MAX_BATCH = 16;
-const MAX_LOCAL_ENTRIES = 200;
+const MAX_LOCAL_ENTRIES = 2048;
 const STALE_AFTER_MS = 5000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -286,9 +287,14 @@ export function useLogs(enabled: boolean): LogsState {
 
     const poll = async () => {
       const startedAt = Date.now();
+      let nextRefreshIntervalMs = REFRESH_INTERVAL_MS;
 
       try {
         const batch = await fetchLogBatch(cursorRef.current);
+        nextRefreshIntervalMs =
+          batch.entries.length === MAX_BATCH
+            ? CATCH_UP_INTERVAL_MS
+            : REFRESH_INTERVAL_MS;
         const receivedAt = Date.now();
 
         if (!active) return;
@@ -343,7 +349,7 @@ export function useLogs(enabled: boolean): LogsState {
         }
       } finally {
         if (active) {
-          timer = setTimeout(poll, REFRESH_INTERVAL_MS);
+          timer = setTimeout(poll, nextRefreshIntervalMs);
         }
       }
     };

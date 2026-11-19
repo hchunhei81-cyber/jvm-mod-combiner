@@ -118,16 +118,9 @@ impl LogHub {
         let gap_detected = missing_count > 0;
 
         let entries = if effective_after_id == 0 {
-            state
-                .entries
-                .iter()
-                .rev()
-                .take(limit)
-                .cloned()
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect()
+            // Initial connection and cursor reset: replay retained history
+            // from the oldest available entry, preserving forward pagination.
+            state.entries.iter().take(limit).cloned().collect()
         } else {
             state
                 .entries
@@ -585,10 +578,9 @@ mod tests {
         assert_eq!(batch.entries.len(), MAX_BATCH);
         assert_eq!(batch.dropped, 3);
         assert_eq!(batch.latest_id, (CAPACITY + 3) as u64);
-        assert_eq!(
-            batch.entries.last().unwrap().message,
-            format!("line-{}", CAPACITY + 2)
-        );
+        assert_eq!(batch.entries.first().unwrap().id, 4);
+        assert_eq!(batch.entries.first().unwrap().message, "line-3");
+        assert_eq!(batch.entries.last().unwrap().message, "line-18");
     }
 
     #[test]

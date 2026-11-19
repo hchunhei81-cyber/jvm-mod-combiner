@@ -2,6 +2,7 @@ mod diagnostics;
 mod display_geometry;
 mod display_topology;
 mod log_hub;
+mod mod_detect;
 mod overlay_ipc;
 mod window_accessibility;
 mod window_control;
@@ -3350,6 +3351,170 @@ mod cli_meta_action_tests {
     }
 }
 
+fn is_mod_scan_invocation(args: &[String]) -> bool {
+    args.windows(2)
+        .any(|pair| pair[0] == "--mode" && pair[1].eq_ignore_ascii_case("mod-scan"))
+        || args.iter().any(|arg| {
+            arg.eq_ignore_ascii_case("mod-scan") || arg.eq_ignore_ascii_case("--mode=mod-scan")
+        })
+}
+
+fn parse_mod_scan_target_loader(args: &[String]) -> Result<Option<mod_detect::LoaderKind>, String> {
+    let mut supplied = false;
+
+    for (index, arg) in args.iter().enumerate() {
+        let value = if arg == "--target-loader" {
+            let value = args
+                .get(index + 1)
+                .ok_or("--target-loader requires fabric, forge, or neoforge")?;
+            if value.starts_with("--") {
+                return Err("--target-loader requires a Loader value".into());
+            }
+            Some(value.as_str())
+        } else {
+            arg.strip_prefix("--target-loader=")
+        };
+
+        if let Some(value) = value {
+            if supplied {
+                return Err("Duplicate --target-loader argument".into());
+            }
+            supplied = true;
+
+            if !["fabric", "forge", "neoforge"]
+                .iter()
+                .any(|known| value.eq_ignore_ascii_case(known))
+            {
+                return Err(format!("Unsupported target Loader: {value}"));
+            }
+        }
+    }
+
+    if !supplied {
+        return Ok(None);
+    }
+
+    let loader = mod_detect::LoaderKind::from_args(args);
+    if loader == mod_detect::LoaderKind::Unknown {
+        return Err("Could not resolve target Loader".into());
+    }
+
+    Ok(Some(loader))
+}
+
+fn run_mod_scan(project_root: &Path, target_loader: Option<mod_detect::LoaderKind>) {
+    let sandbox = project_root.join("sandbox");
+    let directories = [sandbox.join("mods"), sandbox.join("forge_env").join("mods")];
+
+    println!("=== Mod Scanner v1 (read-only) ===");
+    for directory in &directories {
+        println!("[SCAN] {}", directory.display());
+    }
+
+    let report = mod_detect::scan_mod_directories(&directories);
+
+    println!();
+    println!("[RESULT] Parsed Mods: {}", report.mods.len());
+    println!("[RESULT] Scan Issues: {}", report.issues.len());
+
+    for metadata in &report.mods {
+        let loaders = metadata
+            .loaders
+            .iter()
+            .map(|loader| loader.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        println!();
+        println!("[MOD] {} ({})", metadata.id, metadata.name);
+        println!("  Version: {}", metadata.version);
+        println!("  JAR: {}", metadata.jar_path.display());
+        println!("  Metadata: {}", metadata.metadata_source);
+        println!("  Declared Loaders: {}", loaders);
+        println!(
+            "  Minecraft Requirement: {}",
+            metadata
+                .minecraft_requirement
+                .as_deref()
+                .unwrap_or("not declared")
+        );
+
+        if metadata.dependencies.is_empty() {
+            println!("  Dependencies: none");
+        } else {
+            for dependency in &metadata.dependencies {
+                println!(
+                    "  Dependency: {} [{}] {}",
+                    dependency.mod_id,
+                    if dependency.mandatory {
+                        "required"
+                    } else {
+                        "optional"
+                    },
+                    dependency.version_requirement.as_deref().unwrap_or("any")
+                );
+            }
+        }
+
+        for conflict in &metadata.conflicts {
+            println!("  Declared Conflict: {conflict}");
+        }
+    }
+
+    println!();
+    match target_loader {
+        Some(loader) => {
+            println!("=== Loader Candidate Evaluation: {} ===", loader.as_str());
+
+            let plan = mod_detect::plan_assignments(&report, loader);
+            let assigned = plan
+                .iter()
+                .filter(|item| matches!(item.status, mod_detect::AssignmentStatus::Assigned(_)))
+                .count();
+            let rejected = plan.len() - assigned;
+
+            println!(
+                "[{}] candidates: {}, eligible: {}, rejected: {}",
+                loader.as_str(),
+                plan.len(),
+                assigned,
+                rejected
+            );
+
+            for item in &plan {
+                match &item.status {
+                    mod_detect::AssignmentStatus::Assigned(_) => {
+                        println!("  [ELIGIBLE] {}", item.mod_id);
+                    }
+                    mod_detect::AssignmentStatus::Rejected(reason) => {
+                        println!("  [REJECT] {} -> {}", item.mod_id, reason);
+                    }
+                }
+            }
+        }
+        None => {
+            println!("=== Loader Candidate Evaluation ===");
+            println!("[SKIP] No target Loader specified.");
+            println!("[INFO] Use --target-loader fabric|forge|neoforge to evaluate.");
+        }
+    }
+
+    if !report.issues.is_empty() {
+        println!();
+        println!("=== Scan Issues ===");
+        for issue in &report.issues {
+            println!("[ISSUE] {}", issue.jar_path.display());
+            println!("  Reason: {}", issue.reason);
+        }
+    }
+
+    println!();
+    println!("[NOTICE] Read-only scan. No files were moved or modified.");
+    println!(
+        "[NOTICE] Loader eligibility does not yet validate Minecraft or dependency version ranges."
+    );
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -3362,6 +3527,7 @@ fn main() {
             println!("  jvm-mod-combiner --mode <MODE>");
             println!();
             println!("Read-only window commands:");
+            println!("  --mode mod-scan  (read-only Mod metadata scan)");
             println!("  --mode window-discovery");
             println!("  --mode window-accessibility --pid <PID>");
             println!("  --mode window-verify --window-id <ID>");
@@ -3380,6 +3546,25 @@ fn main() {
         _ => {}
     }
     let args: Vec<String> = env::args().collect();
+
+    if is_mod_scan_invocation(&args) {
+        let project_root = match env::current_dir() {
+            Ok(path) => path,
+            Err(error) => {
+                eprintln!("[ModScan] Cannot resolve project directory: {error}");
+                std::process::exit(2);
+            }
+        };
+        let target_loader = match parse_mod_scan_target_loader(&args) {
+            Ok(loader) => loader,
+            Err(error) => {
+                eprintln!("[ModScan] {error}");
+                std::process::exit(2);
+            }
+        };
+        run_mod_scan(&project_root, target_loader);
+        return;
+    }
 
     if is_window_control_dry_run_invocation(&args) {
         if let Err(error) = run_window_control_dry_run(&args) {

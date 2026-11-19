@@ -56,6 +56,8 @@ main.sh
 # The sandbox and saves are local runtime data, not project sources.
 sandbox/
 saves/
+# Local Mod Scanner security test fixtures
+/sandbox/security_fixtures/
 
 # --- Explicit sandbox dependency and runtime paths ---
 # Retain these entries as documentation of large generated files and folders.

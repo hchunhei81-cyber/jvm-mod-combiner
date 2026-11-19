@@ -61,10 +61,19 @@ impl LoaderKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DependencyKind {
+    Required,
+    Optional,
+    Incompatible,
+    Discouraged,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModDependency {
     pub mod_id: String,
     pub mandatory: bool,
+    pub kind: DependencyKind,
     pub version_requirement: Option<String>,
 }
 
@@ -178,6 +187,11 @@ fn fabric_dependencies(value: &JsonValue) -> Result<Vec<ModDependency>, String> 
             result.push(ModDependency {
                 mod_id: id.clone(),
                 mandatory,
+                kind: if mandatory {
+                    DependencyKind::Required
+                } else {
+                    DependencyKind::Optional
+                },
                 version_requirement: Some(version_requirement),
             });
         }
@@ -350,12 +364,33 @@ fn parse_toml(path: &Path, raw: &str, neoforge: bool) -> Result<ModMetadata, Str
                     ),
                 };
 
-                if dependency_type == Some("incompatible") {
+                let kind = match dependency_type {
+                    None => {
+                        if mandatory {
+                            DependencyKind::Required
+                        } else {
+                            DependencyKind::Optional
+                        }
+                    }
+                    Some("required") => DependencyKind::Required,
+                    Some("optional") => DependencyKind::Optional,
+                    Some("discouraged") => DependencyKind::Discouraged,
+                    Some("incompatible") => DependencyKind::Incompatible,
+                    Some(other) => {
+                        return Err(format!(
+                            "dependency {dep_id} has unsupported dependency type: {other}"
+                        ));
+                    }
+                };
+
+                if kind == DependencyKind::Incompatible {
                     conflicts.push(dep_id.to_owned());
                 } else {
+                    let is_required = kind == DependencyKind::Required;
                     dependencies.push(ModDependency {
                         mod_id: dep_id.to_owned(),
-                        mandatory,
+                        mandatory: is_required,
+                        kind,
                         version_requirement,
                     });
                 }
@@ -526,34 +561,450 @@ fn dependency_version_matches(
 
 /// Inspect original central-directory records before ZipArchive's name map
 /// can collapse duplicate filenames.
-fn reject_duplicate_metadata_entries(
-    path: &Path,
-    central_directory_start: u64,
+
+/// Validate raw ZIP central-directory entries against the ZIP reader's
+/// parsed index and their corresponding local file headers.
+///
+/// Data-descriptor entries are deliberately rejected until their 32-bit and
+/// ZIP64 descriptor layouts are independently validated.
+/// Scan the original central directory before consulting ZipArchive's
+/// filename index, which may collapse duplicate filenames.
+
+const ZIP_LOCAL_FILE_HEADER: u32 = 0x04034b50;
+const ZIP_CENTRAL_FILE_HEADER: u32 = 0x02014b50;
+const ZIP_DATA_DESCRIPTOR: u32 = 0x08074b50;
+
+fn zip_u16(data: &[u8], offset: usize) -> Result<u16, String> {
+    let bytes = data
+        .get(offset..offset + 2)
+        .ok_or_else(|| "truncated ZIP u16 field".to_owned())?;
+    Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
+}
+
+fn zip_u32(data: &[u8], offset: usize) -> Result<u32, String> {
+    let bytes = data
+        .get(offset..offset + 4)
+        .ok_or_else(|| "truncated ZIP u32 field".to_owned())?;
+    Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
+}
+
+fn zip_u64(data: &[u8], offset: usize) -> Result<u64, String> {
+    let bytes = data
+        .get(offset..offset + 8)
+        .ok_or_else(|| "truncated ZIP u64 field".to_owned())?;
+    Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
+}
+
+fn zip_checked_end(start: u64, length: u64, limit: u64) -> Result<u64, String> {
+    let end = start
+        .checked_add(length)
+        .ok_or_else(|| "ZIP offset overflow".to_owned())?;
+    if end > limit {
+        return Err("ZIP record exceeds archive boundary".to_owned());
+    }
+    Ok(end)
+}
+
+struct Zip64Values {
+    uncompressed_size: Option<u64>,
+    compressed_size: Option<u64>,
+    local_header_offset: Option<u64>,
+    disk_number_start: Option<u32>,
+}
+
+fn parse_zip64_extra(
+    extra: &[u8],
+    need_uncompressed: bool,
+    need_compressed: bool,
+    need_local_offset: bool,
+    need_disk_start: bool,
+) -> Result<Zip64Values, String> {
+    let mut cursor = 0usize;
+    let mut zip64_data: Option<&[u8]> = None;
+
+    while cursor < extra.len() {
+        if extra.len() - cursor < 4 {
+            return Err("truncated ZIP extra-field header".to_owned());
+        }
+
+        let kind = zip_u16(extra, cursor)?;
+        let length = zip_u16(extra, cursor + 2)? as usize;
+        cursor += 4;
+
+        let end = cursor
+            .checked_add(length)
+            .ok_or_else(|| "ZIP extra-field length overflow".to_owned())?;
+
+        let data = extra
+            .get(cursor..end)
+            .ok_or_else(|| "truncated ZIP extra field".to_owned())?;
+
+        if kind == 0x0001 && zip64_data.replace(data).is_some() {
+            return Err("duplicate ZIP64 extra field".to_owned());
+        }
+
+        cursor = end;
+    }
+
+    let required = usize::from(need_uncompressed) * 8
+        + usize::from(need_compressed) * 8
+        + usize::from(need_local_offset) * 8
+        + usize::from(need_disk_start) * 4;
+
+    let data = match zip64_data {
+        Some(data) if data.len() == required => data,
+        Some(_) => return Err("invalid ZIP64 extra-field length".to_owned()),
+        None if required == 0 => &[],
+        None => return Err("missing required ZIP64 extra field".to_owned()),
+    };
+
+    let mut offset = 0usize;
+
+    let uncompressed_size = if need_uncompressed {
+        let value = zip_u64(data, offset)?;
+        offset += 8;
+        Some(value)
+    } else {
+        None
+    };
+
+    let compressed_size = if need_compressed {
+        let value = zip_u64(data, offset)?;
+        offset += 8;
+        Some(value)
+    } else {
+        None
+    };
+
+    let local_header_offset = if need_local_offset {
+        let value = zip_u64(data, offset)?;
+        offset += 8;
+        Some(value)
+    } else {
+        None
+    };
+
+    let disk_number_start = if need_disk_start {
+        let value = zip_u32(data, offset)?;
+        offset += 4;
+        Some(value)
+    } else {
+        None
+    };
+
+    if offset != data.len() {
+        return Err("ZIP64 extra-field parsing length mismatch".to_owned());
+    }
+
+    Ok(Zip64Values {
+        uncompressed_size,
+        compressed_size,
+        local_header_offset,
+        disk_number_start,
+    })
+}
+
+#[allow(deprecated)]
+fn zip_compression_code(method: zip::CompressionMethod) -> u16 {
+    method.to_u16()
+}
+
+fn reject_duplicate_raw_zip_names(
+    file: &mut File,
+    central_start: u64,
+    file_len: u64,
 ) -> Result<(), String> {
+    use std::collections::BTreeSet;
+
+    file.seek(SeekFrom::Start(central_start))
+        .map_err(|e| format!("cannot seek to ZIP central directory: {e}"))?;
+
+    let mut names = BTreeSet::<Vec<u8>>::new();
+
+    loop {
+        let position = file
+            .stream_position()
+            .map_err(|e| format!("cannot inspect ZIP directory position: {e}"))?;
+
+        zip_checked_end(position, 4, file_len)?;
+
+        let mut signature = [0u8; 4];
+        file.read_exact(&mut signature)
+            .map_err(|e| format!("cannot read ZIP directory signature: {e}"))?;
+
+        match u32::from_le_bytes(signature) {
+            ZIP_CENTRAL_FILE_HEADER => {
+                let mut header = [0u8; 42];
+                file.read_exact(&mut header)
+                    .map_err(|e| format!("truncated ZIP central header: {e}"))?;
+
+                let name_len = zip_u16(&header, 24)? as usize;
+                let extra_len = zip_u16(&header, 26)? as usize;
+                let comment_len = zip_u16(&header, 28)? as usize;
+
+                let variable_len = name_len
+                    .checked_add(extra_len)
+                    .and_then(|v| v.checked_add(comment_len))
+                    .ok_or_else(|| "ZIP central variable length overflow".to_owned())?;
+
+                let variable_start = file
+                    .stream_position()
+                    .map_err(|e| format!("cannot inspect ZIP directory: {e}"))?;
+                let variable_end = zip_checked_end(variable_start, variable_len as u64, file_len)?;
+
+                let mut name = vec![0u8; name_len];
+                file.read_exact(&mut name)
+                    .map_err(|e| format!("cannot read ZIP filename: {e}"))?;
+
+                if !names.insert(name.clone()) {
+                    if matches!(
+                        name.as_slice(),
+                        b"fabric.mod.json" | b"META-INF/mods.toml" | b"META-INF/neoforge.mods.toml"
+                    ) {
+                        return Err("duplicate Mod metadata ZIP entry".to_owned());
+                    }
+                    return Err(format!(
+                        "duplicate ZIP entry filename: {}",
+                        String::from_utf8_lossy(&name)
+                    ));
+                }
+
+                file.seek(SeekFrom::Start(variable_end))
+                    .map_err(|e| format!("cannot seek to next ZIP entry: {e}"))?;
+            }
+            0x06054b50 | 0x06064b50 => return Ok(()),
+            _ => {
+                return Err(format!(
+                    "invalid ZIP central directory record at offset {position}"
+                ));
+            }
+        }
+    }
+}
+
+fn validate_zip_end_records(
+    file: &mut File,
+    file_len: u64,
+    central_start: u64,
+    central_end: u64,
+    archive_offset: u64,
+    raw_entries: usize,
+) -> Result<(), String> {
+    const EOCD_SIGNATURE: u32 = 0x06054b50;
+    const ZIP64_EOCD_SIGNATURE: u32 = 0x06064b50;
+    const ZIP64_LOCATOR_SIGNATURE: u32 = 0x07064b50;
+    const MAX_EOCD_SEARCH: u64 = 22 + u16::MAX as u64;
+
+    if file_len < 22 {
+        return Err("truncated ZIP end-of-central-directory record".to_owned());
+    }
+
+    let tail_start = file_len.saturating_sub(MAX_EOCD_SEARCH);
+    file.seek(SeekFrom::Start(tail_start))
+        .map_err(|e| format!("cannot seek to ZIP end record: {e}"))?;
+
+    let mut tail = Vec::new();
+    file.read_to_end(&mut tail)
+        .map_err(|e| format!("cannot read ZIP end record: {e}"))?;
+
+    let eocd = (0..=tail.len() - 22)
+        .rev()
+        .find(|&i| {
+            zip_u32(&tail, i).ok() == Some(EOCD_SIGNATURE)
+                && zip_u16(&tail, i + 20)
+                    .ok()
+                    .is_some_and(|n| i + 22 + n as usize == tail.len())
+        })
+        .ok_or_else(|| "missing or malformed ZIP end-of-central-directory record".to_owned())?;
+
+    let eocd_abs = tail_start + eocd as u64;
+
+    let disk_number = zip_u16(&tail, eocd + 4)?;
+    let central_disk = zip_u16(&tail, eocd + 6)?;
+    let entries_on_disk = zip_u16(&tail, eocd + 8)?;
+    let total_entries = zip_u16(&tail, eocd + 10)?;
+    let central_size = zip_u32(&tail, eocd + 12)?;
+    let central_offset = zip_u32(&tail, eocd + 16)?;
+
+    if disk_number != 0 || central_disk != 0 {
+        return Err("multi-disk ZIP archives are not supported".to_owned());
+    }
+
+    let locator_start = eocd_abs.checked_sub(20);
+    let mut locator = [0u8; 20];
+    let has_zip64_locator = if let Some(position) = locator_start {
+        file.seek(SeekFrom::Start(position))
+            .map_err(|e| format!("cannot seek to ZIP64 locator: {e}"))?;
+        file.read_exact(&mut locator)
+            .map_err(|e| format!("cannot read ZIP64 locator: {e}"))?;
+        zip_u32(&locator, 0)? == ZIP64_LOCATOR_SIGNATURE
+    } else {
+        false
+    };
+
+    let has_zip32_sentinel = entries_on_disk == u16::MAX
+        || total_entries == u16::MAX
+        || central_size == u32::MAX
+        || central_offset == u32::MAX;
+
+    if has_zip64_locator {
+        let locator_start = locator_start.unwrap();
+
+        let locator_disk = zip_u32(&locator, 4)?;
+        let zip64_relative_offset = zip_u64(&locator, 8)?;
+        let disk_count = zip_u32(&locator, 16)?;
+
+        if locator_disk != 0 || disk_count != 1 {
+            return Err("multi-disk ZIP64 archives are not supported".to_owned());
+        }
+
+        let zip64_abs = zip64_relative_offset
+            .checked_add(archive_offset)
+            .ok_or_else(|| "ZIP64 EOCD offset overflow".to_owned())?;
+
+        if zip64_abs != central_end {
+            return Err("ZIP64 EOCD does not immediately follow central directory".to_owned());
+        }
+
+        zip_checked_end(zip64_abs, 56, locator_start)?;
+
+        file.seek(SeekFrom::Start(zip64_abs))
+            .map_err(|e| format!("cannot seek to ZIP64 EOCD: {e}"))?;
+
+        let mut zip64 = [0u8; 56];
+        file.read_exact(&mut zip64)
+            .map_err(|e| format!("truncated ZIP64 EOCD: {e}"))?;
+
+        if zip_u32(&zip64, 0)? != ZIP64_EOCD_SIGNATURE {
+            return Err("invalid ZIP64 EOCD signature".to_owned());
+        }
+
+        let record_size = zip_u64(&zip64, 4)?;
+        if record_size < 44 {
+            return Err("invalid ZIP64 EOCD record size".to_owned());
+        }
+
+        let record_end = zip64_abs
+            .checked_add(12)
+            .and_then(|v| v.checked_add(record_size))
+            .ok_or_else(|| "ZIP64 EOCD record length overflow".to_owned())?;
+
+        if record_end != locator_start {
+            return Err("ZIP64 EOCD record boundary mismatch".to_owned());
+        }
+
+        let zip64_disk = zip_u32(&zip64, 16)?;
+        let zip64_central_disk = zip_u32(&zip64, 20)?;
+        let zip64_entries_on_disk = zip_u64(&zip64, 24)?;
+        let zip64_total_entries = zip_u64(&zip64, 32)?;
+        let zip64_central_size = zip_u64(&zip64, 40)?;
+        let zip64_central_offset = zip_u64(&zip64, 48)?;
+
+        if zip64_disk != 0
+            || zip64_central_disk != 0
+            || zip64_entries_on_disk != zip64_total_entries
+        {
+            return Err("invalid or multi-disk ZIP64 directory".to_owned());
+        }
+
+        if zip64_total_entries != raw_entries as u64 {
+            return Err("ZIP64 EOCD entry count mismatch".to_owned());
+        }
+
+        let declared_start = zip64_central_offset
+            .checked_add(archive_offset)
+            .ok_or_else(|| "ZIP64 central directory offset overflow".to_owned())?;
+
+        let declared_end = central_start
+            .checked_add(zip64_central_size)
+            .ok_or_else(|| "ZIP64 central directory size overflow".to_owned())?;
+
+        if declared_start != central_start || declared_end != zip64_abs {
+            return Err("ZIP64 central directory declaration mismatch".to_owned());
+        }
+
+        if entries_on_disk != u16::MAX && u64::from(entries_on_disk) != zip64_entries_on_disk {
+            return Err("ZIP32/ZIP64 entry count mismatch".to_owned());
+        }
+
+        if total_entries != u16::MAX && u64::from(total_entries) != zip64_total_entries {
+            return Err("ZIP32/ZIP64 total entry count mismatch".to_owned());
+        }
+
+        if central_size != u32::MAX && u64::from(central_size) != zip64_central_size {
+            return Err("ZIP32/ZIP64 central size mismatch".to_owned());
+        }
+
+        if central_offset != u32::MAX && u64::from(central_offset) != zip64_central_offset {
+            return Err("ZIP32/ZIP64 central offset mismatch".to_owned());
+        }
+
+        return Ok(());
+    }
+
+    if has_zip32_sentinel {
+        return Err("ZIP64 sentinel fields without ZIP64 locator".to_owned());
+    }
+
+    if eocd_abs != central_end {
+        return Err("ZIP central directory does not end at EOCD".to_owned());
+    }
+
+    if entries_on_disk != total_entries {
+        return Err("ZIP entry counts differ across disks".to_owned());
+    }
+
+    let declared_start = u64::from(central_offset)
+        .checked_add(archive_offset)
+        .ok_or_else(|| "ZIP central directory offset overflow".to_owned())?;
+
+    let declared_end = central_start
+        .checked_add(u64::from(central_size))
+        .ok_or_else(|| "ZIP central directory size overflow".to_owned())?;
+
+    if declared_start != central_start
+        || declared_end != central_end
+        || u64::from(total_entries) != raw_entries as u64
+    {
+        return Err("ZIP EOCD central directory declaration mismatch".to_owned());
+    }
+
+    Ok(())
+}
+
+fn validate_zip_structure(path: &Path, archive: &mut ZipArchive<File>) -> Result<(), String> {
+    use std::collections::BTreeSet;
+
     let mut file = File::open(path)
-        .map_err(|error| format!("cannot reopen JAR central directory: {error}"))?;
+        .map_err(|error| format!("cannot reopen JAR for ZIP validation: {error}"))?;
     let file_len = file
         .metadata()
         .map_err(|error| format!("cannot inspect JAR length: {error}"))?
         .len();
 
-    if central_directory_start >= file_len {
+    let central_start = archive.central_directory_start();
+    let archive_offset = archive.offset();
+
+    if central_start >= file_len {
         return Err("invalid ZIP central directory offset".to_owned());
     }
 
-    file.seek(SeekFrom::Start(central_directory_start))
+    reject_duplicate_raw_zip_names(&mut file, central_start, file_len)?;
+
+    file.seek(SeekFrom::Start(central_start))
         .map_err(|error| format!("cannot seek to ZIP central directory: {error}"))?;
 
-    let mut fabric_count = 0usize;
-    let mut forge_count = 0usize;
-    let mut neo_count = 0usize;
+    let mut names = BTreeSet::<Vec<u8>>::new();
+    let mut entry_ranges = Vec::<(u64, u64)>::new();
+    let mut index = 0usize;
+    let central_end;
 
     loop {
-        let position = file
+        let record_start = file
             .stream_position()
-            .map_err(|error| format!("cannot read ZIP directory position: {error}"))?;
+            .map_err(|error| format!("cannot inspect ZIP directory position: {error}"))?;
 
-        if position.checked_add(4).is_none_or(|end| end > file_len) {
+        if zip_checked_end(record_start, 4, file_len).is_err() {
             return Err("truncated ZIP central directory".to_owned());
         }
 
@@ -561,121 +1012,306 @@ fn reject_duplicate_metadata_entries(
         file.read_exact(&mut signature)
             .map_err(|error| format!("cannot read ZIP directory signature: {error}"))?;
 
-        let magic = u32::from_le_bytes(signature);
-
-        match magic {
-            // Central directory file header.
-            0x02014b50 => {
+        match u32::from_le_bytes(signature) {
+            ZIP_CENTRAL_FILE_HEADER => {
                 let mut header = [0u8; 42];
                 file.read_exact(&mut header)
-                    .map_err(|error| format!("truncated ZIP central directory header: {error}"))?;
+                    .map_err(|error| format!("truncated ZIP central header: {error}"))?;
 
-                let name_len = u16::from_le_bytes([header[24], header[25]]) as u64;
-                let extra_len = u16::from_le_bytes([header[26], header[27]]) as u64;
-                let comment_len = u16::from_le_bytes([header[28], header[29]]) as u64;
+                let flags = zip_u16(&header, 4)?;
+                let method = zip_u16(&header, 6)?;
+                let crc = zip_u32(&header, 12)?;
+                let compressed_32 = zip_u32(&header, 16)?;
+                let uncompressed_32 = zip_u32(&header, 20)?;
+                let name_len = zip_u16(&header, 24)? as usize;
+                let extra_len = zip_u16(&header, 26)? as usize;
+                let comment_len = zip_u16(&header, 28)? as usize;
+                let local_offset_32 = zip_u32(&header, 38)?;
+
+                let disk_start_16 = zip_u16(&header, 30)?;
+                if disk_start_16 != 0 && disk_start_16 != u16::MAX {
+                    return Err("multi-disk ZIP entries are not supported".to_owned());
+                }
 
                 let variable_len = name_len
                     .checked_add(extra_len)
-                    .and_then(|value| value.checked_add(comment_len))
-                    .ok_or_else(|| "ZIP central directory length overflow".to_owned())?;
+                    .and_then(|v| v.checked_add(comment_len))
+                    .ok_or_else(|| "ZIP central variable length overflow".to_owned())?;
 
-                let variable_end = file
+                let variable_start = file
                     .stream_position()
-                    .map_err(|error| format!("cannot inspect ZIP directory position: {error}"))?
-                    .checked_add(variable_len)
-                    .ok_or_else(|| "ZIP central directory offset overflow".to_owned())?;
+                    .map_err(|e| format!("cannot inspect central directory: {e}"))?;
+                let variable_end = zip_checked_end(variable_start, variable_len as u64, file_len)?;
 
-                if variable_end > file_len {
-                    return Err("truncated ZIP central directory variable fields".to_owned());
+                let mut raw_name = vec![0u8; name_len];
+                file.read_exact(&mut raw_name)
+                    .map_err(|e| format!("cannot read ZIP filename: {e}"))?;
+
+                if !names.insert(raw_name.clone()) {
+                    if matches!(
+                        raw_name.as_slice(),
+                        b"fabric.mod.json" | b"META-INF/mods.toml" | b"META-INF/neoforge.mods.toml"
+                    ) {
+                        return Err("duplicate Mod metadata ZIP entry".to_owned());
+                    }
+                    return Err(format!(
+                        "duplicate ZIP entry filename: {}",
+                        String::from_utf8_lossy(&raw_name)
+                    ));
                 }
 
-                let mut name = vec![0u8; name_len as usize];
-                file.read_exact(&mut name)
-                    .map_err(|error| format!("cannot read ZIP entry name: {error}"))?;
+                let mut extra = vec![0u8; extra_len];
+                file.read_exact(&mut extra)
+                    .map_err(|e| format!("cannot read central ZIP extra field: {e}"))?;
 
-                match name.as_slice() {
-                    b"fabric.mod.json" => fabric_count += 1,
-                    b"META-INF/mods.toml" => forge_count += 1,
-                    b"META-INF/neoforge.mods.toml" => neo_count += 1,
-                    _ => {}
+                let zip64 = parse_zip64_extra(
+                    &extra,
+                    uncompressed_32 == u32::MAX,
+                    compressed_32 == u32::MAX,
+                    local_offset_32 == u32::MAX,
+                    disk_start_16 == u16::MAX,
+                )?;
+
+                if zip64.disk_number_start.unwrap_or(0) != 0 {
+                    return Err("multi-disk ZIP64 entries are not supported".to_owned());
                 }
 
-                if fabric_count > 1 || forge_count > 1 || neo_count > 1 {
-                    return Err("duplicate Mod metadata ZIP entry".to_owned());
+                let compressed_size = zip64.compressed_size.unwrap_or(u64::from(compressed_32));
+                let uncompressed_size = zip64
+                    .uncompressed_size
+                    .unwrap_or(u64::from(uncompressed_32));
+                let local_offset = zip64
+                    .local_header_offset
+                    .unwrap_or(u64::from(local_offset_32));
+
+                let entry = archive
+                    .by_index_raw(index)
+                    .map_err(|e| format!("cannot inspect ZIP entry {index}: {e}"))?;
+
+                if entry.central_header_start() != record_start
+                    || entry.name_raw() != raw_name.as_slice()
+                    || entry.compressed_size() != compressed_size
+                    || entry.size() != uncompressed_size
+                    || entry.crc32() != crc
+                    || zip_compression_code(entry.compression()) != method
+                {
+                    return Err(format!("ZIP central index mismatch at entry {index}"));
                 }
+
+                let local_start = local_offset
+                    .checked_add(archive_offset)
+                    .ok_or_else(|| "ZIP local header offset overflow".to_owned())?;
+
+                if entry.header_start() != local_start {
+                    return Err(format!("ZIP local header offset mismatch at entry {index}"));
+                }
+
+                file.seek(SeekFrom::Start(local_start))
+                    .map_err(|e| format!("cannot seek to ZIP local header: {e}"))?;
+
+                let mut local = [0u8; 30];
+                file.read_exact(&mut local)
+                    .map_err(|e| format!("truncated ZIP local header: {e}"))?;
+
+                if zip_u32(&local, 0)? != ZIP_LOCAL_FILE_HEADER {
+                    return Err(format!("invalid ZIP local header at entry {index}"));
+                }
+
+                let local_flags = zip_u16(&local, 6)?;
+                let local_method = zip_u16(&local, 8)?;
+                let local_crc = zip_u32(&local, 14)?;
+                let local_compressed_32 = zip_u32(&local, 18)?;
+                let local_uncompressed_32 = zip_u32(&local, 22)?;
+                let local_name_len = zip_u16(&local, 26)? as usize;
+                let local_extra_len = zip_u16(&local, 28)? as usize;
+
+                if local_flags != flags || local_method != method {
+                    return Err(format!(
+                        "ZIP local/central flags or method mismatch at entry {index}"
+                    ));
+                }
+                if local_name_len != name_len {
+                    return Err(format!(
+                        "ZIP local/central filename length mismatch at entry {index}"
+                    ));
+                }
+
+                let mut local_name = vec![0u8; local_name_len];
+                file.read_exact(&mut local_name)
+                    .map_err(|e| format!("truncated ZIP local filename: {e}"))?;
+                if local_name != raw_name {
+                    return Err(format!(
+                        "ZIP local/central filename mismatch at entry {index}"
+                    ));
+                }
+
+                let mut local_extra = vec![0u8; local_extra_len];
+                file.read_exact(&mut local_extra)
+                    .map_err(|e| format!("truncated ZIP local extra field: {e}"))?;
+
+                let data_start = zip_checked_end(
+                    local_start,
+                    30u64 + local_name_len as u64 + local_extra_len as u64,
+                    file_len,
+                )?;
+
+                if entry.data_start() != data_start {
+                    return Err(format!("ZIP data offset mismatch at entry {index}"));
+                }
+
+                let descriptor = flags & (1 << 3) != 0;
+                if !descriptor {
+                    if local_crc != crc {
+                        return Err(format!("ZIP local CRC mismatch at entry {index}"));
+                    }
+
+                    let local_zip64 = parse_zip64_extra(
+                        &local_extra,
+                        local_uncompressed_32 == u32::MAX,
+                        local_compressed_32 == u32::MAX,
+                        false,
+                        false,
+                    )?;
+
+                    let local_compressed = local_zip64
+                        .compressed_size
+                        .unwrap_or(u64::from(local_compressed_32));
+                    let local_uncompressed = local_zip64
+                        .uncompressed_size
+                        .unwrap_or(u64::from(local_uncompressed_32));
+
+                    if local_compressed != compressed_size
+                        || local_uncompressed != uncompressed_size
+                    {
+                        return Err(format!("ZIP local size mismatch at entry {index}"));
+                    }
+                }
+
+                let data_end = zip_checked_end(data_start, compressed_size, central_start)?;
+
+                let range_end = if descriptor {
+                    let descriptor_start = data_end;
+                    file.seek(SeekFrom::Start(descriptor_start))
+                        .map_err(|e| format!("cannot seek to ZIP data descriptor: {e}"))?;
+
+                    let mut descriptor_bytes = [0u8; 24];
+                    let available = file_len.saturating_sub(descriptor_start).min(24) as usize;
+                    if available < 12 {
+                        return Err(format!("truncated ZIP data descriptor at entry {index}"));
+                    }
+                    file.read_exact(&mut descriptor_bytes[..available])
+                        .map_err(|e| format!("cannot read ZIP data descriptor: {e}"))?;
+
+                    let zip64_descriptor = compressed_size > u32::MAX as u64
+                        || uncompressed_size > u32::MAX as u64
+                        || compressed_32 == u32::MAX
+                        || uncompressed_32 == u32::MAX;
+
+                    let mut matched = None;
+                    for signed in [true, false] {
+                        let prefix = if signed { 4 } else { 0 };
+                        let required = prefix + if zip64_descriptor { 20 } else { 12 };
+                        if available < required {
+                            continue;
+                        }
+
+                        if signed && zip_u32(&descriptor_bytes, 0)? != ZIP_DATA_DESCRIPTOR {
+                            continue;
+                        }
+
+                        let candidate_crc = zip_u32(&descriptor_bytes, prefix)?;
+                        let (candidate_compressed, candidate_uncompressed) = if zip64_descriptor {
+                            (
+                                zip_u64(&descriptor_bytes, prefix + 4)?,
+                                zip_u64(&descriptor_bytes, prefix + 12)?,
+                            )
+                        } else {
+                            (
+                                u64::from(zip_u32(&descriptor_bytes, prefix + 4)?),
+                                u64::from(zip_u32(&descriptor_bytes, prefix + 8)?),
+                            )
+                        };
+
+                        if candidate_crc == crc
+                            && candidate_compressed == compressed_size
+                            && candidate_uncompressed == uncompressed_size
+                        {
+                            matched = Some(descriptor_start + required as u64);
+                            break;
+                        }
+                    }
+
+                    matched
+                        .ok_or_else(|| format!("invalid ZIP data descriptor at entry {index}"))?
+                } else {
+                    data_end
+                };
+
+                entry_ranges.push((local_start, range_end));
+                index = index
+                    .checked_add(1)
+                    .ok_or_else(|| "ZIP entry count overflow".to_owned())?;
 
                 file.seek(SeekFrom::Start(variable_end))
-                    .map_err(|error| format!("cannot skip ZIP directory fields: {error}"))?;
+                    .map_err(|e| format!("cannot seek to next ZIP central entry: {e}"))?;
             }
 
-            // ZIP64 end of central directory or classic EOCD.
-            0x06064b50 | 0x06054b50 => return Ok(()),
-
-            // Optional central directory digital signature.
-            0x05054b50 => {
-                let mut length = [0u8; 2];
-                file.read_exact(&mut length)
-                    .map_err(|error| format!("truncated ZIP directory signature: {error}"))?;
-
-                let length = u16::from_le_bytes(length) as u64;
-                let end = file
-                    .stream_position()
-                    .map_err(|error| format!("cannot inspect ZIP directory position: {error}"))?
-                    .checked_add(length)
-                    .ok_or_else(|| "ZIP directory signature offset overflow".to_owned())?;
-
-                if end > file_len {
-                    return Err("truncated ZIP directory signature data".to_owned());
-                }
-
-                file.seek(SeekFrom::Start(end))
-                    .map_err(|error| format!("cannot skip ZIP directory signature: {error}"))?;
+            0x06054b50 | 0x06064b50 => {
+                central_end = Some(record_start);
+                break;
             }
 
             _ => {
                 return Err(format!(
-                    "invalid ZIP central directory record signature at offset {position}"
+                    "invalid ZIP central directory record at offset {record_start}"
                 ));
             }
         }
     }
+
+    let central_end =
+        central_end.ok_or_else(|| "missing ZIP end-of-central-directory record".to_owned())?;
+    validate_zip_end_records(
+        &mut file,
+        file_len,
+        central_start,
+        central_end,
+        archive_offset,
+        index,
+    )?;
+
+    if index != archive.len() {
+        return Err(format!(
+            "ZIP central directory count mismatch: raw={index}, parsed={}",
+            archive.len()
+        ));
+    }
+
+    entry_ranges.sort_unstable_by_key(|range| range.0);
+    for pair in entry_ranges.windows(2) {
+        if pair[0].1 > pair[1].0 {
+            return Err("overlapping ZIP local entry ranges".to_owned());
+        }
+    }
+
+    Ok(())
 }
 
 pub fn scan_mod_jar(path: &Path) -> Result<ModMetadata, String> {
     let file = File::open(path).map_err(|e| format!("cannot open JAR: {e}"))?;
     let mut archive = ZipArchive::new(file).map_err(|e| format!("invalid JAR/ZIP: {e}"))?;
 
-    reject_duplicate_metadata_entries(path, archive.central_directory_start())?;
+    validate_zip_structure(path, &mut archive)?;
 
-    let mut fabric_count = 0usize;
-    let mut forge_count = 0usize;
-    let mut neo_count = 0usize;
-
-    // Enumerate central-directory entries by index. file_names() may
-    // expose deduplicated names and is therefore unsuitable for duplicate
-    // metadata detection.
-    for index in 0..archive.len() {
-        let name = archive
-            .by_index(index)
-            .map_err(|error| format!("cannot inspect ZIP entry {index}: {error}"))?
-            .name()
-            .to_owned();
-
-        match name.as_str() {
-            "fabric.mod.json" => fabric_count += 1,
-            "META-INF/mods.toml" => forge_count += 1,
-            "META-INF/neoforge.mods.toml" => neo_count += 1,
-            _ => {}
-        }
-    }
-
-    if fabric_count > 1 || forge_count > 1 || neo_count > 1 {
-        return Err("duplicate Mod metadata ZIP entry".to_owned());
-    }
-
-    let fabric = fabric_count == 1;
-    let forge = forge_count == 1;
-    let neo = neo_count == 1;
+    // Raw central-directory records were checked above, before ZipArchive
+    // could collapse duplicate filenames into its internal name map.
+    let fabric = archive.file_names().any(|name| name == "fabric.mod.json");
+    let forge = archive
+        .file_names()
+        .any(|name| name == "META-INF/mods.toml");
+    let neo = archive
+        .file_names()
+        .any(|name| name == "META-INF/neoforge.mods.toml");
 
     let count = usize::from(fabric) + usize::from(forge) + usize::from(neo);
     if count == 0 {
@@ -803,7 +1439,11 @@ pub fn plan_assignments(report: &ModScanReport, target_loader: LoaderKind) -> Ve
             } else {
                 let mut rejection: Option<String> = None;
 
-                for dependency in metadata.dependencies.iter().filter(|dep| dep.mandatory) {
+                for dependency in metadata
+                    .dependencies
+                    .iter()
+                    .filter(|dep| dep.kind == DependencyKind::Required && dep.mandatory)
+                {
                     // Minecraft's version is retained in metadata, but the active game version
                     // is not yet supplied to this planner.
                     if dependency.mod_id == "minecraft" {
@@ -1217,6 +1857,7 @@ versionRange="[1,2)"
             vec![ModDependency {
                 mod_id: "helper".to_owned(),
                 mandatory: true,
+                kind: DependencyKind::Required,
                 version_requirement: None,
             }],
             vec![],
@@ -1247,6 +1888,7 @@ versionRange="[1,2)"
             vec![ModDependency {
                 mod_id: "helper".to_owned(),
                 mandatory: true,
+                kind: DependencyKind::Required,
                 version_requirement: Some("^2.0".to_owned()),
             }],
             vec![],
@@ -1417,6 +2059,7 @@ versionRange="[1,2)"
             vec![ModDependency {
                 mod_id: "optional_helper".to_owned(),
                 mandatory: false,
+                kind: DependencyKind::Optional,
                 version_requirement: None,
             }],
             vec![],
@@ -1443,6 +2086,7 @@ versionRange="[1,2)"
             vec![ModDependency {
                 mod_id: "leaf".to_owned(),
                 mandatory: true,
+                kind: DependencyKind::Required,
                 version_requirement: Some("[1.0,2.0)".to_owned()),
             }],
             vec![],
@@ -1454,6 +2098,7 @@ versionRange="[1,2)"
             vec![ModDependency {
                 mod_id: "middle".to_owned(),
                 mandatory: true,
+                kind: DependencyKind::Required,
                 version_requirement: Some("[1.0,2.0)".to_owned()),
             }],
             vec![],
@@ -1485,6 +2130,7 @@ versionRange="[1,2)"
             dependencies: vec![ModDependency {
                 mod_id: "missing".into(),
                 mandatory: true,
+                kind: DependencyKind::Required,
                 version_requirement: None,
             }],
             conflicts: vec![],

@@ -30,7 +30,6 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::env;
 use std::fs;
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::thread;
 
@@ -1337,9 +1336,24 @@ fn launch_forge_subprocess(sandbox_dir: &Path) {
     cmd.stdout(std::process::Stdio::inherit());
     cmd.stderr(std::process::Stdio::inherit());
 
+    cmd.env(
+        "JVM_COMBINER_BUS_SOCKET",
+        data_bus_socket_path().expect("[DataBus] Forge socket path unavailable"),
+    );
+
     match cmd.spawn() {
         Ok(mut child) => {
+            if let Err(error) = authorize_data_bus("forge", child.id()) {
+                eprintln!("[Forge][SECURITY] DataBus authorization failed: {error}");
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+            let pid = child.id();
             let status = child.wait();
+            if let Err(error) = revoke_data_bus("forge", pid) {
+                eprintln!("[Forge][SECURITY] DataBus revoke failed: {error}");
+            }
             println!("[Forge] Subprocess exited: {:?}", status);
         }
         Err(e) => {
@@ -1787,15 +1801,33 @@ fn launch_neoforge_subprocess(sandbox_dir: &Path) {
         }
     };
 
+    command.env(
+        "JVM_COMBINER_BUS_SOCKET",
+        data_bus_socket_path().expect("[DataBus] NeoForge socket path unavailable"),
+    );
+
     eprintln!("[neoforge] 启动 NeoForge 21.4.161...");
 
     match command.spawn() {
-        Ok(mut child) => match child.wait() {
-            Ok(status) => {
-                eprintln!("[neoforge] 进程退出状态: {}", status);
+        Ok(mut child) => {
+            if let Err(error) = authorize_data_bus("neoforge", child.id()) {
+                eprintln!("[neoforge][SECURITY] DataBus authorization failed: {error}");
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
             }
-            Err(error) => eprintln!("[neoforge] 等待 Java 进程失败: {error}"),
-        },
+
+            let pid = child.id();
+            match child.wait() {
+                Ok(status) => {
+                    eprintln!("[neoforge] 进程退出状态: {}", status);
+                }
+                Err(error) => eprintln!("[neoforge] 等待 Java 进程失败: {error}"),
+            }
+            if let Err(error) = revoke_data_bus("neoforge", pid) {
+                eprintln!("[neoforge][SECURITY] DataBus revoke failed: {error}");
+            }
+        }
         Err(error) => eprintln!("[neoforge] 启动 Java 失败: {error}"),
     }
 }
@@ -1830,10 +1862,20 @@ fn fail_closed_shutdown(
     last_registered_windows.clear();
 
     if let Some(mut child) = fabric_child.take() {
+        if let Err(error) = revoke_data_bus("fabric", child.id()) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("[Fusion][SECURITY] Fabric DataBus revoke failed: {error}");
+            }
+        }
         terminate_owned_child(&mut child, "Fabric");
     }
 
     if let Some(mut child) = neoforge_child.take() {
+        if let Err(error) = revoke_data_bus("neoforge", child.id()) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("[Fusion][SECURITY] NeoForge DataBus revoke failed: {error}");
+            }
+        }
         terminate_owned_child(&mut child, "NeoForge");
     }
 }
@@ -2029,237 +2071,22 @@ mod fusion_child_liveness_tests {
     }
 }
 
+mod data_bus;
+
 fn start_data_bus() -> std::io::Result<()> {
-    use std::collections::HashMap;
-    use std::io::{BufRead, BufReader, Write};
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    };
+    data_bus::start()
+}
 
-    // Each registration is tied to one specific TCP connection.
-    struct PeerRegistration {
-        connection_id: u64,
-        sender: std::sync::mpsc::Sender<String>,
-    }
+fn authorize_data_bus(role: &str, pid: u32) -> std::io::Result<()> {
+    data_bus::authorize(role, pid)
+}
 
-    // name -> current connection registration
-    let registry: Arc<Mutex<HashMap<String, PeerRegistration>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+fn revoke_data_bus(role: &str, pid: u32) -> std::io::Result<()> {
+    data_bus::revoke(role, pid)
+}
 
-    // Monotonically increasing ID prevents an old connection from
-    // deleting a newer connection registered under the same name.
-    let next_connection_id = Arc::new(AtomicU64::new(1));
-
-    let listener = TcpListener::bind("127.0.0.1:25565")?;
-    println!("[DataBus] 路由总线已启动，监听 127.0.0.1:25565");
-
-    thread::spawn(move || {
-        for stream in listener.incoming() {
-            let stream = match stream {
-                Ok(s) => s,
-                Err(e) => {
-                    println!("[DataBus] accept 失败: {}", e);
-                    continue;
-                }
-            };
-
-            let registry = registry.clone();
-            let next_connection_id = next_connection_id.clone();
-
-            thread::spawn(move || {
-                let connection_id = next_connection_id.fetch_add(1, Ordering::Relaxed);
-
-                let peer = stream
-                    .peer_addr()
-                    .map(|a| a.to_string())
-                    .unwrap_or_default();
-                let reader_stream = match stream.try_clone() {
-                    Ok(s) => s,
-                    Err(e) => {
-                        println!("[DataBus] clone 失败: {}", e);
-                        return;
-                    }
-                };
-                let mut writer = stream;
-                let reader = BufReader::new(reader_stream);
-
-                // 每个连接一个写线程 + mpsc，防止跨线程写交错
-                let (tx, rx) = std::sync::mpsc::channel::<String>();
-                let write_handle = thread::spawn(move || {
-                    for line in rx {
-                        if writer.write_all(line.as_bytes()).is_err() {
-                            break;
-                        }
-                        if writer
-                            .write_all(
-                                b"
-",
-                            )
-                            .is_err()
-                        {
-                            break;
-                        }
-                        let _ = writer.flush();
-                    }
-                });
-
-                let mut my_name: Option<String> = None;
-
-                for line in reader.lines() {
-                    let line = match line {
-                        Ok(l) => l,
-                        Err(_) => break,
-                    };
-                    let line = line.trim();
-                    if line.is_empty() {
-                        continue;
-                    }
-
-                    // 第一条必须是 register
-                    if my_name.is_none() {
-                        let name = serde_json::from_str::<serde_json::Value>(line)
-                            .ok()
-                            .and_then(|v| {
-                                v.get("register")
-                                    .and_then(|r| r.as_str())
-                                    .map(|s| s.to_string())
-                            });
-                        match name {
-                            Some(n) => {
-                                println!("[DataBus] {} 注册为 '{}'", peer, n);
-                                registry.lock().unwrap().insert(
-                                    n.clone(),
-                                    PeerRegistration {
-                                        connection_id,
-                                        sender: tx.clone(),
-                                    },
-                                );
-                                my_name = Some(n);
-                            }
-                            None => {
-                                let _ = tx.send(r#"{"error":"must_register_first"}"#.to_string());
-                                break;
-                            }
-                        }
-                        continue;
-                    }
-
-                    // 路由
-                    let v: serde_json::Value = match serde_json::from_str(line) {
-                        Ok(v) => v,
-                        Err(_) => {
-                            let _ = tx.send(format!(r#"{{"error":"bad_json","raw":{:?}}}"#, line));
-                            continue;
-                        }
-                    };
-                    let to = v.get("to").and_then(|t| t.as_str()).unwrap_or("");
-                    let is_broadcast = v
-                        .get("broadcast")
-                        .and_then(|b| b.as_bool())
-                        .unwrap_or(false);
-                    let from = my_name.clone().unwrap_or_default();
-
-                    // One-way authority policy:
-                    // Fabric is the only authoritative publisher of player
-                    // and Monster state messages.
-                    let message_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
-
-                    let fabric_only_message = matches!(
-                        message_type,
-                        "player_move" | "monster_spawn" | "monster_update" | "monster_remove"
-                    );
-
-                    if fabric_only_message && from != "fabric" {
-                        println!(
-                            "[DataBus][REJECT] '{}' attempted to publish {}",
-                            from, message_type
-                        );
-
-                        let rejection = serde_json::json!({
-                            "error": "state_authority_violation",
-                            "message_type": message_type,
-                            "authoritative_sender": "fabric"
-                        });
-
-                        let _ = tx.send(rejection.to_string());
-
-                        continue;
-                    }
-
-                    if to.is_empty() && !is_broadcast {
-                        let _ = tx.send(r#"{"error":"missing_to"}"#.to_string());
-                        continue;
-                    }
-
-                    let mut forward = v.clone();
-                    forward["from"] = serde_json::Value::String(from.clone());
-
-                    if is_broadcast {
-                        // 广播模式：发给所有已注册的客户端
-                        let payload = serde_json::to_string(&forward).unwrap_or_default();
-                        let reg = registry.lock().unwrap();
-                        for (name, registration) in reg.iter() {
-                            if name != &from {
-                                if registration.sender.send(payload.clone()).is_ok() {
-                                    println!("[DataBus] {} 广播 -> {}", from, name);
-                                }
-                            }
-                        }
-                    } else {
-                        // 点对点路由模式
-                        let target_tx = registry
-                            .lock()
-                            .unwrap()
-                            .get(to)
-                            .map(|registration| registration.sender.clone());
-                        match target_tx {
-                            Some(peer_tx) => {
-                                let payload = serde_json::to_string(&forward).unwrap_or_default();
-                                if peer_tx.send(payload).is_ok() {
-                                    println!("[DataBus] {} -> {} routed", from, to);
-                                    let ack = format!(
-                                        r#"{{"routed":true,"from":"{}","to":"{}"}}"#,
-                                        from, to
-                                    );
-                                    let _ = tx.send(ack);
-                                } else {
-                                    let _ = tx.send(format!(
-                                        r#"{{"error":"peer_write_failed","to":"{}"}}"#,
-                                        to
-                                    ));
-                                }
-                            }
-                            None => {
-                                println!("[DataBus] {} -> {} 目标不在线", from, to);
-                                let _ =
-                                    tx.send(format!(r#"{{"error":"peer_offline","to":"{}"}}"#, to));
-                            }
-                        }
-                    }
-                }
-
-                if let Some(name) = my_name {
-                    let mut reg = registry.lock().unwrap();
-
-                    let is_current_connection = reg
-                        .get(&name)
-                        .map(|registration| registration.connection_id == connection_id)
-                        .unwrap_or(false);
-
-                    if is_current_connection {
-                        reg.remove(&name);
-                        println!("[DataBus] '{}' 断开，已清理当前注册项", name);
-                    } else {
-                        println!("[DataBus] '{}' 旧连接断开，保留新连接注册项", name);
-                    }
-                }
-                drop(tx);
-                let _ = write_handle;
-            });
-        }
-    });
-    Ok(())
+fn data_bus_socket_path() -> std::io::Result<std::path::PathBuf> {
+    data_bus::socket_path()
 }
 
 fn is_window_restore_invocation(args: &[String]) -> bool {
@@ -4309,7 +4136,7 @@ fn main() {
 
     if is_bus_test {
         println!("=== 启动数据总线测试模式 ===");
-        start_data_bus().expect("[DataBus] bus-test 无法监听 127.0.0.1:25565");
+        start_data_bus().expect("[DataBus] bus-test 无法启动 UDS DataBus");
         loop {
             thread::sleep(std::time::Duration::from_secs(60));
         }
@@ -4317,7 +4144,7 @@ fn main() {
 
     if is_fusion {
         println!("=== 启动双沙盒 Fusion 模式 ===");
-        start_data_bus().expect("[DataBus] Fusion 父进程无法监听 127.0.0.1:25565");
+        start_data_bus().expect("[DataBus] Fusion 父进程无法启动 UDS DataBus");
         let current_dir = env::current_dir().unwrap();
         let sandbox_dir = current_dir.join("sandbox");
         let window_runtime = window_integration::WindowRuntime::start_local(&current_dir)
@@ -4452,6 +4279,10 @@ fn main() {
             .arg("fabric")
             .current_dir(&current_dir)
             .env("JVM_COMBINER_BUS_EXTERNAL", "1")
+            .env(
+                "JVM_COMBINER_BUS_SOCKET",
+                data_bus_socket_path().expect("[DataBus] socket path unavailable"),
+            )
             .env("JVM_COMBINER_WINDOW_EXTERNAL", "1")
             .env("JVM_COMBINER_WINDOW_SOCKET", &window_socket_path)
             .stdout(std::process::Stdio::piped())
@@ -4485,6 +4316,16 @@ fn main() {
                 return;
             }
         };
+        if let Err(error) = authorize_data_bus("fabric", fabric_pid) {
+            eprintln!("[Fusion][SECURITY] Fabric DataBus authorization failed: {error}");
+            fail_closed_shutdown(
+                control_snapshot.as_ref(),
+                &mut last_registered_windows,
+                &mut fabric_child,
+                &mut neoforge_child,
+            );
+            return;
+        }
         eprintln!("[Fusion] Fabric Rust child started: pid={fabric_pid}");
         log_hub.push(
             "fusion",
@@ -4546,6 +4387,11 @@ fn main() {
             };
 
         neoforge_command
+            .env("JVM_COMBINER_BUS_EXTERNAL", "1")
+            .env(
+                "JVM_COMBINER_BUS_SOCKET",
+                data_bus_socket_path().expect("[Fusion] NeoForge bus socket unavailable"),
+            )
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
@@ -4581,6 +4427,18 @@ fn main() {
                 return;
             }
         };
+        if let Err(error) = authorize_data_bus("neoforge", neoforge_pid) {
+            eprintln!("[Fusion][SECURITY] NeoForge DataBus authorization failed: {error}");
+            fail_closed_shutdown(
+                control_snapshot.as_ref(),
+                &mut last_registered_windows,
+                &mut fabric_child,
+                &mut neoforge_child,
+            );
+            eprintln!("[Fusion] Fail-closed shutdown: NeoForge DataBus authorization failed");
+            return;
+        }
+
         eprintln!("[Fusion] NeoForge Java child started: pid={neoforge_pid}");
         log_hub.push(
             "fusion",
@@ -4677,6 +4535,9 @@ fn main() {
                         "WARN",
                         &format!("Fabric child exited: {status}"),
                     );
+                    if let Err(error) = revoke_data_bus("fabric", fabric_pid) {
+                        eprintln!("[Fusion][SECURITY] Fabric DataBus revoke failed: {error}");
+                    }
                     fabric_child = None;
                 }
                 ChildPoll::Failed(error) => {
@@ -4711,6 +4572,9 @@ fn main() {
                         "WARN",
                         &format!("NeoForge child exited: {status}"),
                     );
+                    if let Err(error) = revoke_data_bus("neoforge", neoforge_pid) {
+                        eprintln!("[Fusion][SECURITY] NeoForge DataBus revoke failed: {error}");
+                    }
                     neoforge_child = None;
                 }
                 ChildPoll::Failed(error) => {
@@ -4935,7 +4799,7 @@ fn main() {
     // Forge: launch as a subprocess with proper -p / --add-modules
     if is_forge {
         if env::var_os("JVM_COMBINER_BUS_EXTERNAL").is_none() {
-            start_data_bus().expect("[DataBus] Forge 无法监听 127.0.0.1:25565");
+            start_data_bus().expect("[DataBus] Forge 无法启动 UDS DataBus");
         }
 
         launch_forge_subprocess(&sandbox_dir);
@@ -4948,7 +4812,7 @@ fn main() {
         || args.iter().any(|arg| arg == "neoforge");
     if is_neoforge {
         if env::var_os("JVM_COMBINER_BUS_EXTERNAL").is_none() {
-            start_data_bus().expect("[DataBus] NeoForge 无法监听 127.0.0.1:25565");
+            start_data_bus().expect("[DataBus] NeoForge 无法启动 UDS DataBus");
         }
 
         launch_neoforge_subprocess(&sandbox_dir);
@@ -4956,7 +4820,11 @@ fn main() {
     }
     // Fabric uses JNI, so start DataBus before creating the JVM.
     if env::var_os("JVM_COMBINER_BUS_EXTERNAL").is_none() {
-        start_data_bus().expect("[DataBus] Fabric 无法监听 127.0.0.1:25565");
+        start_data_bus().expect("[DataBus] Fabric UDS startup failed");
+        authorize_data_bus("fabric", std::process::id())
+            .expect("[DataBus] Fabric process authorization failed");
+    } else if env::var_os("JVM_COMBINER_BUS_SOCKET").is_none() {
+        panic!("[DataBus] external mode requires JVM_COMBINER_BUS_SOCKET");
     }
 
     let (bootstrap_cp, legacy_cp) = build_classpath(is_forge, &sandbox_dir);
@@ -5350,7 +5218,10 @@ mod forge_jar_cache_tests {
     use std::collections::HashMap;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_TEST_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
     struct TestFile {
         root: PathBuf,
@@ -5364,13 +5235,24 @@ mod forge_jar_cache_tests {
                 .expect("system clock error")
                 .as_nanos();
 
-            let root = std::env::temp_dir().join(format!(
-                "jvm-combiner-r2-cache-{}-{}",
-                std::process::id(),
-                nonce
-            ));
+            let root = loop {
+                let sequence = NEXT_TEST_FILE_ID.fetch_add(1, Ordering::Relaxed);
 
-            fs::create_dir_all(&root).expect("create test directory");
+                let candidate = std::env::temp_dir().join(format!(
+                    "jvm-combiner-r2-cache-{}-{}-{}",
+                    std::process::id(),
+                    nonce,
+                    sequence
+                ));
+
+                match fs::create_dir(&candidate) {
+                    Ok(()) => break candidate,
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => {
+                        panic!("create test directory {}: {error}", candidate.display());
+                    }
+                }
+            };
 
             let path = root.join(name);
             fs::write(&path, b"test").expect("create test file");

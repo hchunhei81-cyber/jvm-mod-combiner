@@ -3,6 +3,8 @@ import java.net.*;
 import java.lang.instrument.*;
 import java.lang.reflect.*;
 import java.util.*;
+import java.nio.channels.Channels;
+import java.nio.channels.SocketChannel;
 
 public class BusAgent {
     private static final java.util.regex.Pattern MESSAGE_TYPE_PATTERN =
@@ -579,23 +581,26 @@ public class BusAgent {
             default -> "";
         };
 
-        while (!Thread.currentThread().isInterrupted()) {
-            try (Socket socket = new Socket()) {
-                socket.connect(
-                        new InetSocketAddress("127.0.0.1", 25565),
-                        3000);
+        String socketPath = System.getenv("JVM_COMBINER_BUS_SOCKET");
+        if (socketPath == null || socketPath.isBlank()) {
+            System.err.println(
+                    "[BusAgent:" + myName + "] JVM_COMBINER_BUS_SOCKET is missing");
+            return;
+        }
 
-                socket.setKeepAlive(true);
-                socket.setTcpNoDelay(true);
+        while (!Thread.currentThread().isInterrupted()) {
+            try (SocketChannel channel =
+                         SocketChannel.open(java.net.StandardProtocolFamily.UNIX)) {
+                channel.connect(java.net.UnixDomainSocketAddress.of(socketPath));
 
                 try (
                         BufferedReader in = new BufferedReader(
                                 new InputStreamReader(
-                                        socket.getInputStream(),
+                                        Channels.newInputStream(channel),
                                         java.nio.charset.StandardCharsets.UTF_8));
                         PrintWriter writer = new PrintWriter(
                                 new OutputStreamWriter(
-                                        socket.getOutputStream(),
+                                        Channels.newOutputStream(channel),
                                         java.nio.charset.StandardCharsets.UTF_8),
                                 true)) {
                     synchronized (BusAgent.class) {
@@ -607,7 +612,6 @@ public class BusAgent {
                             lastFabricReceiveAt = 0L;
                         }
                     }
-                    writer.println("{\"register\":\"" + myName + "\"}");
 
                     System.out.println(
                             "[BusAgent:" + myName + "] Connected to DataBus");

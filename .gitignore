@@ -51,6 +51,7 @@ env/
 # --- local analysis and coverage reports ---
 # These are used generated to analysis and coverage tools.
 main.sh
+output/
 
 # --- Local Minecraft sandbox and save data ---
 # The sandbox and saves are local runtime data, not project sources.

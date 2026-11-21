@@ -90,6 +90,8 @@ others/
 # --- Supabase local development & Edge Functions ---
 # Keep local Supabase configs, temp data, and secrets out of version control.
 .supabase/
+# this will be TEMPORARY be here,I think...
+supabase/
 supabase/.temp/
 *.dump
 .npmrc

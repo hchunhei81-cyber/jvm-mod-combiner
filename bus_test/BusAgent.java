@@ -7,98 +7,200 @@ import java.nio.channels.Channels;
 import java.nio.channels.SocketChannel;
 
 public class BusAgent {
-    private static final java.util.regex.Pattern MESSAGE_TYPE_PATTERN =
-            java.util.regex.Pattern.compile("\"type\"\\s*:\\s*\"([^\"]+)\"");
+    private static final java.util.regex.Pattern UUID_PATTERN = java.util.regex.Pattern.compile(
+            "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-" +
+                    "[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-" +
+                    "[0-9a-fA-F]{12}");
 
-    private static final java.util.regex.Pattern MESSAGE_FROM_PATTERN =
-            java.util.regex.Pattern.compile("\"from\"\\s*:\\s*\"([^\"]+)\"");
+    private static final java.util.regex.Pattern ENTITY_TYPE_PATTERN = java.util.regex.Pattern
+            .compile("[a-z0-9_.-]+:[a-z0-9_./-]+");
 
+    private static final java.util.Set<String> ACK_FIELDS = java.util.Set.of("from", "to", "type", "uuid", "seq");
 
-    // Precompiled JSON field patterns for the fixed protocol fields.
-    private static final java.util.regex.Pattern JSON_SPRINT_TRUE_PATTERN =
-            java.util.regex.Pattern.compile("(?s).*\"sprint\"\\s*:\\s*true.*");
+    private static final java.util.Set<String> PLAYER_FIELDS = java.util.Set.of(
+            "from", "to", "type",
+            "x", "y", "z", "yaw", "pitch", "sprint");
 
-    private static final java.util.regex.Pattern JSON_PLAYER_X_PATTERN =
-            java.util.regex.Pattern.compile("\"x\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
-    private static final java.util.regex.Pattern JSON_PLAYER_Y_PATTERN =
-            java.util.regex.Pattern.compile("\"y\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
-    private static final java.util.regex.Pattern JSON_PLAYER_Z_PATTERN =
-            java.util.regex.Pattern.compile("\"z\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
-    private static final java.util.regex.Pattern JSON_PLAYER_YAW_PATTERN =
-            java.util.regex.Pattern.compile("\"yaw\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
-    private static final java.util.regex.Pattern JSON_PLAYER_PITCH_PATTERN =
-            java.util.regex.Pattern.compile("\"pitch\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+    private static final java.util.Set<String> MONSTER_FIELDS = java.util.Set.of(
+            "from", "to", "type", "uuid", "seq", "entity_type",
+            "x", "y", "z", "yaw", "pitch", "health", "max_health");
 
-    private static final java.util.regex.Pattern JSON_MONSTER_UUID_PATTERN =
-            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("uuid") + "\"\\s*:\\s*\"([^\"]*)\"");
-    private static final java.util.regex.Pattern JSON_MONSTER_ENTITY_TYPE_PATTERN =
-            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("entity_type") + "\"\\s*:\\s*\"([^\"]*)\"");
-    private static final java.util.regex.Pattern JSON_MONSTER_TYPE_PATTERN =
-            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("type") + "\"\\s*:\\s*\"([^\"]*)\"");
+    private static final java.util.Set<String> MONSTER_REMOVE_FIELDS = java.util.Set.of("from", "to", "type", "uuid",
+            "seq");
 
-    private static final java.util.regex.Pattern JSON_MONSTER_X_PATTERN =
-            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("x") + "\"\\s*:\\s*(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
-    private static final java.util.regex.Pattern JSON_MONSTER_Y_PATTERN =
-            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("y") + "\"\\s*:\\s*(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
-    private static final java.util.regex.Pattern JSON_MONSTER_Z_PATTERN =
-            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("z") + "\"\\s*:\\s*(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
-    private static final java.util.regex.Pattern JSON_MONSTER_YAW_PATTERN =
-            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("yaw") + "\"\\s*:\\s*(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
-    private static final java.util.regex.Pattern JSON_MONSTER_PITCH_PATTERN =
-            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("pitch") + "\"\\s*:\\s*(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
-    private static final java.util.regex.Pattern JSON_MONSTER_HEALTH_PATTERN =
-            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("health") + "\"\\s*:\\s*(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
-    private static final java.util.regex.Pattern JSON_MONSTER_MAX_HEALTH_PATTERN =
-            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("max_health") + "\"\\s*:\\s*(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
+    private static final java.util.concurrent.atomic.AtomicLong LAST_INVALID_MESSAGE_LOG_AT = new java.util.concurrent.atomic.AtomicLong(
+            0L);
 
-    private static final java.util.regex.Pattern JSON_MONSTER_SEQ_PATTERN =
-            java.util.regex.Pattern.compile("\"" + java.util.regex.Pattern.quote("seq") + "\"\\s*:\\s*([0-9]+)");
+    private static void logRejectedMessage(String reason) {
+        long now = System.currentTimeMillis();
+        long previous = LAST_INVALID_MESSAGE_LOG_AT.get();
 
-    private static java.util.regex.Pattern playerNumberPattern(String key) {
-        if ("x".equals(key)) return JSON_PLAYER_X_PATTERN;
-        if ("y".equals(key)) return JSON_PLAYER_Y_PATTERN;
-        if ("z".equals(key)) return JSON_PLAYER_Z_PATTERN;
-        if ("yaw".equals(key)) return JSON_PLAYER_YAW_PATTERN;
-        if ("pitch".equals(key)) return JSON_PLAYER_PITCH_PATTERN;
-        return java.util.regex.Pattern.compile(
-                "\"" + key + "\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+        if (now - previous >= 1000L &&
+                LAST_INVALID_MESSAGE_LOG_AT.compareAndSet(previous, now)) {
+            System.err.println(
+                    "[BusAgent:" + myName +
+                            "][DataBus][REJECTED] " + reason);
+        }
     }
 
-    private static java.util.regex.Pattern monsterStringPattern(String key) {
-        if ("uuid".equals(key)) return JSON_MONSTER_UUID_PATTERN;
-        if ("entity_type".equals(key)) return JSON_MONSTER_ENTITY_TYPE_PATTERN;
-        if ("type".equals(key)) return JSON_MONSTER_TYPE_PATTERN;
-        return java.util.regex.Pattern.compile(
-                "\"" + java.util.regex.Pattern.quote(key) +
-                        "\"\\s*:\\s*\"([^\"]*)\"");
+    /**
+     * Reads one newline-terminated message without allocating an
+     * unbounded String or accepting a truncated final message.
+     */
+    private static byte[] readBoundedLine(java.io.InputStream input)
+            throws java.io.IOException {
+        java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream(1024);
+
+        while (true) {
+            int value = input.read();
+
+            if (value < 0) {
+                if (buffer.size() == 0) {
+                    return null;
+                }
+                throw new java.io.IOException(
+                        "Truncated DataBus message without newline");
+            }
+
+            if (value == '\n') {
+                return buffer.toByteArray();
+            }
+
+            if (buffer.size() >= StrictJson.MAX_MESSAGE_BYTES) {
+                throw new java.io.IOException(
+                        "DataBus message exceeds 64 KiB");
+            }
+
+            buffer.write(value);
+        }
     }
 
-    private static java.util.regex.Pattern monsterNumberPattern(String key) {
-        if ("x".equals(key)) return JSON_MONSTER_X_PATTERN;
-        if ("y".equals(key)) return JSON_MONSTER_Y_PATTERN;
-        if ("z".equals(key)) return JSON_MONSTER_Z_PATTERN;
-        if ("yaw".equals(key)) return JSON_MONSTER_YAW_PATTERN;
-        if ("pitch".equals(key)) return JSON_MONSTER_PITCH_PATTERN;
-        if ("health".equals(key)) return JSON_MONSTER_HEALTH_PATTERN;
-        if ("max_health".equals(key)) return JSON_MONSTER_MAX_HEALTH_PATTERN;
-        return java.util.regex.Pattern.compile(
-                "\"" + java.util.regex.Pattern.quote(key) +
-                        "\"\\s*:\\s*" +
-                        "(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?)");
-    }
+    /**
+     * Validates direction, exact field set, and every field type.
+     * Rust injects "from"; Java must never manufacture that identity.
+     */
+    private static String validateInboundMessage(
+            java.util.Map<String, Object> message,
+            String expectedPeer,
+            String localRole) {
 
-    private static java.util.regex.Pattern monsterLongPattern(String key) {
-        if ("seq".equals(key)) return JSON_MONSTER_SEQ_PATTERN;
-        return java.util.regex.Pattern.compile(
-                "\"" + java.util.regex.Pattern.quote(key) +
-                        "\"\\s*:\\s*([0-9]+)");
+        String type = StrictJson.string(message, "type");
+        String from = StrictJson.string(message, "from");
+        String to = StrictJson.string(message, "to");
+
+        if (!expectedPeer.equals(from) || !localRole.equals(to)) {
+            throw new IllegalArgumentException(
+                    "Unexpected DataBus message direction");
+        }
+
+        switch (type) {
+            case "monster_ack":
+                if (!"fabric".equals(localRole) ||
+                        !"neoforge".equals(expectedPeer)) {
+                    throw new IllegalArgumentException(
+                            "monster_ack received by wrong role");
+                }
+
+                StrictJson.requireKeys(message, ACK_FIELDS, ACK_FIELDS);
+
+                String ackUuid = StrictJson.string(message, "uuid");
+                if (!UUID_PATTERN.matcher(ackUuid).matches()) {
+                    throw new IllegalArgumentException("Invalid ACK UUID");
+                }
+
+                StrictJson.positiveLong(message, "seq");
+                break;
+
+            case "monster_remove":
+                if (!"neoforge".equals(localRole) ||
+                        !"fabric".equals(expectedPeer)) {
+                    throw new IllegalArgumentException(
+                            "monster_remove received by wrong role");
+                }
+
+                StrictJson.requireKeys(
+                        message,
+                        MONSTER_REMOVE_FIELDS,
+                        MONSTER_REMOVE_FIELDS);
+
+                String removeUuid = StrictJson.string(message, "uuid");
+
+                if (!UUID_PATTERN.matcher(removeUuid).matches()) {
+                    throw new IllegalArgumentException(
+                            "Invalid monster removal UUID");
+                }
+
+                StrictJson.positiveLong(message, "seq");
+                break;
+
+            case "player_move":
+                if (!"neoforge".equals(localRole) ||
+                        !"fabric".equals(expectedPeer)) {
+                    throw new IllegalArgumentException(
+                            "player_move received by wrong role");
+                }
+
+                StrictJson.requireKeys(
+                        message, PLAYER_FIELDS, PLAYER_FIELDS);
+
+                StrictJson.finiteDouble(message, "x");
+                StrictJson.finiteDouble(message, "y");
+                StrictJson.finiteDouble(message, "z");
+                StrictJson.finiteFloat(message, "yaw");
+                StrictJson.finiteFloat(message, "pitch");
+                StrictJson.bool(message, "sprint");
+                break;
+
+            case "monster_spawn":
+            case "monster_update":
+                if (!"neoforge".equals(localRole) ||
+                        !"fabric".equals(expectedPeer)) {
+                    throw new IllegalArgumentException(
+                            "Monster state received by wrong role");
+                }
+
+                StrictJson.requireKeys(
+                        message, MONSTER_FIELDS, MONSTER_FIELDS);
+
+                String uuid = StrictJson.string(message, "uuid");
+                if (!UUID_PATTERN.matcher(uuid).matches()) {
+                    throw new IllegalArgumentException("Invalid monster UUID");
+                }
+
+                StrictJson.positiveLong(message, "seq");
+
+                String entityType = StrictJson.string(message, "entity_type");
+                if (!ENTITY_TYPE_PATTERN.matcher(entityType).matches()) {
+                    throw new IllegalArgumentException(
+                            "Invalid entity registry identifier");
+                }
+
+                StrictJson.finiteDouble(message, "x");
+                StrictJson.finiteDouble(message, "y");
+                StrictJson.finiteDouble(message, "z");
+                StrictJson.finiteFloat(message, "yaw");
+                StrictJson.finiteFloat(message, "pitch");
+
+                float health = StrictJson.finiteFloat(message, "health");
+                float maxHealth = StrictJson.finiteFloat(message, "max_health");
+
+                if (health < 0.0f || maxHealth < 0.0f) {
+                    throw new IllegalArgumentException(
+                            "Negative monster health");
+                }
+                break;
+
+            default:
+                throw new IllegalArgumentException(
+                        "Unsupported inbound message type");
+        }
+
+        return type;
     }
 
     // Default INFO keeps routine per-message diagnostics out of the console.
-    private static final String CONFIGURED_LOG_LEVEL =
-            System.getenv("JVM_COMBINER_LOG_LEVEL");
-    private static final boolean DEBUG_LOGS =
-            CONFIGURED_LOG_LEVEL != null &&
+    private static final String CONFIGURED_LOG_LEVEL = System.getenv("JVM_COMBINER_LOG_LEVEL");
+    private static final boolean DEBUG_LOGS = CONFIGURED_LOG_LEVEL != null &&
             "DEBUG".equalsIgnoreCase(CONFIGURED_LOG_LEVEL.trim());
 
     static void logDebug(String message) {
@@ -106,6 +208,7 @@ public class BusAgent {
             System.out.println(message);
         }
     }
+
     static volatile PrintWriter out;
     static String myName;
     static Instrumentation inst;
@@ -248,32 +351,22 @@ public class BusAgent {
         Class<?> registryApiClass = Class.forName(
                 "net.minecraft.core.Registry", true, loader);
 
-        Constructor<?> profileConstructor =
-                profileClass.getConstructor(java.util.UUID.class, String.class);
-        Constructor<?> playerConstructor =
-                playerClass.getConstructor(levelClass, profileClass);
+        Constructor<?> profileConstructor = profileClass.getConstructor(java.util.UUID.class, String.class);
+        Constructor<?> playerConstructor = playerClass.getConstructor(levelClass, profileClass);
 
         Method getEntity = levelClass.getMethod("getEntity", int.class);
         Method setId = entityClass.getMethod("setId", int.class);
-        Method setUUID =
-                entityClass.getMethod("setUUID", java.util.UUID.class);
+        Method setUUID = entityClass.getMethod("setUUID", java.util.UUID.class);
         Method setPos = entityClass.getMethod(
                 "setPos", double.class, double.class, double.class);
-        Method setOldPosAndRot =
-                entityClass.getMethod("setOldPosAndRot");
-        Method addEntity =
-                levelClass.getMethod("addEntity", entityClass);
+        Method setOldPosAndRot = entityClass.getMethod("setOldPosAndRot");
+        Method addEntity = levelClass.getMethod("addEntity", entityClass);
 
-        Method setYRot =
-                optionalPlayerMethod(playerClass, "setYRot", float.class);
-        Method setXRot =
-                optionalPlayerMethod(playerClass, "setXRot", float.class);
-        Method setYHeadRot =
-                optionalPlayerMethod(playerClass, "setYHeadRot", float.class);
-        Method setYBodyRot =
-                optionalPlayerMethod(playerClass, "setYBodyRot", float.class);
-        Method setSprinting =
-                optionalPlayerMethod(playerClass, "setSprinting", boolean.class);
+        Method setYRot = optionalPlayerMethod(playerClass, "setYRot", float.class);
+        Method setXRot = optionalPlayerMethod(playerClass, "setXRot", float.class);
+        Method setYHeadRot = optionalPlayerMethod(playerClass, "setYHeadRot", float.class);
+        Method setYBodyRot = optionalPlayerMethod(playerClass, "setYBodyRot", float.class);
+        Method setSprinting = optionalPlayerMethod(playerClass, "setSprinting", boolean.class);
 
         NeoForgePlayerBindings result = new NeoForgePlayerBindings(
                 loader,
@@ -299,7 +392,6 @@ public class BusAgent {
         return result;
     }
 
-
     // Immutable, ClassLoader-scoped NeoForge monster reflection bindings.
     static volatile NeoForgeMonsterBindings nfMonsterBindings = null;
 
@@ -323,6 +415,7 @@ public class BusAgent {
         final Method registryGetOptional;
         final Method entityTypeCreate;
         final Method clientLevelGetEntity;
+        final Method entityGetId;
         final Method entitySetId;
         final Method entitySetUUID;
         final Method entitySetPos;
@@ -351,6 +444,7 @@ public class BusAgent {
                 Method registryGetOptional,
                 Method entityTypeCreate,
                 Method clientLevelGetEntity,
+                Method entityGetId,
                 Method entitySetId,
                 Method entitySetUUID,
                 Method entitySetPos,
@@ -378,6 +472,7 @@ public class BusAgent {
             this.registryGetOptional = registryGetOptional;
             this.entityTypeCreate = entityTypeCreate;
             this.clientLevelGetEntity = clientLevelGetEntity;
+            this.entityGetId = entityGetId;
             this.entitySetId = entitySetId;
             this.entitySetUUID = entitySetUUID;
             this.entitySetPos = entitySetPos;
@@ -425,35 +520,25 @@ public class BusAgent {
             Class<?> spawnReasonClass = Class.forName(
                     "net.minecraft.world.entity.EntitySpawnReason", true, loader);
 
-            Field entityTypeRegistryField =
-                    registryClass.getField("ENTITY_TYPE");
+            Field entityTypeRegistryField = registryClass.getField("ENTITY_TYPE");
 
             Method entityIsRemoved = entityClass.getMethod("isRemoved");
-            Method resourceLocationParse =
-                    resourceLocationClass.getMethod("parse", String.class);
-            Method registryGetOptional =
-                    registryApiClass.getMethod("getOptional", resourceLocationClass);
-            Method entityTypeCreate =
-                    entityTypeClass.getMethod("create", levelClass, spawnReasonClass);
-            Method clientLevelGetEntity =
-                    clientLevelClass.getMethod("getEntity", int.class);
+            Method resourceLocationParse = resourceLocationClass.getMethod("parse", String.class);
+            Method registryGetOptional = registryApiClass.getMethod("getOptional", resourceLocationClass);
+            Method entityTypeCreate = entityTypeClass.getMethod("create", levelClass, spawnReasonClass);
+            Method clientLevelGetEntity = clientLevelClass.getMethod("getEntity", int.class);
+            Method entityGetId = entityClass.getMethod("getId");
             Method entitySetId = entityClass.getMethod("setId", int.class);
-            Method entitySetUUID =
-                    entityClass.getMethod("setUUID", java.util.UUID.class);
+            Method entitySetUUID = entityClass.getMethod("setUUID", java.util.UUID.class);
             Method entitySetPos = entityClass.getMethod(
                     "setPos", double.class, double.class, double.class);
             Method entitySetYRot = entityClass.getMethod("setYRot", float.class);
             Method entitySetXRot = entityClass.getMethod("setXRot", float.class);
-            Method entitySetYHeadRot =
-                    entityClass.getMethod("setYHeadRot", float.class);
-            Method entitySetYBodyRot =
-                    entityClass.getMethod("setYBodyRot", float.class);
-            Method entitySetOldPosAndRot =
-                    entityClass.getMethod("setOldPosAndRot");
-            Method clientLevelAddEntity =
-                    clientLevelClass.getMethod("addEntity", entityClass);
-            Method livingSetHealth =
-                    livingClass.getMethod("setHealth", float.class);
+            Method entitySetYHeadRot = entityClass.getMethod("setYHeadRot", float.class);
+            Method entitySetYBodyRot = entityClass.getMethod("setYBodyRot", float.class);
+            Method entitySetOldPosAndRot = entityClass.getMethod("setOldPosAndRot");
+            Method clientLevelAddEntity = clientLevelClass.getMethod("addEntity", entityClass);
+            Method livingSetHealth = livingClass.getMethod("setHealth", float.class);
 
             NeoForgeMonsterBindings result = new NeoForgeMonsterBindings(
                     loader,
@@ -472,6 +557,7 @@ public class BusAgent {
                     registryGetOptional,
                     entityTypeCreate,
                     clientLevelGetEntity,
+                    entityGetId,
                     entitySetId,
                     entitySetUUID,
                     entitySetPos,
@@ -491,6 +577,7 @@ public class BusAgent {
     static volatile Object remotePlayer = null;
     static volatile Object remotePlayerLevel = null;
     static final java.util.concurrent.ConcurrentHashMap<java.util.UUID, Object> remoteMonsters = new java.util.concurrent.ConcurrentHashMap<>();
+    static final MonsterSequenceTracker remoteMonsterSequences = new MonsterSequenceTracker(16384);
     static volatile Object remoteMonsterLevel = null;
     static volatile int nextRemoteMonsterId = 1_800_000_000;
     static final java.util.concurrent.atomic.AtomicBoolean monsterErrorPrinted = new java.util.concurrent.atomic.AtomicBoolean(
@@ -503,6 +590,10 @@ public class BusAgent {
     static final long FABRIC_TIMEOUT_MS = 3000L;
     static final java.util.concurrent.atomic.AtomicBoolean nfRemovalPending = new java.util.concurrent.atomic.AtomicBoolean(
             false);
+
+    // Monster cleanup is deliberately independent of player cleanup.
+    static volatile boolean nfMonsterReconnectCleanupPending = false;
+    static final MonsterCleanupCoordinator monsterCleanupCoordinator = new MonsterCleanupCoordinator();
 
     static volatile boolean nfInitialized = false;
 
@@ -584,89 +675,86 @@ public class BusAgent {
         String socketPath = System.getenv("JVM_COMBINER_BUS_SOCKET");
         if (socketPath == null || socketPath.isBlank()) {
             System.err.println(
-                    "[BusAgent:" + myName + "] JVM_COMBINER_BUS_SOCKET is missing");
+                    "[BusAgent:" + myName +
+                            "] JVM_COMBINER_BUS_SOCKET is missing");
+            return;
+        }
+
+        if (peer.isEmpty()) {
+            System.err.println(
+                    "[BusAgent:" + myName +
+                            "] DataBus role is not authorized");
             return;
         }
 
         while (!Thread.currentThread().isInterrupted()) {
-            try (SocketChannel channel =
-                         SocketChannel.open(java.net.StandardProtocolFamily.UNIX)) {
-                channel.connect(java.net.UnixDomainSocketAddress.of(socketPath));
+            try (SocketChannel channel = SocketChannel.open(
+                    java.net.StandardProtocolFamily.UNIX)) {
+                channel.connect(
+                        java.net.UnixDomainSocketAddress.of(socketPath));
 
                 try (
-                        BufferedReader in = new BufferedReader(
-                                new InputStreamReader(
-                                        Channels.newInputStream(channel),
-                                        java.nio.charset.StandardCharsets.UTF_8));
+                        java.io.InputStream input = Channels.newInputStream(channel);
                         PrintWriter writer = new PrintWriter(
                                 new OutputStreamWriter(
                                         Channels.newOutputStream(channel),
                                         java.nio.charset.StandardCharsets.UTF_8),
                                 true)) {
+
+                    final long connectionGeneration;
+
                     synchronized (BusAgent.class) {
                         out = writer;
                         if (myName.equals("neoforge")) {
                             dataBusGeneration++;
+                            connectionGeneration = dataBusGeneration;
                             dataBusConnected = true;
                             nfReconnectCleanupPending = true;
+                            nfMonsterReconnectCleanupPending = true;
                             lastFabricReceiveAt = 0L;
+                        } else {
+                            connectionGeneration = -1L;
                         }
                     }
 
                     System.out.println(
-                            "[BusAgent:" + myName + "] Connected to DataBus");
+                            "[BusAgent:" + myName +
+                                    "] Connected to DataBus");
+
                     if (myName.equals("neoforge")) {
                         scheduleRemotePlayerRemoval(
                                 "bus-reconnected",
-                                dataBusGeneration,
+                                connectionGeneration,
                                 2,
                                 0L);
+
+                        scheduleRemoteMonsterRemoval(
+                                "bus-reconnected",
+                                connectionGeneration,
+                                2);
                     }
 
-                    String line;
+                    byte[] bytes;
 
-                    while ((line = in.readLine()) != null) {
-                        java.util.regex.Matcher typeMatcher =
-                                MESSAGE_TYPE_PATTERN.matcher(line);
+                    while ((bytes = readBoundedLine(input)) != null) {
+                        final java.util.Map<String, Object> message;
+                        final String incomingType;
 
-                        if (!typeMatcher.find()) {
+                        try {
+                            message = StrictJson.parseUtf8(bytes);
+                            incomingType = validateInboundMessage(
+                                    message, peer, myName);
+                        } catch (IllegalArgumentException rejected) {
+                            logRejectedMessage(rejected.getMessage());
                             continue;
                         }
-
-                        java.util.regex.Matcher fromMatcher =
-                                MESSAGE_FROM_PATTERN.matcher(line);
-
-                        if (!fromMatcher.find() ||
-                                peer.isEmpty() ||
-                                !peer.equals(fromMatcher.group(1))) {
-                            continue;
-                        }
-
-                        String incomingType = typeMatcher.group(1);
 
                         if ("fabric".equals(myName)) {
-                            if ("monster_ack".equals(incomingType)) {
-                                try {
-                                    java.util.UUID ackUuid =
-                                            java.util.UUID.fromString(
-                                                    readMonsterJsonString(line, "uuid"));
+                            java.util.UUID ackUuid = java.util.UUID.fromString(
+                                    StrictJson.string(message, "uuid"));
+                            long ackSeq = StrictJson.positiveLong(message, "seq");
 
-                                    long ackSeq =
-                                            readMonsterJsonLong(line, "seq");
-
-                                    MonsterSync.acknowledge(ackUuid, ackSeq);
-                                } catch (Throwable error) {
-                                    System.err.println(
-                                            "[BusAgent:fabric][MONSTER][ACK][ERROR] " +
-                                                    "Invalid ACK: " + error.getMessage());
-                                }
-                            }
-
-                            // Fabric accepts only business ACKs from NeoForge.
-                            continue;
-                        }
-
-                        if (!"neoforge".equals(myName)) {
+                            MonsterSync.acknowledge(ackUuid, ackSeq);
                             continue;
                         }
 
@@ -674,23 +762,30 @@ public class BusAgent {
                             synchronized (BusAgent.class) {
                                 lastFabricReceiveAt = System.currentTimeMillis();
                             }
-                            handleNeoForgeSync(line);
+                            handleNeoForgeSync(message);
                         } else if ("monster_spawn".equals(incomingType) ||
                                 "monster_update".equals(incomingType)) {
-                            handleNeoForgeMonsterSync(line);
+                            handleNeoForgeMonsterSync(message);
+                        } else if ("monster_remove".equals(incomingType)) {
+                            handleNeoForgeMonsterRemove(message);
                         }
                     }
                 } finally {
-                    out = null;
+                    synchronized (BusAgent.class) {
+                        out = null;
+                    }
                     markDataBusDisconnected("stream-ended");
                 }
 
-            } catch (Exception e) {
-                out = null;
+            } catch (Exception error) {
+                synchronized (BusAgent.class) {
+                    out = null;
+                }
                 markDataBusDisconnected("connection-error");
+
                 System.out.println(
                         "[BusAgent:" + myName +
-                                "] Bus disconnected: " + e.getMessage());
+                                "] Bus disconnected: " + error.getMessage());
 
                 try {
                     Thread.sleep(2000);
@@ -714,11 +809,9 @@ public class BusAgent {
         Class<?> candidateClass = Class.forName(
                 "net.fabricmc.loader.api.FabricLoader");
 
-        Method getInstance =
-                candidateClass.getMethod("getInstance");
+        Method getInstance = candidateClass.getMethod("getInstance");
 
-        Method getGameInstance =
-                candidateClass.getMethod("getGameInstance");
+        Method getGameInstance = candidateClass.getMethod("getGameInstance");
 
         fabricLoaderClass = candidateClass;
         fabricGetInstanceMethod = getInstance;
@@ -733,11 +826,9 @@ public class BusAgent {
                 if (fabricMcInstance == null) {
                     bindFabricLoaderMethods();
 
-                    Object loader =
-                            fabricGetInstanceMethod.invoke(null);
+                    Object loader = fabricGetInstanceMethod.invoke(null);
 
-                    Object instance =
-                            fabricGetGameInstanceMethod.invoke(loader);
+                    Object instance = fabricGetGameInstanceMethod.invoke(loader);
 
                     if (instance == null) {
                         Thread.sleep(250);
@@ -891,7 +982,7 @@ public class BusAgent {
             if (writer.checkError()) {
                 System.err.println(
                         "[BusAgent:fabric][MONSTER][SEND][ERROR] " +
-                                "TCP write failed");
+                                "DataBus write failed");
                 return false;
             }
         }
@@ -911,8 +1002,7 @@ public class BusAgent {
             return false;
         }
 
-        String json =
-                "{\"to\":\"fabric\"," +
+        String json = "{\"to\":\"fabric\"," +
                 "\"type\":\"monster_ack\"," +
                 "\"uuid\":\"" + uuid + "\"," +
                 "\"seq\":" + seq +
@@ -930,7 +1020,7 @@ public class BusAgent {
             if (writer.checkError()) {
                 System.err.println(
                         "[BusAgent:neoforge][MONSTER][ACK][ERROR] " +
-                                "TCP write failed");
+                                "DataBus write failed");
                 return false;
             }
         }
@@ -978,7 +1068,7 @@ public class BusAgent {
 
             if (writer.checkError()) {
                 System.err.println(
-                        "[BusAgent:fabric][SEND][ERROR] TCP write failed");
+                        "[BusAgent:fabric][SEND][ERROR] DataBus write failed");
                 return;
             }
         }
@@ -995,6 +1085,22 @@ public class BusAgent {
                         " sprint=" + sprint);
     }
 
+    private static Object enumConstant(
+            Class<?> enumClass, String constantName) {
+        if (enumClass == null || !enumClass.isEnum()) {
+            throw new IllegalArgumentException(
+                    "Expected enum class: " + enumClass);
+        }
+        for (Object constant : enumClass.getEnumConstants()) {
+            if (((Enum<?>) constant).name().equals(constantName)) {
+                return constant;
+            }
+        }
+        throw new IllegalArgumentException(
+                "Missing enum constant " + enumClass.getName() +
+                        "." + constantName);
+    }
+
     static void monitorNeoForgePlayer() {
         System.out.println(
                 "[BusAgent:neoforge][MONITOR] thread started");
@@ -1004,6 +1110,7 @@ public class BusAgent {
                 initNeoForgeMinecraft();
 
                 checkRemotePlayerLifecycle();
+                checkRemoteMonsterLifecycle();
 
                 Object mc = nfMcInstance;
 
@@ -1017,49 +1124,49 @@ public class BusAgent {
                     if (nfProbePending.compareAndSet(false, true)) {
                         try {
                             nfExecuteMethod.invoke(mc, (Runnable) () -> {
-                                        try {
-                                            Object level = nfLevelField.get(mc);
+                                try {
+                                    Object level = nfLevelField.get(mc);
 
-                                            Object player = nfPlayerField.get(mc);
+                                    Object player = nfPlayerField.get(mc);
 
-                                            boolean levelReady = level != null;
-                                            boolean playerReady = levelReady && player != null;
+                                    boolean levelReady = level != null;
+                                    boolean playerReady = levelReady && player != null;
 
-                                            synchronized (BusAgent.class) {
-                                                if (levelReady != nfLevelReadyLogged) {
-                                                    nfLevelReadyLogged = levelReady;
+                                    synchronized (BusAgent.class) {
+                                        if (levelReady != nfLevelReadyLogged) {
+                                            nfLevelReadyLogged = levelReady;
 
-                                                    System.out.println(
-                                                            levelReady
-                                                                    ? "[BusAgent:neoforge][INIT] ClientLevel ready"
-                                                                    : "[BusAgent:neoforge][WAIT] ClientLevel unavailable");
-                                                }
-
-                                                if (playerReady != nfPlayerReadyLogged) {
-                                                    nfPlayerReadyLogged = playerReady;
-
-                                                    System.out.println(
-                                                            playerReady
-                                                                    ? "[BusAgent:neoforge][LIVE] LocalPlayer ready"
-                                                                    : "[BusAgent:neoforge][WAIT] LocalPlayer unavailable");
-                                                }
-                                            }
-
-                                            // NeoForge is a receiver-only client.
-                                            // Fabric is the sole authoritative player-state source.
-                                            // Never sample or transmit NeoForge LocalPlayer state.
-
-                                        } catch (Throwable e) {
-                                            if (!nfProbeErrorPrinted) {
-                                                nfProbeErrorPrinted = true;
-                                                System.err.println(
-                                                        "[BusAgent:neoforge][ERROR] player probe failed: " + e);
-                                                e.printStackTrace(System.err);
-                                            }
-                                        } finally {
-                                            nfProbePending.set(false);
+                                            System.out.println(
+                                                    levelReady
+                                                            ? "[BusAgent:neoforge][INIT] ClientLevel ready"
+                                                            : "[BusAgent:neoforge][WAIT] ClientLevel unavailable");
                                         }
-                                    });
+
+                                        if (playerReady != nfPlayerReadyLogged) {
+                                            nfPlayerReadyLogged = playerReady;
+
+                                            System.out.println(
+                                                    playerReady
+                                                            ? "[BusAgent:neoforge][LIVE] LocalPlayer ready"
+                                                            : "[BusAgent:neoforge][WAIT] LocalPlayer unavailable");
+                                        }
+                                    }
+
+                                    // NeoForge is a receiver-only client.
+                                    // Fabric is the sole authoritative player-state source.
+                                    // Never sample or transmit NeoForge LocalPlayer state.
+
+                                } catch (Throwable e) {
+                                    if (!nfProbeErrorPrinted) {
+                                        nfProbeErrorPrinted = true;
+                                        System.err.println(
+                                                "[BusAgent:neoforge][ERROR] player probe failed: " + e);
+                                        e.printStackTrace(System.err);
+                                    }
+                                } finally {
+                                    nfProbePending.set(false);
+                                }
+                            });
                         } catch (Throwable e) {
                             nfProbePending.set(false);
 
@@ -1114,14 +1221,10 @@ public class BusAgent {
             }
 
             // Bind everything locally before publishing initialized state.
-            Method getInstanceMethod =
-                    candidateClass.getMethod("getInstance");
-            Method executeMethod =
-                    candidateClass.getMethod("execute", Runnable.class);
-            Field levelField =
-                    candidateClass.getField("level");
-            Field playerField =
-                    candidateClass.getField("player");
+            Method getInstanceMethod = candidateClass.getMethod("getInstance");
+            Method executeMethod = candidateClass.getMethod("execute", Runnable.class);
+            Field levelField = candidateClass.getField("level");
+            Field playerField = candidateClass.getField("player");
 
             Object minecraft = getInstanceMethod.invoke(null);
             if (minecraft == null) {
@@ -1150,7 +1253,7 @@ public class BusAgent {
         }
     }
 
-    static void handleNeoForgeSync(String json) {
+    static void handleNeoForgeSync(java.util.Map<String, Object> message) {
         try {
             if (!nfInitialized || nfMcInstance == null) {
                 initNeoForgeMinecraft();
@@ -1158,12 +1261,12 @@ public class BusAgent {
                     return;
             }
 
-            double x = readJsonNumber(json, "x");
-            double y = readJsonNumber(json, "y");
-            double z = readJsonNumber(json, "z");
-            float yaw = (float) readJsonNumber(json, "yaw");
-            float pitch = (float) readJsonNumber(json, "pitch");
-            boolean sprint = readJsonBool(json, "sprint");
+            double x = StrictJson.finiteDouble(message, "x");
+            double y = StrictJson.finiteDouble(message, "y");
+            double z = StrictJson.finiteDouble(message, "z");
+            float yaw = StrictJson.finiteFloat(message, "yaw");
+            float pitch = StrictJson.finiteFloat(message, "pitch");
+            boolean sprint = StrictJson.bool(message, "sprint");
 
             final long syncGeneration;
             synchronized (BusAgent.class) {
@@ -1187,8 +1290,7 @@ public class BusAgent {
                     if (level == null)
                         return;
                     ClassLoader loader = nfMcClass.getClassLoader();
-                    NeoForgePlayerBindings bindings =
-                            getNeoForgePlayerBindings(loader);
+                    NeoForgePlayerBindings bindings = getNeoForgePlayerBindings(loader);
 
                     if (remotePlayer != null && remotePlayerLevel != level) {
                         removeRemotePlayerNow("world-changed");
@@ -1205,9 +1307,20 @@ public class BusAgent {
                         Method setUUID = bindings.setUUID;
 
                         int candidate = 1_900_000_000;
-                        for (int i = 0; i < 10000; i++, candidate--) {
-                            if (getEntity.invoke(level, candidate) == null)
+                        boolean foundFreeId = false;
+
+                        for (int i = 0; i < 10000; i++) {
+                            if (getEntity.invoke(level, candidate) == null) {
+                                foundFreeId = true;
                                 break;
+                            }
+
+                            candidate--;
+                        }
+
+                        if (!foundFreeId) {
+                            throw new IllegalStateException(
+                                    "Unable to allocate remote player entity ID");
                         }
 
                         setId.invoke(player, candidate);
@@ -1268,7 +1381,28 @@ public class BusAgent {
         }
     }
 
-    static void handleNeoForgeMonsterSync(String json) {
+    private static String monsterSyncFingerprint(
+            String operationType,
+            String entityTypeId,
+            double x,
+            double y,
+            double z,
+            float yaw,
+            float pitch,
+            float health,
+            float maxHealth) {
+        return "sync\u0000" + operationType +
+                "\u0000" + entityTypeId +
+                "\u0000" + Double.toHexString(x) +
+                "\u0000" + Double.toHexString(y) +
+                "\u0000" + Double.toHexString(z) +
+                "\u0000" + Float.toHexString(yaw) +
+                "\u0000" + Float.toHexString(pitch) +
+                "\u0000" + Float.toHexString(health) +
+                "\u0000" + Float.toHexString(maxHealth);
+    }
+
+    static void handleNeoForgeMonsterSync(java.util.Map<String, Object> message) {
         try {
             if (!nfInitialized || nfMcInstance == null) {
                 initNeoForgeMinecraft();
@@ -1279,21 +1413,23 @@ public class BusAgent {
             }
 
             java.util.UUID uuid = java.util.UUID.fromString(
-                    readMonsterJsonString(json, "uuid"));
+                    StrictJson.string(message, "uuid"));
 
-            long seq = readMonsterJsonLong(json, "seq");
+            long seq = StrictJson.positiveLong(message, "seq");
 
-            String entityTypeId = readMonsterJsonString(json, "entity_type");
+            String operationType = StrictJson.string(message, "type");
 
-            double x = readMonsterJsonNumber(json, "x");
-            double y = readMonsterJsonNumber(json, "y");
-            double z = readMonsterJsonNumber(json, "z");
+            String entityTypeId = StrictJson.string(message, "entity_type");
 
-            float yaw = (float) readMonsterJsonNumber(json, "yaw");
-            float pitch = (float) readMonsterJsonNumber(json, "pitch");
+            double x = StrictJson.finiteDouble(message, "x");
+            double y = StrictJson.finiteDouble(message, "y");
+            double z = StrictJson.finiteDouble(message, "z");
 
-            float health = (float) readMonsterJsonNumber(json, "health");
-            float maxHealth = (float) readMonsterJsonNumber(json, "max_health");
+            float yaw = StrictJson.finiteFloat(message, "yaw");
+            float pitch = StrictJson.finiteFloat(message, "pitch");
+
+            float health = StrictJson.finiteFloat(message, "health");
+            float maxHealth = StrictJson.finiteFloat(message, "max_health");
 
             if (!Double.isFinite(x) ||
                     !Double.isFinite(y) ||
@@ -1308,10 +1444,14 @@ public class BusAgent {
                         "Invalid monster numeric state: " + uuid);
             }
 
+            final String fingerprint = monsterSyncFingerprint(
+                    operationType, entityTypeId,
+                    x, y, z, yaw, pitch, health, maxHealth);
+
             final long generation;
 
             synchronized (BusAgent.class) {
-                if (!dataBusConnected) {
+                if (!dataBusConnected || nfMonsterReconnectCleanupPending) {
                     return;
                 }
 
@@ -1321,191 +1461,234 @@ public class BusAgent {
             Object mc = nfMcInstance;
 
             nfExecuteMethod.invoke(mc, (Runnable) () -> {
-                        try {
-                            synchronized (BusAgent.class) {
-                                if (!dataBusConnected ||
-                                        dataBusGeneration != generation) {
-                                    return;
-                                }
-                            }
-
-                            Object level = nfLevelField.get(mc);
-
-                            if (level == null) {
-                                return;
-                            }
-
-                            ClassLoader loader = nfMcClass.getClassLoader();
-                            NeoForgeMonsterBindings bindings =
-                                    getNeoForgeMonsterBindings(loader);
-
-                            Class<?> entityClass = bindings.entityClass;
-                            Class<?> livingClass = bindings.livingClass;
-                            Class<?> levelClass = bindings.levelClass;
-                            Class<?> clientLevelClass = bindings.clientLevelClass;
-                            Class<?> entityTypeClass = bindings.entityTypeClass;
-                            Class<?> registryClass = bindings.registryClass;
-                            Class<?> registryApiClass = bindings.registryApiClass;
-                            Class<?> resourceLocationClass = bindings.resourceLocationClass;
-                            Class<?> spawnReasonClass = bindings.spawnReasonClass;
-
-                            // World changed: discard only monster mirrors.
-                            if (remoteMonsterLevel != null &&
-                                    remoteMonsterLevel != level) {
-
-                                for (Object old : remoteMonsters.values()) {
-                                    try {
-                                        old.getClass()
-                                                .getMethod("discard")
-                                                .invoke(old);
-                                    } catch (Throwable ignored) {
-                                    }
-                                }
-
-                                remoteMonsters.clear();
-                                remoteMonsterLevel = null;
-
-                                System.out.println(
-                                        "[BusAgent:neoforge][MONSTER] " +
-                                                "Cleared mirrors after world change");
-                            }
-
-                            remoteMonsterLevel = level;
-
-                            Object entity = remoteMonsters.get(uuid);
-
-                            if (entity != null) {
-                                boolean removed = Boolean.TRUE.equals(
-                                        bindings.entityIsRemoved
-                                                .invoke(entity));
-
-                                if (removed) {
-                                    remoteMonsters.remove(uuid, entity);
-                                    entity = null;
-                                }
-                            }
-
-                            if (entity == null) {
-                                Object resourceLocation = bindings.resourceLocationParse
-                                        .invoke(null, entityTypeId);
-
-                                Object registry = bindings.entityTypeRegistryField
-                                        .get(null);
-
-                                Object optional = bindings.registryGetOptional
-                                        .invoke(registry, resourceLocation);
-
-                                if (!(optional instanceof java.util.Optional<?>)) {
-                                    throw new IllegalStateException(
-                                            "Entity registry lookup returned invalid result");
-                                }
-
-                                java.util.Optional<?> found = (java.util.Optional<?>) optional;
-
-                                if (found.isEmpty()) {
-                                    System.err.println(
-                                            "[BusAgent:neoforge][MONSTER][SKIP] " +
-                                                    "Unknown entity type: " + entityTypeId);
-                                    return;
-                                }
-
-                                Object entityType = found.get();
-
-                                Object spawnReason = Enum.valueOf(
-                                        (Class<Enum>) spawnReasonClass.asSubclass(Enum.class),
-                                        "COMMAND");
-
-                                entity = bindings.entityTypeCreate
-                                        .invoke(entityType, level, spawnReason);
-
-                                if (entity == null) {
-                                    System.err.println(
-                                            "[BusAgent:neoforge][MONSTER][SKIP] " +
-                                                    "Entity creation returned null: " +
-                                                    entityTypeId);
-                                    return;
-                                }
-
-                                int candidate = nextRemoteMonsterId;
-
-                                Method getEntity = bindings.clientLevelGetEntity;
-
-                                Method setId = bindings.entitySetId;
-
-                                boolean foundFreeId = false;
-
-                                for (int i = 0; i < 10000; i++) {
-                                    if (getEntity.invoke(level, candidate) == null) {
-                                        foundFreeId = true;
-                                        break;
-                                    }
-
-                                    candidate--;
-                                }
-
-                                if (!foundFreeId) {
-                                    throw new IllegalStateException(
-                                            "Unable to allocate remote monster entity ID");
-                                }
-
-                                nextRemoteMonsterId = candidate - 1;
-
-                                setId.invoke(entity, candidate);
-
-                                bindings.entitySetUUID.invoke(entity, uuid);
-
-                                bindings.entitySetPos.invoke(entity, x, y, z);
-
-                                bindings.entitySetOldPosAndRot.invoke(entity);
-
-                                bindings.clientLevelAddEntity.invoke(level, entity);
-
-                                remoteMonsters.put(uuid, entity);
-
-                                System.out.println(
-                                        "[BusAgent:neoforge][MONSTER][SPAWN] " +
-                                                "type=" + entityTypeId +
-                                                " uuid=" + uuid +
-                                                " id=" + candidate);
-                            }
-
-                            bindings.entitySetPos.invoke(entity, x, y, z);
-
-                            bindings.entitySetYRot.invoke(entity, yaw);
-
-                            bindings.entitySetXRot.invoke(entity, pitch);
-
-                            bindings.entitySetYHeadRot.invoke(entity, yaw);
-
-                            bindings.entitySetYBodyRot.invoke(entity, yaw);
-
-                            bindings.entitySetOldPosAndRot.invoke(entity);
-
-                            if (livingClass.isInstance(entity)) {
-                                bindings.livingSetHealth.invoke(
-                                                entity,
-                                                Math.max(0.0f, Math.min(health, maxHealth)));
-                            }
-
-                            // Business ACK: only after creation/update and
-                            // all requested state fields have been applied.
-                            sendNeoForgeMonsterAck(uuid, seq);
-
-                            if (!"monster_spawn".equals(
-                                    readMonsterJsonString(json, "type"))) {
-                                // Updates are intentionally quiet to avoid log flooding.
-                            }
-
-                        } catch (Throwable error) {
-                            if (monsterErrorPrinted.compareAndSet(false, true)) {
-                                System.err.println(
-                                        "[BusAgent:neoforge][MONSTER][ERROR] " +
-                                                "Monster main-thread handler failed");
-
-                                error.printStackTrace(System.err);
-                            }
+                try {
+                    synchronized (BusAgent.class) {
+                        if (!dataBusConnected ||
+                                dataBusGeneration != generation ||
+                                nfMonsterReconnectCleanupPending) {
+                            return;
                         }
-                    });
+
+                        MonsterSequenceTracker.Decision decision = remoteMonsterSequences.inspect(
+                                uuid, seq, fingerprint);
+                        if (decision == MonsterSequenceTracker.Decision.DUPLICATE) {
+                            sendNeoForgeMonsterAck(uuid, seq);
+                            return;
+                        }
+                        if (decision != MonsterSequenceTracker.Decision.ACCEPT) {
+                            logDebug(
+                                    "[BusAgent:neoforge][MONSTER][REJECT] " +
+                                            "Sequence rejected: " + decision +
+                                            " uuid=" + uuid + " seq=" + seq);
+                            return;
+                        }
+                    }
+
+                    Object level = nfLevelField.get(mc);
+
+                    if (level == null) {
+                        return;
+                    }
+
+                    ClassLoader loader = nfMcClass.getClassLoader();
+                    NeoForgeMonsterBindings bindings = getNeoForgeMonsterBindings(loader);
+
+                    Class<?> entityClass = bindings.entityClass;
+                    Class<?> livingClass = bindings.livingClass;
+                    Class<?> levelClass = bindings.levelClass;
+                    Class<?> clientLevelClass = bindings.clientLevelClass;
+                    Class<?> entityTypeClass = bindings.entityTypeClass;
+                    Class<?> registryClass = bindings.registryClass;
+                    Class<?> registryApiClass = bindings.registryApiClass;
+                    Class<?> resourceLocationClass = bindings.resourceLocationClass;
+                    Class<?> spawnReasonClass = bindings.spawnReasonClass;
+
+                    // A world transition must not silently forget
+                    // entities that could not be removed.
+                    if (remoteMonsterLevel != null &&
+                            remoteMonsterLevel != level) {
+                        if (!removeRemoteMonstersNow("world-changed") ||
+                                !remoteMonsters.isEmpty()) {
+                            return;
+                        }
+                    }
+
+                    remoteMonsterLevel = level;
+
+                    Object entity = remoteMonsters.get(uuid);
+
+                    if (entity != null) {
+                        boolean removed = Boolean.TRUE.equals(
+                                bindings.entityIsRemoved
+                                        .invoke(entity));
+
+                        if (removed) {
+                            remoteMonsters.remove(uuid, entity);
+                            entity = null;
+                        }
+                    }
+
+                    if (entity == null) {
+                        if (remoteMonsters.size() >= 1024) {
+                            logDebug(
+                                    "[BusAgent:neoforge][MONSTER][LIMIT] " +
+                                            "Remote monster capacity reached; uuid=" +
+                                            uuid);
+                            return;
+                        }
+
+                        Object resourceLocation = bindings.resourceLocationParse
+                                .invoke(null, entityTypeId);
+
+                        Object registry = bindings.entityTypeRegistryField
+                                .get(null);
+
+                        Object optional = bindings.registryGetOptional
+                                .invoke(registry, resourceLocation);
+
+                        if (!(optional instanceof java.util.Optional<?>)) {
+                            throw new IllegalStateException(
+                                    "Entity registry lookup returned invalid result");
+                        }
+
+                        java.util.Optional<?> found = (java.util.Optional<?>) optional;
+
+                        if (found.isEmpty()) {
+                            System.err.println(
+                                    "[BusAgent:neoforge][MONSTER][SKIP] " +
+                                            "Unknown entity type: " + entityTypeId);
+                            return;
+                        }
+
+                        Object entityType = found.get();
+
+                        Object spawnReason = enumConstant(
+                                spawnReasonClass,
+                                "COMMAND");
+
+                        entity = bindings.entityTypeCreate
+                                .invoke(entityType, level, spawnReason);
+
+                        if (entity == null) {
+                            System.err.println(
+                                    "[BusAgent:neoforge][MONSTER][SKIP] " +
+                                            "Entity creation returned null: " +
+                                            entityTypeId);
+                            return;
+                        }
+
+                        int candidate = nextRemoteMonsterId;
+
+                        Method getEntity = bindings.clientLevelGetEntity;
+
+                        Method setId = bindings.entitySetId;
+
+                        boolean foundFreeId = false;
+
+                        for (int i = 0; i < 10000; i++) {
+                            if (getEntity.invoke(level, candidate) == null) {
+                                foundFreeId = true;
+                                break;
+                            }
+
+                            candidate--;
+                        }
+
+                        if (!foundFreeId) {
+                            throw new IllegalStateException(
+                                    "Unable to allocate remote monster entity ID");
+                        }
+
+                        nextRemoteMonsterId = candidate - 1;
+
+                        setId.invoke(entity, candidate);
+
+                        bindings.entitySetUUID.invoke(entity, uuid);
+
+                        bindings.entitySetPos.invoke(entity, x, y, z);
+
+                        bindings.entitySetOldPosAndRot.invoke(entity);
+
+                        remoteMonsters.put(uuid, entity);
+
+                        System.out.println(
+                                "[BusAgent:neoforge][MONSTER][SPAWN] " +
+                                        "type=" + entityTypeId +
+                                        " uuid=" + uuid +
+                                        " id=" + candidate);
+                    }
+
+                    // Verify that this exact entity instance is registered
+                    // in the current ClientLevel before applying state or ACKing.
+                    int entityId = ((Number) bindings.entityGetId
+                            .invoke(entity)).intValue();
+
+                    Object registeredEntity = bindings.clientLevelGetEntity
+                            .invoke(level, entityId);
+
+                    if (registeredEntity != entity) {
+                        if (registeredEntity != null) {
+                            throw new IllegalStateException(
+                                    "Remote monster entity ID is occupied by another entity: " +
+                                            entityId + " uuid=" + uuid);
+                        }
+
+                        // A previous addEntity attempt may have failed.
+                        // Keep the map reference and retry registration.
+                        bindings.clientLevelAddEntity.invoke(level, entity);
+
+                        registeredEntity = bindings.clientLevelGetEntity
+                                .invoke(level, entityId);
+
+                        if (registeredEntity != entity) {
+                            throw new IllegalStateException(
+                                    "Remote monster registration could not be verified: " +
+                                            uuid);
+                        }
+                    }
+
+                    bindings.entitySetPos.invoke(entity, x, y, z);
+
+                    bindings.entitySetYRot.invoke(entity, yaw);
+
+                    bindings.entitySetXRot.invoke(entity, pitch);
+
+                    bindings.entitySetYHeadRot.invoke(entity, yaw);
+
+                    bindings.entitySetYBodyRot.invoke(entity, yaw);
+
+                    bindings.entitySetOldPosAndRot.invoke(entity);
+
+                    if (livingClass.isInstance(entity)) {
+                        bindings.livingSetHealth.invoke(
+                                entity,
+                                Math.max(0.0f, Math.min(health, maxHealth)));
+                    }
+
+                    // ACK only if this task still belongs to the
+                    // active DataBus generation.
+                    synchronized (BusAgent.class) {
+                        if (!dataBusConnected ||
+                                dataBusGeneration != generation ||
+                                nfMonsterReconnectCleanupPending) {
+                            return;
+                        }
+
+                        remoteMonsterSequences.commit(
+                                uuid, seq, fingerprint);
+                        sendNeoForgeMonsterAck(uuid, seq);
+                    }
+
+                } catch (Throwable error) {
+                    if (monsterErrorPrinted.compareAndSet(false, true)) {
+                        System.err.println(
+                                "[BusAgent:neoforge][MONSTER][ERROR] " +
+                                        "Monster main-thread handler failed");
+
+                        error.printStackTrace(System.err);
+                    }
+                }
+            });
 
         } catch (Throwable error) {
             if (monsterErrorPrinted.compareAndSet(false, true)) {
@@ -1519,6 +1702,280 @@ public class BusAgent {
     }
 
     // Must only be called on the NeoForge Minecraft game thread.
+    // Entries are removed from the map only after entity removal is verified.
+    static boolean removeRemoteMonstersNow(String reason) {
+        NeoForgeMonsterBindings bindings;
+
+        try {
+            Object mc = nfMcInstance;
+            if (mc == null || nfMcClass == null) {
+                return remoteMonsters.isEmpty();
+            }
+
+            bindings = getNeoForgeMonsterBindings(
+                    nfMcClass.getClassLoader());
+
+        } catch (Throwable error) {
+            System.err.println(
+                    "[BusAgent:neoforge][MONSTER][CLEANUP][ERROR] " +
+                            "Could not resolve removal bindings: " + error);
+            return remoteMonsters.isEmpty();
+        }
+
+        boolean allRemoved = true;
+
+        for (java.util.Map.Entry<java.util.UUID, Object> entry : remoteMonsters.entrySet()) {
+            java.util.UUID uuid = entry.getKey();
+            Object entity = entry.getValue();
+
+            try {
+                if (!Boolean.TRUE.equals(
+                        bindings.entityIsRemoved.invoke(entity))) {
+                    entity.getClass()
+                            .getMethod("discard")
+                            .invoke(entity);
+                }
+
+                boolean removed = Boolean.TRUE.equals(
+                        bindings.entityIsRemoved.invoke(entity));
+
+                if (removed) {
+                    remoteMonsters.remove(uuid, entity);
+                } else {
+                    allRemoved = false;
+                    System.err.println(
+                            "[BusAgent:neoforge][MONSTER][CLEANUP] " +
+                                    "Entity remains; retaining reference uuid=" + uuid);
+                }
+
+            } catch (Throwable error) {
+                allRemoved = false;
+                System.err.println(
+                        "[BusAgent:neoforge][MONSTER][CLEANUP][ERROR] " +
+                                "Removal failed; retaining uuid=" + uuid +
+                                " error=" + error);
+            }
+        }
+
+        if (remoteMonsters.isEmpty()) {
+            remoteMonsterLevel = null;
+            System.out.println(
+                    "[BusAgent:neoforge][MONSTER][LIFECYCLE] " +
+                            "All remote monsters removed reason=" + reason);
+            return true;
+        }
+
+        return allRemoved && remoteMonsters.isEmpty();
+    }
+
+    // Called by the NeoForge DataBus monitor thread.
+    static void checkRemoteMonsterLifecycle() {
+        if (!"neoforge".equals(myName)) {
+            return;
+        }
+
+        final boolean connected;
+        final boolean reconnectCleanup;
+        final long generation;
+
+        synchronized (BusAgent.class) {
+            connected = dataBusConnected;
+            reconnectCleanup = nfMonsterReconnectCleanupPending;
+            generation = dataBusGeneration;
+        }
+
+        if (!connected || reconnectCleanup) {
+            scheduleRemoteMonsterRemoval(
+                    connected ? "bus-reconnected" : "bus-disconnected",
+                    generation,
+                    connected ? 2 : 0);
+        }
+    }
+
+    // condition 0: cleanup only while disconnected.
+    // condition 2: cleanup only for the current connected generation.
+    static void scheduleRemoteMonsterRemoval(
+            String reason,
+            long generation,
+            int condition) {
+
+        Object mc = nfMcInstance;
+
+        if (mc == null || nfMcClass == null) {
+            return;
+        }
+
+        final Object cleanupLease = monsterCleanupCoordinator.tryAcquire();
+
+        if (cleanupLease == null) {
+            return;
+        }
+
+        try {
+            nfExecuteMethod.invoke(
+                    mc,
+                    (Runnable) () -> {
+                        try {
+                            synchronized (BusAgent.class) {
+                                if (!monsterCleanupCoordinator.isEligible(
+                                        dataBusGeneration,
+                                        generation,
+                                        dataBusConnected,
+                                        condition)) {
+                                    return;
+                                }
+                            }
+
+                            boolean removed = removeRemoteMonstersNow(reason);
+
+                            if (removed && condition == 2) {
+                                synchronized (BusAgent.class) {
+                                    if (monsterCleanupCoordinator.canReleaseBarrier(
+                                            removed,
+                                            condition,
+                                            dataBusGeneration,
+                                            generation,
+                                            dataBusConnected,
+                                            remoteMonsters.isEmpty(),
+                                            nfMonsterReconnectCleanupPending)) {
+                                        remoteMonsterSequences.clear();
+                                        nfMonsterReconnectCleanupPending = false;
+                                    }
+                                }
+                            }
+
+                        } catch (Throwable error) {
+                            System.err.println(
+                                    "[BusAgent:neoforge][MONSTER][CLEANUP][ERROR] " +
+                                            "Scheduled cleanup failed: " + error);
+                        } finally {
+                            monsterCleanupCoordinator.release(cleanupLease);
+                        }
+                    });
+
+        } catch (Throwable error) {
+            monsterCleanupCoordinator.release(cleanupLease);
+
+            System.err.println(
+                    "[BusAgent:neoforge][MONSTER][CLEANUP][ERROR] " +
+                            "Could not schedule cleanup: " + error);
+        }
+    }
+
+    static void handleNeoForgeMonsterRemove(
+            java.util.Map<String, Object> message) {
+        try {
+            if (!nfInitialized || nfMcInstance == null) {
+                initNeoForgeMinecraft();
+                if (nfMcInstance == null) {
+                    return;
+                }
+            }
+
+            final java.util.UUID uuid = java.util.UUID.fromString(
+                    StrictJson.string(message, "uuid"));
+            final long seq = StrictJson.positiveLong(message, "seq");
+            final String fingerprint = "remove";
+
+            final long generation;
+            synchronized (BusAgent.class) {
+                if (!dataBusConnected || nfMonsterReconnectCleanupPending) {
+                    return;
+                }
+                generation = dataBusGeneration;
+            }
+
+            Object mc = nfMcInstance;
+
+            nfExecuteMethod.invoke(mc, (Runnable) () -> {
+                try {
+                    synchronized (BusAgent.class) {
+                        if (!dataBusConnected ||
+                                dataBusGeneration != generation ||
+                                nfMonsterReconnectCleanupPending) {
+                            return;
+                        }
+
+                        MonsterSequenceTracker.Decision decision = remoteMonsterSequences.inspect(
+                                uuid, seq, fingerprint);
+                        if (decision == MonsterSequenceTracker.Decision.DUPLICATE) {
+                            sendNeoForgeMonsterAck(uuid, seq);
+                            return;
+                        }
+                        if (decision != MonsterSequenceTracker.Decision.ACCEPT) {
+                            logDebug(
+                                    "[BusAgent:neoforge][MONSTER][REMOVE][REJECT] " +
+                                            "Sequence rejected: " + decision +
+                                            " uuid=" + uuid + " seq=" + seq);
+                            return;
+                        }
+                    }
+
+                    Object level = nfLevelField.get(mc);
+                    if (level == null) {
+                        return;
+                    }
+
+                    Object entity = remoteMonsters.get(uuid);
+
+                    if (entity != null) {
+                        NeoForgeMonsterBindings bindings = getNeoForgeMonsterBindings(
+                                nfMcClass.getClassLoader());
+
+                        if (!Boolean.TRUE.equals(
+                                bindings.entityIsRemoved.invoke(entity))) {
+                            entity.getClass()
+                                    .getMethod("discard")
+                                    .invoke(entity);
+                        }
+
+                        if (!Boolean.TRUE.equals(
+                                bindings.entityIsRemoved.invoke(entity))) {
+                            throw new IllegalStateException(
+                                    "Monster removal not confirmed: " + uuid);
+                        }
+
+                        remoteMonsters.remove(uuid, entity);
+                    }
+
+                    if (remoteMonsters.isEmpty()) {
+                        remoteMonsterLevel = level;
+                    }
+
+                    // Keep generation validation and ACK write atomic with
+                    // respect to disconnect/reconnect state transitions.
+                    synchronized (BusAgent.class) {
+                        if (!dataBusConnected ||
+                                dataBusGeneration != generation ||
+                                nfMonsterReconnectCleanupPending) {
+                            return;
+                        }
+
+                        remoteMonsterSequences.commit(
+                                uuid, seq, fingerprint);
+                        sendNeoForgeMonsterAck(uuid, seq);
+                    }
+
+                } catch (Throwable error) {
+                    if (monsterErrorPrinted.compareAndSet(false, true)) {
+                        System.err.println(
+                                "[BusAgent:neoforge][MONSTER][REMOVE][ERROR] " +
+                                        "Removal was not acknowledged");
+                        error.printStackTrace(System.err);
+                    }
+                }
+            });
+
+        } catch (Throwable error) {
+            if (monsterErrorPrinted.compareAndSet(false, true)) {
+                System.err.println(
+                        "[BusAgent:neoforge][MONSTER][REMOVE][ERROR] " +
+                                "Invalid removal message");
+                error.printStackTrace(System.err);
+            }
+        }
+    }
+
     // Must only be called on the NeoForge Minecraft game thread.
     static void removeRemotePlayerNow(String reason) {
         Object player = remotePlayer;
@@ -1545,8 +2002,8 @@ public class BusAgent {
                         true,
                         loader);
 
-                Object discarded = Enum.valueOf(
-                        (Class<Enum>) reasonClass.asSubclass(Enum.class),
+                Object discarded = enumConstant(
+                        reasonClass,
                         "DISCARDED");
 
                 player.getClass()
@@ -1603,6 +2060,7 @@ public class BusAgent {
             dataBusGeneration++;
             generation = dataBusGeneration;
             out = null;
+            nfMonsterReconnectCleanupPending = true;
         }
 
         System.out.println(
@@ -1613,6 +2071,11 @@ public class BusAgent {
                 generation,
                 0,
                 0L);
+
+        scheduleRemoteMonsterRemoval(
+                "bus-disconnected",
+                generation,
+                0);
     }
 
     // Called by the NeoForge monitor thread.
@@ -1754,76 +2217,6 @@ public class BusAgent {
                     "[BusAgent:neoforge][LIFECYCLE][ERROR] "
                             + "Could not schedule cleanup: " + e);
         }
-    }
-
-    static boolean readJsonBool(String json, String key) {
-        if ("sprint".equals(key)) {
-            return JSON_SPRINT_TRUE_PATTERN.matcher(json).matches();
-        }
-        return json.matches("(?s).*\"" + key + "\"\\s*:\\s*true.*");
-    }
-
-    static double readJsonNumber(String json, String key) {
-        java.util.regex.Matcher m = playerNumberPattern(key).matcher(json);
-        if (m.find())
-            return Double.parseDouble(m.group(1));
-        return 0;
-    }
-
-    static String readMonsterJsonString(
-            String json,
-            String key) {
-        java.util.regex.Matcher matcher =
-                monsterStringPattern(key).matcher(json);
-
-        if (!matcher.find()) {
-            throw new IllegalArgumentException(
-                    "Missing JSON string field: " + key);
-        }
-
-        return matcher.group(1);
-    }
-
-    static double readMonsterJsonNumber(
-            String json,
-            String key) {
-        java.util.regex.Matcher matcher =
-                monsterNumberPattern(key).matcher(json);
-
-        if (!matcher.find()) {
-            throw new IllegalArgumentException(
-                    "Missing JSON number field: " + key);
-        }
-
-        double value = Double.parseDouble(matcher.group(1));
-
-        if (!Double.isFinite(value)) {
-            throw new IllegalArgumentException(
-                    "Non-finite JSON number: " + key);
-        }
-
-        return value;
-    }
-
-    static long readMonsterJsonLong(
-            String json,
-            String key) {
-        java.util.regex.Matcher matcher =
-                monsterLongPattern(key).matcher(json);
-
-        if (!matcher.find()) {
-            throw new IllegalArgumentException(
-                    "Missing or invalid JSON integer field: " + key);
-        }
-
-        long value = Long.parseLong(matcher.group(1));
-
-        if (value <= 0L) {
-            throw new IllegalArgumentException(
-                    "JSON integer must be positive: " + key);
-        }
-
-        return value;
     }
 
     static boolean bindMethods(Class<?> clazz) {

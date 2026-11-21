@@ -1155,7 +1155,7 @@ fn validate_zip_structure(path: &Path, archive: &mut ZipArchive<File>) -> Result
                     file_len,
                 )?;
 
-                if entry.data_start() != data_start {
+                if entry.data_start() != Some(data_start) {
                     return Err(format!("ZIP data offset mismatch at entry {index}"));
                 }
 
@@ -1195,7 +1195,7 @@ fn validate_zip_structure(path: &Path, archive: &mut ZipArchive<File>) -> Result
                         .map_err(|e| format!("cannot seek to ZIP data descriptor: {e}"))?;
 
                     let mut descriptor_bytes = [0u8; 24];
-                    let available = file_len.saturating_sub(descriptor_start).min(24) as usize;
+                    let available = central_start.saturating_sub(descriptor_start).min(24) as usize;
                     if available < 12 {
                         return Err(format!("truncated ZIP data descriptor at entry {index}"));
                     }
@@ -1236,7 +1236,8 @@ fn validate_zip_structure(path: &Path, archive: &mut ZipArchive<File>) -> Result
                             && candidate_compressed == compressed_size
                             && candidate_uncompressed == uncompressed_size
                         {
-                            matched = Some(descriptor_start + required as u64);
+                            let descriptor_end = zip_checked_end(descriptor_start, required as u64, central_start)?;
+                            matched = Some(descriptor_end);
                             break;
                         }
                     }
@@ -1301,17 +1302,29 @@ pub fn scan_mod_jar(path: &Path) -> Result<ModMetadata, String> {
     let file = File::open(path).map_err(|e| format!("cannot open JAR: {e}"))?;
     let mut archive = ZipArchive::new(file).map_err(|e| format!("invalid JAR/ZIP: {e}"))?;
 
+
     validate_zip_structure(path, &mut archive)?;
+
+    archive
+        .validate_header_consistency()
+        .map_err(|e| format!("ZIP header consistency validation failed: {e}"))?;
+
 
     // Raw central-directory records were checked above, before ZipArchive
     // could collapse duplicate filenames into its internal name map.
-    let fabric = archive.file_names().any(|name| name == "fabric.mod.json");
-    let forge = archive
-        .file_names()
-        .any(|name| name == "META-INF/mods.toml");
-    let neo = archive
-        .file_names()
-        .any(|name| name == "META-INF/neoforge.mods.toml");
+    let mut fabric = false;
+    let mut forge = false;
+    let mut neo = false;
+
+    for name in archive.file_names() {
+        let name = name.map_err(|e| format!("cannot read ZIP entry name: {e}"))?;
+        match name.as_ref() {
+            "fabric.mod.json" => fabric = true,
+            "META-INF/mods.toml" => forge = true,
+            "META-INF/neoforge.mods.toml" => neo = true,
+            _ => {}
+        }
+    }
 
     let count = usize::from(fabric) + usize::from(forge) + usize::from(neo);
     if count == 0 {

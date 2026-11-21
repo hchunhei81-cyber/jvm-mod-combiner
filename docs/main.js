@@ -1,7 +1,5 @@
-
 const SUPABASE_URL = "https://wjsvxiovxsnfmjkfyxne.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_80qqEUG0mmqUCbQhPCN_Rw_oKGZATRN";
-
 
 const translations = {
   zh: {
@@ -18,8 +16,7 @@ const translations = {
     viewSource: "在 GitHub 上查看 ↗",
     heroBadge: "实验性原型 · 单向玩家镜像概念验证",
     heroTitle: "Minecraft 模组互操作",
-    heroDesc:
-      "JVM Mod Combiner 是一个基于 Rust 和 Java 的实验性原型。已验证 Fabric 与 NeoForge 在独立 JVM 中运行，并完成单向玩家状态同步概念验证；近期还加入了只读 macOS 窗口发现原型。",
+    heroDesc: "JVM Mod Combiner 是一个基于 Rust 和 Java 的实验性原型。已验证 Fabric 与 NeoForge 在独立 JVM 中运行，并完成单向玩家状态同步概念验证；近期还加入了只读 macOS 窗口发现原型。",
     explore: "探索架构",
     viewDemo: "查看启动演示",
     metricKernel: "启动内核",
@@ -108,7 +105,6 @@ const translations = {
     copyFailed: "复制失败，请手动复制",
     footerText: "独立技术研究项目 · Rust × JVM · Minecraft 1.21.4",
     backTop: "返回顶部 ↑",
-    // --- Waitlist 相关 ---
     waitlistTitle: "加入内测候补名单",
     waitlistDesc: "订阅项目更新，或申请参与内部测试。我们会在有新的构建版本时通知你。",
     waitlistEmailLabel: "邮箱地址",
@@ -127,11 +123,10 @@ const translations = {
     waitlistEmptyEmail: "请输入邮箱地址。",
     waitlistInvalidEmail: "请输入有效的邮箱地址。",
     waitlistSubmitting: "正在提交…",
-    waitlistSuccess: "已加入候补名单，感谢关注！",
+    waitlistSuccess: "提交成功！请前往您的邮箱查收确认邮件。",
     waitlistDuplicate: "这个邮箱已经在候补名单中了。",
     waitlistNetworkError: "提交失败，请稍后再试。",
-    waitlistDefaultName: "用户",
-    waitlistSuccess: "提交成功！请前往您的邮箱查收确认邮件。",
+    waitlistDefaultName: "用户"
   },
   en: {
     skipToContent: "Skip to main content",
@@ -236,7 +231,6 @@ const translations = {
     copyFailed: "Copy failed; please copy manually",
     footerText: "Independent research project · Rust × JVM · Minecraft 1.21.4",
     backTop: "Back to top ↑",
-    // --- Waitlist 相关 ---
     waitlistTitle: "Join the Waitlist",
     waitlistDesc: "Subscribe for updates or apply for beta testing. We'll notify you when new builds are available.",
     waitlistEmailLabel: "Email Address",
@@ -255,20 +249,16 @@ const translations = {
     waitlistEmptyEmail: "Please enter your email address.",
     waitlistInvalidEmail: "Please enter a valid email address.",
     waitlistSubmitting: "Submitting…",
-    waitlistSuccess: "You're on the waitlist. Thanks for your interest!",
+    waitlistSuccess: "Submitted! Please check your email to confirm your subscription.",
     waitlistDuplicate: "This email is already on the waitlist.",
     waitlistNetworkError: "Submission failed. Please try again later.",
-    waitlistDefaultName: "User",
-    waitlistSuccess: "Submitted! Please check your email to confirm your subscription.",
+    waitlistDefaultName: "User"
   }
 };
 
 document.addEventListener("DOMContentLoaded", () => {
-  // ========================
-  // 核心 UI 逻辑 (i18n, Theme, Nav, etc.)
-  // ========================
   const language = document.getElementById("language");
-  
+
   function getDict() {
     return translations[language.value] || translations.zh;
   }
@@ -276,7 +266,6 @@ document.addEventListener("DOMContentLoaded", () => {
   function setLanguage(lang) {
     const dict = getDict();
     document.documentElement.lang = lang === "zh" ? "zh-CN" : lang === "ja" ? "ja" : "en";
-    
     document.querySelectorAll("[data-i18n]").forEach((el) => {
       const key = el.dataset.i18n;
       if (dict[key] !== undefined) el.innerHTML = dict[key];
@@ -327,7 +316,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Feature search
   const featureSearch = document.getElementById("featureSearch");
   const featureCards = [...document.querySelectorAll(".feature-card")];
   const featureCount = document.getElementById("featureCount");
@@ -343,7 +331,6 @@ document.addEventListener("DOMContentLoaded", () => {
   featureSearch.addEventListener("input", filterFeatures);
   filterFeatures();
 
-  // Architecture map
   const nodeDetails = {
     rust: { eyebrow: "01 / KERNEL", title: "Rust Kernel", text: "detailRust", tags: ["Rust", "JNI", "Classpath"] },
     agent: { eyebrow: "02 / AGENT", title: "BusAgent", text: "detailAgent", tags: ["Java Agent", "premain", "Instrumentation"] },
@@ -378,7 +365,6 @@ document.addEventListener("DOMContentLoaded", () => {
   );
   renderSelectedNode();
 
-  // Terminal Replay
   const replayLines = [
     ["[Replay] Cross-sandbox prototype milestones", "info"],
     ["[BusAgent:fabric] premain", "info"],
@@ -438,7 +424,6 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("resetBtn").addEventListener("click", resetReplay);
   updateReplayHint();
 
-  // Toast & Copy
   const toast = document.getElementById("toast");
   let toastTimer;
   function showToast(message) {
@@ -458,7 +443,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }),
   );
 
-  // Terminal Hero
   const terminalLines = [
     ["[Rust] JVM Combiner prototype", "info"],
     ["[Rust] Fabric and NeoForge run in separate JVMs", "info"],
@@ -475,7 +459,6 @@ document.addEventListener("DOMContentLoaded", () => {
     terminal.appendChild(span);
   });
 
-  // Intersection Observer for animations
   if ("IntersectionObserver" in window && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
     const observer = new IntersectionObserver((entries) =>
       entries.forEach((entry) => {
@@ -496,6 +479,7 @@ document.addEventListener("DOMContentLoaded", () => {
     style.textContent = ".visible{opacity:1!important;transform:translateY(0)!important}";
     document.head.appendChild(style);
   }
+
   function initWaitlist() {
     const form = document.getElementById("waitlistForm");
     if (!form) return;
@@ -524,7 +508,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const t = getDict(); 
+      const t = getDict();
 
       const emailInput = document.getElementById("waitlistEmail");
       const nameInput = document.getElementById("waitlistName");
@@ -535,21 +519,18 @@ document.addEventListener("DOMContentLoaded", () => {
       const rawName = (nameInput?.value || "").trim();
       const interest = interestInput?.value || "news";
 
-      // 1. 邮箱为空校验
       if (!email) {
         setStatus(t.waitlistEmptyEmail, "error");
         emailInput?.focus();
         return;
       }
 
-      // 2. 邮箱格式校验
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         setStatus(t.waitlistInvalidEmail, "error");
         emailInput?.focus();
         return;
       }
 
-      // 3. 设置默认名字
       const name = rawName || t.waitlistDefaultName;
 
       setStatus(t.waitlistSubmitting, "info");
@@ -561,7 +542,6 @@ document.addEventListener("DOMContentLoaded", () => {
           .insert([{ email, name, interest }]);
 
         if (error) {
-          // 唯一约束冲突（邮箱已存在）
           if (error.code === "23505" || /duplicate/i.test(error.message || "")) {
             localStorage.setItem(STORAGE_KEY, email);
             setStatus(t.waitlistDuplicate, "success");
@@ -583,6 +563,5 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // 初始化 Waitlist
   initWaitlist();
 });

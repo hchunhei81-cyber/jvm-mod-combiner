@@ -1582,8 +1582,7 @@ fn build_neoforge_command(
     }
 
     // NeoForge 21.4.161 requires the SRG-mapped Minecraft client.
-    // The vanilla downloads.client JAR is obfuscated and must not be
-    // mixed into this runtime classpath.
+    // The vanilla official client JAR is not a substitute.
     let minecraft_client = libraries_dir
         .join("net/minecraft/client/1.21.4-20241203.161809/client-1.21.4-20241203.161809-srg.jar");
 
@@ -1594,8 +1593,7 @@ fn build_neoforge_command(
         ));
     }
 
-    let client_value = minecraft_client.to_string_lossy().to_string();
-    push_unique_ordered(&mut classpath, &mut classpath_seen, client_value);
+
     // 2. 提取 macOS 原生库
     // ---------------------------------------------------------
 
@@ -1618,9 +1616,6 @@ fn build_neoforge_command(
         }
     }
 
-    // ---------------------------------------------------------
-    // 3. JVM 参数：NeoForge + Vanilla
-    // ---------------------------------------------------------
 
     let mut jvm_args: Vec<String> = Vec::new();
 

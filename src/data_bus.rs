@@ -663,7 +663,7 @@ fn handle_client(mut stream: UnixStream, state: Arc<Mutex<State>>) {
 
         let authoritative = matches!(
             kind,
-            "player_move" | "monster_spawn" | "monster_update" | "monster_remove"
+            "player_move" | "entity_spawn" | "entity_update" | "entity_remove"
         );
 
         if authoritative && role != "fabric" {

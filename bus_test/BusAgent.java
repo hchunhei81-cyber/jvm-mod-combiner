@@ -21,11 +21,11 @@ public class BusAgent {
             "from", "to", "type",
             "x", "y", "z", "yaw", "pitch", "sprint");
 
-    private static final java.util.Set<String> MONSTER_FIELDS = java.util.Set.of(
+    private static final java.util.Set<String> ENTITY_FIELDS = java.util.Set.of(
             "from", "to", "type", "uuid", "seq", "entity_type",
             "x", "y", "z", "yaw", "pitch", "health", "max_health");
 
-    private static final java.util.Set<String> MONSTER_REMOVE_FIELDS = java.util.Set.of("from", "to", "type", "uuid",
+    private static final java.util.Set<String> ENTITY_REMOVE_FIELDS = java.util.Set.of("from", "to", "type", "uuid",
             "seq");
 
     private static final java.util.concurrent.atomic.AtomicLong LAST_INVALID_MESSAGE_LOG_AT = new java.util.concurrent.atomic.AtomicLong(
@@ -94,11 +94,11 @@ public class BusAgent {
         }
 
         switch (type) {
-            case "monster_ack":
+            case "entity_ack":
                 if (!"fabric".equals(localRole) ||
                         !"neoforge".equals(expectedPeer)) {
                     throw new IllegalArgumentException(
-                            "monster_ack received by wrong role");
+                            "entity_ack received by wrong role");
                 }
 
                 StrictJson.requireKeys(message, ACK_FIELDS, ACK_FIELDS);
@@ -111,17 +111,17 @@ public class BusAgent {
                 StrictJson.positiveLong(message, "seq");
                 break;
 
-            case "monster_remove":
+            case "entity_remove":
                 if (!"neoforge".equals(localRole) ||
                         !"fabric".equals(expectedPeer)) {
                     throw new IllegalArgumentException(
-                            "monster_remove received by wrong role");
+                            "entity_remove received by wrong role");
                 }
 
                 StrictJson.requireKeys(
                         message,
-                        MONSTER_REMOVE_FIELDS,
-                        MONSTER_REMOVE_FIELDS);
+                        ENTITY_REMOVE_FIELDS,
+                        ENTITY_REMOVE_FIELDS);
 
                 String removeUuid = StrictJson.string(message, "uuid");
 
@@ -151,8 +151,8 @@ public class BusAgent {
                 StrictJson.bool(message, "sprint");
                 break;
 
-            case "monster_spawn":
-            case "monster_update":
+            case "entity_spawn":
+            case "entity_update":
                 if (!"neoforge".equals(localRole) ||
                         !"fabric".equals(expectedPeer)) {
                     throw new IllegalArgumentException(
@@ -160,7 +160,7 @@ public class BusAgent {
                 }
 
                 StrictJson.requireKeys(
-                        message, MONSTER_FIELDS, MONSTER_FIELDS);
+                        message, ENTITY_FIELDS, ENTITY_FIELDS);
 
                 String uuid = StrictJson.string(message, "uuid");
                 if (!UUID_PATTERN.matcher(uuid).matches()) {
@@ -196,6 +196,84 @@ public class BusAgent {
         }
 
         return type;
+    }
+
+    private static final java.util.Set<String> ROUTED_FIELDS =
+            java.util.Set.of("routed", "from", "to");
+    private static final java.util.Set<String> ERROR_FIELDS =
+            java.util.Set.of("error");
+    private static final java.util.concurrent.atomic.AtomicLong
+            LAST_SERVER_ERROR_LOG_AT =
+            new java.util.concurrent.atomic.AtomicLong(0L);
+
+    /**
+     * Handles Rust DataBus control frames before peer game-message validation.
+     * Returns false only when the frame is an ordinary peer game message.
+     */
+    private static boolean handleInboundControlMessage(
+            java.util.Map<String, Object> message,
+            String expectedPeer,
+            String localRole) {
+
+        boolean hasRouted = message.containsKey("routed");
+        boolean hasError = message.containsKey("error");
+
+        if (!hasRouted && !hasError) {
+            return false;
+        }
+
+        if (hasRouted == hasError) {
+            throw new IllegalArgumentException(
+                    "Ambiguous DataBus control frame");
+        }
+
+        if (hasRouted) {
+            StrictJson.requireKeys(
+                    message, ROUTED_FIELDS, ROUTED_FIELDS);
+
+            if (!StrictJson.bool(message, "routed")) {
+                throw new IllegalArgumentException(
+                        "DataBus route confirmation must be true");
+            }
+
+            String from = StrictJson.string(message, "from");
+            String to = StrictJson.string(message, "to");
+
+            if (!localRole.equals(from)) {
+                throw new IllegalArgumentException(
+                        "DataBus route confirmation has wrong sender");
+            }
+
+            if (!"*".equals(to) && !expectedPeer.equals(to)) {
+                throw new IllegalArgumentException(
+                        "DataBus route confirmation has wrong target");
+            }
+
+            logDebug(
+                    "[BusAgent:" + localRole +
+                    "][DataBus][ROUTED] to=" + to);
+            return true;
+        }
+
+        StrictJson.requireKeys(message, ERROR_FIELDS, ERROR_FIELDS);
+        String errorCode = StrictJson.string(message, "error");
+
+        if (!errorCode.matches("[a-zA-Z0-9_.-]{1,128}")) {
+            throw new IllegalArgumentException(
+                    "Invalid DataBus server error code");
+        }
+
+        long now = System.currentTimeMillis();
+        long previous = LAST_SERVER_ERROR_LOG_AT.get();
+
+        if (now - previous >= 1000L &&
+                LAST_SERVER_ERROR_LOG_AT.compareAndSet(previous, now)) {
+            System.err.println(
+                    "[BusAgent:" + localRole +
+                    "][DataBus][SERVER_ERROR] " + errorCode);
+        }
+
+        return true;
     }
 
     // Default INFO keeps routine per-message diagnostics out of the console.
@@ -393,13 +471,14 @@ public class BusAgent {
     }
 
     // Immutable, ClassLoader-scoped NeoForge monster reflection bindings.
-    static volatile NeoForgeMonsterBindings nfMonsterBindings = null;
+    static volatile NeoForgeEntityBindings nfEntityBindings = null;
 
-    static final class NeoForgeMonsterBindings {
+    static final class NeoForgeEntityBindings {
         final ClassLoader loader;
 
         final Class<?> entityClass;
         final Class<?> livingClass;
+        final Class<?> playerClass;
         final Class<?> levelClass;
         final Class<?> clientLevelClass;
         final Class<?> entityTypeClass;
@@ -427,10 +506,11 @@ public class BusAgent {
         final Method clientLevelAddEntity;
         final Method livingSetHealth;
 
-        NeoForgeMonsterBindings(
+        NeoForgeEntityBindings(
                 ClassLoader loader,
                 Class<?> entityClass,
                 Class<?> livingClass,
+                Class<?> playerClass,
                 Class<?> levelClass,
                 Class<?> clientLevelClass,
                 Class<?> entityTypeClass,
@@ -459,6 +539,7 @@ public class BusAgent {
             this.loader = loader;
             this.entityClass = entityClass;
             this.livingClass = livingClass;
+            this.playerClass = playerClass;
             this.levelClass = levelClass;
             this.clientLevelClass = clientLevelClass;
             this.entityTypeClass = entityTypeClass;
@@ -486,16 +567,16 @@ public class BusAgent {
         }
     }
 
-    static NeoForgeMonsterBindings getNeoForgeMonsterBindings(
+    static NeoForgeEntityBindings getNeoForgeEntityBindings(
             ClassLoader loader) throws Exception {
 
-        NeoForgeMonsterBindings cached = nfMonsterBindings;
+        NeoForgeEntityBindings cached = nfEntityBindings;
         if (cached != null && cached.loader == loader) {
             return cached;
         }
 
         synchronized (BusAgent.class) {
-            cached = nfMonsterBindings;
+            cached = nfEntityBindings;
             if (cached != null && cached.loader == loader) {
                 return cached;
             }
@@ -505,6 +586,8 @@ public class BusAgent {
                     "net.minecraft.world.entity.Entity", true, loader);
             Class<?> livingClass = Class.forName(
                     "net.minecraft.world.entity.LivingEntity", true, loader);
+            Class<?> playerClass = Class.forName(
+                    "net.minecraft.world.entity.player.Player", true, loader);
             Class<?> levelClass = Class.forName(
                     "net.minecraft.world.level.Level", true, loader);
             Class<?> clientLevelClass = Class.forName(
@@ -540,10 +623,11 @@ public class BusAgent {
             Method clientLevelAddEntity = clientLevelClass.getMethod("addEntity", entityClass);
             Method livingSetHealth = livingClass.getMethod("setHealth", float.class);
 
-            NeoForgeMonsterBindings result = new NeoForgeMonsterBindings(
+            NeoForgeEntityBindings result = new NeoForgeEntityBindings(
                     loader,
                     entityClass,
                     livingClass,
+                    playerClass,
                     levelClass,
                     clientLevelClass,
                     entityTypeClass,
@@ -569,18 +653,18 @@ public class BusAgent {
                     clientLevelAddEntity,
                     livingSetHealth);
 
-            nfMonsterBindings = result;
+            nfEntityBindings = result;
             return result;
         }
     }
 
     static volatile Object remotePlayer = null;
     static volatile Object remotePlayerLevel = null;
-    static final java.util.concurrent.ConcurrentHashMap<java.util.UUID, Object> remoteMonsters = new java.util.concurrent.ConcurrentHashMap<>();
-    static final MonsterSequenceTracker remoteMonsterSequences = new MonsterSequenceTracker(16384);
-    static volatile Object remoteMonsterLevel = null;
-    static volatile int nextRemoteMonsterId = 1_800_000_000;
-    static final java.util.concurrent.atomic.AtomicBoolean monsterErrorPrinted = new java.util.concurrent.atomic.AtomicBoolean(
+    static final java.util.concurrent.ConcurrentHashMap<java.util.UUID, Object> remoteEntities = new java.util.concurrent.ConcurrentHashMap<>();
+    static final MonsterSequenceTracker remoteEntitySequences = new MonsterSequenceTracker(16384);
+    static volatile Object remoteEntityLevel = null;
+    static volatile int nextRemoteEntityId = 1_800_000_000;
+    static final java.util.concurrent.atomic.AtomicBoolean entityErrorPrinted = new java.util.concurrent.atomic.AtomicBoolean(
             false);
     // NeoForge mirror lifecycle state.
     static volatile boolean dataBusConnected = false;
@@ -592,8 +676,8 @@ public class BusAgent {
             false);
 
     // Monster cleanup is deliberately independent of player cleanup.
-    static volatile boolean nfMonsterReconnectCleanupPending = false;
-    static final MonsterCleanupCoordinator monsterCleanupCoordinator = new MonsterCleanupCoordinator();
+    static volatile boolean nfEntityReconnectCleanupPending = false;
+    static final MonsterCleanupCoordinator entityCleanupCoordinator = new MonsterCleanupCoordinator();
 
     static volatile boolean nfInitialized = false;
 
@@ -601,6 +685,9 @@ public class BusAgent {
     static volatile boolean nfLevelReadyLogged = false;
     static volatile boolean nfPlayerReadyLogged = false;
     static volatile boolean nfProbeErrorPrinted = false;
+    static final java.util.concurrent.atomic.AtomicBoolean
+            nfEntityBindingProbeAttempted =
+                    new java.util.concurrent.atomic.AtomicBoolean(false);
 
     static final java.util.concurrent.atomic.AtomicBoolean nfProbePending = new java.util.concurrent.atomic.AtomicBoolean(
             false);
@@ -710,7 +797,7 @@ public class BusAgent {
                             connectionGeneration = dataBusGeneration;
                             dataBusConnected = true;
                             nfReconnectCleanupPending = true;
-                            nfMonsterReconnectCleanupPending = true;
+                            nfEntityReconnectCleanupPending = true;
                             lastFabricReceiveAt = 0L;
                         } else {
                             connectionGeneration = -1L;
@@ -728,7 +815,7 @@ public class BusAgent {
                                 2,
                                 0L);
 
-                        scheduleRemoteMonsterRemoval(
+                        scheduleRemoteEntityRemoval(
                                 "bus-reconnected",
                                 connectionGeneration,
                                 2);
@@ -742,6 +829,10 @@ public class BusAgent {
 
                         try {
                             message = StrictJson.parseUtf8(bytes);
+                            if (handleInboundControlMessage(
+                                    message, peer, myName)) {
+                                continue;
+                            }
                             incomingType = validateInboundMessage(
                                     message, peer, myName);
                         } catch (IllegalArgumentException rejected) {
@@ -763,11 +854,11 @@ public class BusAgent {
                                 lastFabricReceiveAt = System.currentTimeMillis();
                             }
                             handleNeoForgeSync(message);
-                        } else if ("monster_spawn".equals(incomingType) ||
-                                "monster_update".equals(incomingType)) {
-                            handleNeoForgeMonsterSync(message);
-                        } else if ("monster_remove".equals(incomingType)) {
-                            handleNeoForgeMonsterRemove(message);
+                        } else if ("entity_spawn".equals(incomingType) ||
+                                "entity_update".equals(incomingType)) {
+                            handleNeoForgeEntitySync(message);
+                        } else if ("entity_remove".equals(incomingType)) {
+                            handleNeoForgeEntityRemove(message);
                         }
                     }
                 } finally {
@@ -981,19 +1072,19 @@ public class BusAgent {
 
             if (writer.checkError()) {
                 System.err.println(
-                        "[BusAgent:fabric][MONSTER][SEND][ERROR] " +
+                        "[BusAgent:fabric][ENTITY][SEND][ERROR] " +
                                 "DataBus write failed");
                 return false;
             }
         }
 
         BusAgent.logDebug(
-                "[BusAgent:fabric][MONSTER][SEND] message written");
+                "[BusAgent:fabric][ENTITY][SEND] message written");
 
         return true;
     }
 
-    static boolean sendNeoForgeMonsterAck(
+    static boolean sendNeoForgeEntityAck(
             java.util.UUID uuid,
             long seq) {
         if (!"neoforge".equals(myName) ||
@@ -1003,7 +1094,7 @@ public class BusAgent {
         }
 
         String json = "{\"to\":\"fabric\"," +
-                "\"type\":\"monster_ack\"," +
+                "\"type\":\"entity_ack\"," +
                 "\"uuid\":\"" + uuid + "\"," +
                 "\"seq\":" + seq +
                 "}";
@@ -1019,14 +1110,14 @@ public class BusAgent {
 
             if (writer.checkError()) {
                 System.err.println(
-                        "[BusAgent:neoforge][MONSTER][ACK][ERROR] " +
+                        "[BusAgent:neoforge][ENTITY][ACK][ERROR] " +
                                 "DataBus write failed");
                 return false;
             }
         }
 
         BusAgent.logDebug(
-                "[BusAgent:neoforge][MONSTER][ACK] uuid=" +
+                "[BusAgent:neoforge][ENTITY][ACK] uuid=" +
                         uuid + " seq=" + seq);
 
         return true;
@@ -1110,7 +1201,7 @@ public class BusAgent {
                 initNeoForgeMinecraft();
 
                 checkRemotePlayerLifecycle();
-                checkRemoteMonsterLifecycle();
+                checkRemoteEntityLifecycle();
 
                 Object mc = nfMcInstance;
 
@@ -1131,6 +1222,23 @@ public class BusAgent {
 
                                     boolean levelReady = level != null;
                                     boolean playerReady = levelReady && player != null;
+
+                                    if (levelReady &&
+                                            nfEntityBindingProbeAttempted.compareAndSet(false, true)) {
+                                        try {
+                                            NeoForgeEntityBindings bindings =
+                                                    getNeoForgeEntityBindings(nfMcClass.getClassLoader());
+                                            System.out.println(
+                                                    "[BusAgent:neoforge][ENTITY][BIND][OK] " +
+                                                    "Entity=" + bindings.entityClass.getName() +
+                                                    ", LivingEntity=" + bindings.livingClass.getName());
+                                        } catch (Throwable bindingError) {
+                                            System.err.println(
+                                                    "[BusAgent:neoforge][ENTITY][BIND][ERROR] " +
+                                                    bindingError);
+                                            bindingError.printStackTrace(System.err);
+                                        }
+                                    }
 
                                     synchronized (BusAgent.class) {
                                         if (levelReady != nfLevelReadyLogged) {
@@ -1381,7 +1489,7 @@ public class BusAgent {
         }
     }
 
-    private static String monsterSyncFingerprint(
+    private static String entitySyncFingerprint(
             String operationType,
             String entityTypeId,
             double x,
@@ -1402,7 +1510,7 @@ public class BusAgent {
                 "\u0000" + Float.toHexString(maxHealth);
     }
 
-    static void handleNeoForgeMonsterSync(java.util.Map<String, Object> message) {
+    static void handleNeoForgeEntitySync(java.util.Map<String, Object> message) {
         try {
             if (!nfInitialized || nfMcInstance == null) {
                 initNeoForgeMinecraft();
@@ -1444,14 +1552,14 @@ public class BusAgent {
                         "Invalid monster numeric state: " + uuid);
             }
 
-            final String fingerprint = monsterSyncFingerprint(
+            final String fingerprint = entitySyncFingerprint(
                     operationType, entityTypeId,
                     x, y, z, yaw, pitch, health, maxHealth);
 
             final long generation;
 
             synchronized (BusAgent.class) {
-                if (!dataBusConnected || nfMonsterReconnectCleanupPending) {
+                if (!dataBusConnected || nfEntityReconnectCleanupPending) {
                     return;
                 }
 
@@ -1465,19 +1573,19 @@ public class BusAgent {
                     synchronized (BusAgent.class) {
                         if (!dataBusConnected ||
                                 dataBusGeneration != generation ||
-                                nfMonsterReconnectCleanupPending) {
+                                nfEntityReconnectCleanupPending) {
                             return;
                         }
 
-                        MonsterSequenceTracker.Decision decision = remoteMonsterSequences.inspect(
+                        MonsterSequenceTracker.Decision decision = remoteEntitySequences.inspect(
                                 uuid, seq, fingerprint);
                         if (decision == MonsterSequenceTracker.Decision.DUPLICATE) {
-                            sendNeoForgeMonsterAck(uuid, seq);
+                            sendNeoForgeEntityAck(uuid, seq);
                             return;
                         }
                         if (decision != MonsterSequenceTracker.Decision.ACCEPT) {
                             logDebug(
-                                    "[BusAgent:neoforge][MONSTER][REJECT] " +
+                                    "[BusAgent:neoforge][ENTITY][REJECT] " +
                                             "Sequence rejected: " + decision +
                                             " uuid=" + uuid + " seq=" + seq);
                             return;
@@ -1491,7 +1599,7 @@ public class BusAgent {
                     }
 
                     ClassLoader loader = nfMcClass.getClassLoader();
-                    NeoForgeMonsterBindings bindings = getNeoForgeMonsterBindings(loader);
+                    NeoForgeEntityBindings bindings = getNeoForgeEntityBindings(loader);
 
                     Class<?> entityClass = bindings.entityClass;
                     Class<?> livingClass = bindings.livingClass;
@@ -1505,17 +1613,17 @@ public class BusAgent {
 
                     // A world transition must not silently forget
                     // entities that could not be removed.
-                    if (remoteMonsterLevel != null &&
-                            remoteMonsterLevel != level) {
-                        if (!removeRemoteMonstersNow("world-changed") ||
-                                !remoteMonsters.isEmpty()) {
+                    if (remoteEntityLevel != null &&
+                            remoteEntityLevel != level) {
+                        if (!removeRemoteEntitiesNow("world-changed") ||
+                                !remoteEntities.isEmpty()) {
                             return;
                         }
                     }
 
-                    remoteMonsterLevel = level;
+                    remoteEntityLevel = level;
 
-                    Object entity = remoteMonsters.get(uuid);
+                    Object entity = remoteEntities.get(uuid);
 
                     if (entity != null) {
                         boolean removed = Boolean.TRUE.equals(
@@ -1523,15 +1631,15 @@ public class BusAgent {
                                         .invoke(entity));
 
                         if (removed) {
-                            remoteMonsters.remove(uuid, entity);
+                            remoteEntities.remove(uuid, entity);
                             entity = null;
                         }
                     }
 
                     if (entity == null) {
-                        if (remoteMonsters.size() >= 1024) {
+                        if (remoteEntities.size() >= 1024) {
                             logDebug(
-                                    "[BusAgent:neoforge][MONSTER][LIMIT] " +
+                                    "[BusAgent:neoforge][ENTITY][LIMIT] " +
                                             "Remote monster capacity reached; uuid=" +
                                             uuid);
                             return;
@@ -1555,7 +1663,7 @@ public class BusAgent {
 
                         if (found.isEmpty()) {
                             System.err.println(
-                                    "[BusAgent:neoforge][MONSTER][SKIP] " +
+                                    "[BusAgent:neoforge][ENTITY][SKIP] " +
                                             "Unknown entity type: " + entityTypeId);
                             return;
                         }
@@ -1571,13 +1679,22 @@ public class BusAgent {
 
                         if (entity == null) {
                             System.err.println(
-                                    "[BusAgent:neoforge][MONSTER][SKIP] " +
+                                    "[BusAgent:neoforge][ENTITY][SKIP] " +
                                             "Entity creation returned null: " +
                                             entityTypeId);
                             return;
                         }
 
-                        int candidate = nextRemoteMonsterId;
+                        if (!livingClass.isInstance(entity) ||
+                                bindings.playerClass.isInstance(entity)) {
+                            System.err.println(
+                                    "[BusAgent:neoforge][ENTITY][REJECT] " +
+                                            "Mirror must be a non-player LivingEntity: " +
+                                            entityTypeId);
+                            return;
+                        }
+
+                        int candidate = nextRemoteEntityId;
 
                         Method getEntity = bindings.clientLevelGetEntity;
 
@@ -1599,7 +1716,7 @@ public class BusAgent {
                                     "Unable to allocate remote monster entity ID");
                         }
 
-                        nextRemoteMonsterId = candidate - 1;
+                        nextRemoteEntityId = candidate - 1;
 
                         setId.invoke(entity, candidate);
 
@@ -1609,10 +1726,10 @@ public class BusAgent {
 
                         bindings.entitySetOldPosAndRot.invoke(entity);
 
-                        remoteMonsters.put(uuid, entity);
+                        remoteEntities.put(uuid, entity);
 
                         System.out.println(
-                                "[BusAgent:neoforge][MONSTER][SPAWN] " +
+                                "[BusAgent:neoforge][ENTITY][SPAWN] " +
                                         "type=" + entityTypeId +
                                         " uuid=" + uuid +
                                         " id=" + candidate);
@@ -1670,19 +1787,19 @@ public class BusAgent {
                     synchronized (BusAgent.class) {
                         if (!dataBusConnected ||
                                 dataBusGeneration != generation ||
-                                nfMonsterReconnectCleanupPending) {
+                                nfEntityReconnectCleanupPending) {
                             return;
                         }
 
-                        remoteMonsterSequences.commit(
+                        remoteEntitySequences.commit(
                                 uuid, seq, fingerprint);
-                        sendNeoForgeMonsterAck(uuid, seq);
+                        sendNeoForgeEntityAck(uuid, seq);
                     }
 
                 } catch (Throwable error) {
-                    if (monsterErrorPrinted.compareAndSet(false, true)) {
+                    if (entityErrorPrinted.compareAndSet(false, true)) {
                         System.err.println(
-                                "[BusAgent:neoforge][MONSTER][ERROR] " +
+                                "[BusAgent:neoforge][ENTITY][ERROR] " +
                                         "Monster main-thread handler failed");
 
                         error.printStackTrace(System.err);
@@ -1691,9 +1808,9 @@ public class BusAgent {
             });
 
         } catch (Throwable error) {
-            if (monsterErrorPrinted.compareAndSet(false, true)) {
+            if (entityErrorPrinted.compareAndSet(false, true)) {
                 System.err.println(
-                        "[BusAgent:neoforge][MONSTER][ERROR] " +
+                        "[BusAgent:neoforge][ENTITY][ERROR] " +
                                 "Monster message rejected");
 
                 error.printStackTrace(System.err);
@@ -1703,28 +1820,28 @@ public class BusAgent {
 
     // Must only be called on the NeoForge Minecraft game thread.
     // Entries are removed from the map only after entity removal is verified.
-    static boolean removeRemoteMonstersNow(String reason) {
-        NeoForgeMonsterBindings bindings;
+    static boolean removeRemoteEntitiesNow(String reason) {
+        NeoForgeEntityBindings bindings;
 
         try {
             Object mc = nfMcInstance;
             if (mc == null || nfMcClass == null) {
-                return remoteMonsters.isEmpty();
+                return remoteEntities.isEmpty();
             }
 
-            bindings = getNeoForgeMonsterBindings(
+            bindings = getNeoForgeEntityBindings(
                     nfMcClass.getClassLoader());
 
         } catch (Throwable error) {
             System.err.println(
-                    "[BusAgent:neoforge][MONSTER][CLEANUP][ERROR] " +
+                    "[BusAgent:neoforge][ENTITY][CLEANUP][ERROR] " +
                             "Could not resolve removal bindings: " + error);
-            return remoteMonsters.isEmpty();
+            return remoteEntities.isEmpty();
         }
 
         boolean allRemoved = true;
 
-        for (java.util.Map.Entry<java.util.UUID, Object> entry : remoteMonsters.entrySet()) {
+        for (java.util.Map.Entry<java.util.UUID, Object> entry : remoteEntities.entrySet()) {
             java.util.UUID uuid = entry.getKey();
             Object entity = entry.getValue();
 
@@ -1740,36 +1857,36 @@ public class BusAgent {
                         bindings.entityIsRemoved.invoke(entity));
 
                 if (removed) {
-                    remoteMonsters.remove(uuid, entity);
+                    remoteEntities.remove(uuid, entity);
                 } else {
                     allRemoved = false;
                     System.err.println(
-                            "[BusAgent:neoforge][MONSTER][CLEANUP] " +
+                            "[BusAgent:neoforge][ENTITY][CLEANUP] " +
                                     "Entity remains; retaining reference uuid=" + uuid);
                 }
 
             } catch (Throwable error) {
                 allRemoved = false;
                 System.err.println(
-                        "[BusAgent:neoforge][MONSTER][CLEANUP][ERROR] " +
+                        "[BusAgent:neoforge][ENTITY][CLEANUP][ERROR] " +
                                 "Removal failed; retaining uuid=" + uuid +
                                 " error=" + error);
             }
         }
 
-        if (remoteMonsters.isEmpty()) {
-            remoteMonsterLevel = null;
+        if (remoteEntities.isEmpty()) {
+            remoteEntityLevel = null;
             System.out.println(
-                    "[BusAgent:neoforge][MONSTER][LIFECYCLE] " +
+                    "[BusAgent:neoforge][ENTITY][LIFECYCLE] " +
                             "All remote monsters removed reason=" + reason);
             return true;
         }
 
-        return allRemoved && remoteMonsters.isEmpty();
+        return allRemoved && remoteEntities.isEmpty();
     }
 
     // Called by the NeoForge DataBus monitor thread.
-    static void checkRemoteMonsterLifecycle() {
+    static void checkRemoteEntityLifecycle() {
         if (!"neoforge".equals(myName)) {
             return;
         }
@@ -1780,12 +1897,12 @@ public class BusAgent {
 
         synchronized (BusAgent.class) {
             connected = dataBusConnected;
-            reconnectCleanup = nfMonsterReconnectCleanupPending;
+            reconnectCleanup = nfEntityReconnectCleanupPending;
             generation = dataBusGeneration;
         }
 
         if (!connected || reconnectCleanup) {
-            scheduleRemoteMonsterRemoval(
+            scheduleRemoteEntityRemoval(
                     connected ? "bus-reconnected" : "bus-disconnected",
                     generation,
                     connected ? 2 : 0);
@@ -1794,7 +1911,7 @@ public class BusAgent {
 
     // condition 0: cleanup only while disconnected.
     // condition 2: cleanup only for the current connected generation.
-    static void scheduleRemoteMonsterRemoval(
+    static void scheduleRemoteEntityRemoval(
             String reason,
             long generation,
             int condition) {
@@ -1805,7 +1922,7 @@ public class BusAgent {
             return;
         }
 
-        final Object cleanupLease = monsterCleanupCoordinator.tryAcquire();
+        final Object cleanupLease = entityCleanupCoordinator.tryAcquire();
 
         if (cleanupLease == null) {
             return;
@@ -1817,7 +1934,7 @@ public class BusAgent {
                     (Runnable) () -> {
                         try {
                             synchronized (BusAgent.class) {
-                                if (!monsterCleanupCoordinator.isEligible(
+                                if (!entityCleanupCoordinator.isEligible(
                                         dataBusGeneration,
                                         generation,
                                         dataBusConnected,
@@ -1826,43 +1943,43 @@ public class BusAgent {
                                 }
                             }
 
-                            boolean removed = removeRemoteMonstersNow(reason);
+                            boolean removed = removeRemoteEntitiesNow(reason);
 
                             if (removed && condition == 2) {
                                 synchronized (BusAgent.class) {
-                                    if (monsterCleanupCoordinator.canReleaseBarrier(
+                                    if (entityCleanupCoordinator.canReleaseBarrier(
                                             removed,
                                             condition,
                                             dataBusGeneration,
                                             generation,
                                             dataBusConnected,
-                                            remoteMonsters.isEmpty(),
-                                            nfMonsterReconnectCleanupPending)) {
-                                        remoteMonsterSequences.clear();
-                                        nfMonsterReconnectCleanupPending = false;
+                                            remoteEntities.isEmpty(),
+                                            nfEntityReconnectCleanupPending)) {
+                                        remoteEntitySequences.clear();
+                                        nfEntityReconnectCleanupPending = false;
                                     }
                                 }
                             }
 
                         } catch (Throwable error) {
                             System.err.println(
-                                    "[BusAgent:neoforge][MONSTER][CLEANUP][ERROR] " +
+                                    "[BusAgent:neoforge][ENTITY][CLEANUP][ERROR] " +
                                             "Scheduled cleanup failed: " + error);
                         } finally {
-                            monsterCleanupCoordinator.release(cleanupLease);
+                            entityCleanupCoordinator.release(cleanupLease);
                         }
                     });
 
         } catch (Throwable error) {
-            monsterCleanupCoordinator.release(cleanupLease);
+            entityCleanupCoordinator.release(cleanupLease);
 
             System.err.println(
-                    "[BusAgent:neoforge][MONSTER][CLEANUP][ERROR] " +
+                    "[BusAgent:neoforge][ENTITY][CLEANUP][ERROR] " +
                             "Could not schedule cleanup: " + error);
         }
     }
 
-    static void handleNeoForgeMonsterRemove(
+    static void handleNeoForgeEntityRemove(
             java.util.Map<String, Object> message) {
         try {
             if (!nfInitialized || nfMcInstance == null) {
@@ -1879,7 +1996,7 @@ public class BusAgent {
 
             final long generation;
             synchronized (BusAgent.class) {
-                if (!dataBusConnected || nfMonsterReconnectCleanupPending) {
+                if (!dataBusConnected || nfEntityReconnectCleanupPending) {
                     return;
                 }
                 generation = dataBusGeneration;
@@ -1892,19 +2009,19 @@ public class BusAgent {
                     synchronized (BusAgent.class) {
                         if (!dataBusConnected ||
                                 dataBusGeneration != generation ||
-                                nfMonsterReconnectCleanupPending) {
+                                nfEntityReconnectCleanupPending) {
                             return;
                         }
 
-                        MonsterSequenceTracker.Decision decision = remoteMonsterSequences.inspect(
+                        MonsterSequenceTracker.Decision decision = remoteEntitySequences.inspect(
                                 uuid, seq, fingerprint);
                         if (decision == MonsterSequenceTracker.Decision.DUPLICATE) {
-                            sendNeoForgeMonsterAck(uuid, seq);
+                            sendNeoForgeEntityAck(uuid, seq);
                             return;
                         }
                         if (decision != MonsterSequenceTracker.Decision.ACCEPT) {
                             logDebug(
-                                    "[BusAgent:neoforge][MONSTER][REMOVE][REJECT] " +
+                                    "[BusAgent:neoforge][ENTITY][REMOVE][REJECT] " +
                                             "Sequence rejected: " + decision +
                                             " uuid=" + uuid + " seq=" + seq);
                             return;
@@ -1916,10 +2033,10 @@ public class BusAgent {
                         return;
                     }
 
-                    Object entity = remoteMonsters.get(uuid);
+                    Object entity = remoteEntities.get(uuid);
 
                     if (entity != null) {
-                        NeoForgeMonsterBindings bindings = getNeoForgeMonsterBindings(
+                        NeoForgeEntityBindings bindings = getNeoForgeEntityBindings(
                                 nfMcClass.getClassLoader());
 
                         if (!Boolean.TRUE.equals(
@@ -1935,11 +2052,11 @@ public class BusAgent {
                                     "Monster removal not confirmed: " + uuid);
                         }
 
-                        remoteMonsters.remove(uuid, entity);
+                        remoteEntities.remove(uuid, entity);
                     }
 
-                    if (remoteMonsters.isEmpty()) {
-                        remoteMonsterLevel = level;
+                    if (remoteEntities.isEmpty()) {
+                        remoteEntityLevel = level;
                     }
 
                     // Keep generation validation and ACK write atomic with
@@ -1947,19 +2064,19 @@ public class BusAgent {
                     synchronized (BusAgent.class) {
                         if (!dataBusConnected ||
                                 dataBusGeneration != generation ||
-                                nfMonsterReconnectCleanupPending) {
+                                nfEntityReconnectCleanupPending) {
                             return;
                         }
 
-                        remoteMonsterSequences.commit(
+                        remoteEntitySequences.commit(
                                 uuid, seq, fingerprint);
-                        sendNeoForgeMonsterAck(uuid, seq);
+                        sendNeoForgeEntityAck(uuid, seq);
                     }
 
                 } catch (Throwable error) {
-                    if (monsterErrorPrinted.compareAndSet(false, true)) {
+                    if (entityErrorPrinted.compareAndSet(false, true)) {
                         System.err.println(
-                                "[BusAgent:neoforge][MONSTER][REMOVE][ERROR] " +
+                                "[BusAgent:neoforge][ENTITY][REMOVE][ERROR] " +
                                         "Removal was not acknowledged");
                         error.printStackTrace(System.err);
                     }
@@ -1967,9 +2084,9 @@ public class BusAgent {
             });
 
         } catch (Throwable error) {
-            if (monsterErrorPrinted.compareAndSet(false, true)) {
+            if (entityErrorPrinted.compareAndSet(false, true)) {
                 System.err.println(
-                        "[BusAgent:neoforge][MONSTER][REMOVE][ERROR] " +
+                        "[BusAgent:neoforge][ENTITY][REMOVE][ERROR] " +
                                 "Invalid removal message");
                 error.printStackTrace(System.err);
             }
@@ -2060,7 +2177,7 @@ public class BusAgent {
             dataBusGeneration++;
             generation = dataBusGeneration;
             out = null;
-            nfMonsterReconnectCleanupPending = true;
+            nfEntityReconnectCleanupPending = true;
         }
 
         System.out.println(
@@ -2072,7 +2189,7 @@ public class BusAgent {
                 0,
                 0L);
 
-        scheduleRemoteMonsterRemoval(
+        scheduleRemoteEntityRemoval(
                 "bus-disconnected",
                 generation,
                 0);

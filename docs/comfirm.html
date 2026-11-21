@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>确认订阅 - JVM Mod Combiner</title>
+    <link rel="stylesheet" href="style.css" />
+    <style>
+      .confirm-page {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+      .confirm-card {
+        max-width: 480px;
+        width: 100%;
+        text-align: center;
+        padding: 40px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+      }
+      .spinner {
+        display: inline-block;
+        width: 32px;
+        height: 32px;
+        border: 3px solid var(--border);
+        border-radius: 50%;
+        border-top-color: var(--brand);
+        animation: spin 1s infinite linear;
+        margin-bottom: 20px;
+      }
+      @keyframes spin { 100% { transform: rotate(360deg); } }
+      .status-icon { font-size: 40px; margin-bottom: 15px; }
+      .error-text { color: #b91c1c; }
+      .success-text { color: var(--brand); }
+      .confirm-actions { margin-top: 24px; }
+    </style>
+  </head>
+  <body>
+    <div class="confirm-page">
+      <div class="confirm-card">
+        <!-- 加载状态 -->
+        <div id="loadingState">
+          <div class="spinner"></div>
+          <h2>正在验证您的邮箱...</h2>
+          <p style="color: var(--muted)">请稍候，我们正在确认您的订阅。</p>
+        </div>
+
+        <!-- 成功状态 -->
+        <div id="successState" hidden>
+          <div class="status-icon">✅</div>
+          <h2 class="success-text">验证成功！</h2>
+          <p style="color: var(--muted)">您已成功加入内测候补名单。有新版本发布时我们会通知您。</p>
+          <div class="confirm-actions">
+            <a href="index.html" class="button button-primary">返回首页</a>
+          </div>
+        </div>
+
+        <!-- 失败状态 -->
+        <div id="errorState" hidden>
+          <div class="status-icon">❌</div>
+          <h2 class="error-text">验证失败</h2>
+          <p id="errorMessage" style="color: var(--muted)">链接无效或已过期，请重新提交表单。</p>
+          <div class="confirm-actions">
+            <a href="index.html#waitlist" class="button button-secondary">重新提交</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      document.addEventListener("DOMContentLoaded", async () => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get("token");
+
+        const loading = document.getElementById("loadingState");
+        const success = document.getElementById("successState");
+        const error = document.getElementById("errorState");
+        const errorMsg = document.getElementById("errorMessage");
+
+        if (!token) {
+          loading.hidden = true;
+          error.hidden = false;
+          errorMsg.textContent = "缺少验证凭证 (Token)。";
+          return;
+        }
+
+        try {
+          const SUPABASE_URL = "https://wjsvxiovxsnfmjkfyxne.supabase.co";
+          const res = await fetch(`${SUPABASE_URL}/functions/v1/confirm-waitlist?token=${token}`);
+          const data = await res.json();
+
+          loading.hidden = true;
+          if (res.ok && data.success) {
+            success.hidden = false;
+          } else {
+            error.hidden = false;
+            errorMsg.textContent = data.error || "验证失败，可能是链接已过期。";
+          }
+        } catch (err) {
+          loading.hidden = true;
+          error.hidden = false;
+          errorMsg.textContent = "网络错误，请稍后再试。";
+        }
+      });
+    </script>
+  </body>
+</html>

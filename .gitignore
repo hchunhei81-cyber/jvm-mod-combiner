@@ -87,6 +87,26 @@ command_history.txt
 downloads/
 others/
 
+# --- Supabase local development & Edge Functions ---
+# Keep local Supabase configs, temp data, and secrets out of version control.
+.supabase/
+supabase/.temp/
+*.dump
+.npmrc
+
+# --- Deno & TypeScript Edge Function artifacts ---
+.deno/
+deno.lock
+
+# --- Frontend & Node dependencies ---
+package-lock.json.bak
+yarn.lock.bak
+pnpm-lock.yaml.bak
+
+# --- Visual Studio Code workspace settings ---
+# Keep local VS Code workspace settings out of version control.
+.vscode/
+
 # --- Unknown or unclassified files ---
 # These files are not classified into any of the above categories.
 moocw7okywmj9be/

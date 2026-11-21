@@ -90,12 +90,10 @@
             <span data-i18n="heroBadge">实验性原型 · 单向玩家镜像概念验证</span>
           </div>
           <p class="overline">RUST / JNI / JVM / MINECRAFT</p>
-          <h1 data-i18n="heroTitle">
-            Minecraft 模组互操作
-          </h1>
+          <h1 data-i18n="heroTitle">Minecraft 模组互操作</h1>
           <p class="hero-description" data-i18n="heroDesc">
-            JVM Mod Combiner 是一个基于 Rust 和 Java 的实验性原型。已验证
-            Fabric 与 NeoForge 在独立 JVM 中运行，并完成单向玩家状态同步概念验证。
+            JVM Mod Combiner 是一个基于 Rust 和 Java 的实验性原型。已验证 Fabric
+            与 NeoForge 在独立 JVM 中运行，并完成单向玩家状态同步概念验证。
           </p>
           <div class="hero-actions">
             <a
@@ -197,7 +195,8 @@
             <span class="flow-label" data-i18n="flowPoc">概念验证</span>
             <h3 data-i18n="flowMirrorTitle">单向玩家镜像</h3>
             <p data-i18n="flowMirrorDesc">
-              Fabric 玩家状态已能驱动 NeoForge RemotePlayer 镜像；生命周期稳定性仍在完善。
+              Fabric 玩家状态已能驱动 NeoForge RemotePlayer
+              镜像；生命周期稳定性仍在完善。
             </p>
             <code>Fabric → NeoForge</code>
           </article>
@@ -258,7 +257,8 @@
             <span class="card-index">03 / PLAYER STATE</span>
             <h3 data-i18n="f3Title">Fabric 玩家状态读取</h3>
             <p data-i18n="f3Desc">
-              通过反射读取玩家状态并发布到 Rust DataBus；Java 源码还包含敌对生物采样及初始/变化消息的早期原型。
+              通过反射读取玩家状态并发布到 Rust DataBus；Java
+              源码还包含敌对生物采样及初始/变化消息的早期原型。
             </p>
             <span class="card-status done" data-i18n="playerStateVerified"
               >状态读取与发布已验证</span
@@ -271,7 +271,8 @@
             <span class="card-index">04 / TRANSPORT</span>
             <h3 data-i18n="f4Title">Rust TCP DataBus</h3>
             <p data-i18n="f4Desc">
-              Rust 源码按注册连接名限制玩家及怪物状态消息仅由 Fabric 发布；注册名仍由客户端自报，且拒绝行为待运行时验证。
+              Rust 源码按注册连接名限制玩家及怪物状态消息仅由 Fabric
+              发布；注册名仍由客户端自报，且拒绝行为待运行时验证。
             </p>
             <span class="card-status done" data-i18n="routingVerified"
               >基础路由已验证</span
@@ -284,7 +285,9 @@
             <span class="card-index">05 / SYNC</span>
             <h3 data-i18n="f5Title">双端实体镜像</h3>
             <p data-i18n="f5Desc">
-              Fabric 到 NeoForge 的 RemotePlayer 镜像已完成概念验证。已提交源码包含 NeoForge 怪物接收与 ACK/重试流程，但仍需打包和运行时测试；怪物移除尚未实现。
+              Fabric 到 NeoForge 的 RemotePlayer
+              镜像已完成概念验证。已提交源码包含 NeoForge 怪物接收与
+              ACK/重试流程，但仍需打包和运行时测试；怪物移除尚未实现。
             </p>
             <span class="card-status progress" data-i18n="pocNeedsStability"
               >概念验证完成 · 持续稳定中</span
@@ -310,7 +313,9 @@
             <span class="card-index">07 / WINDOWS</span>
             <h3 data-i18n="f7Title">窗口注册与观察</h3>
             <p data-i18n="f7Desc">
-              Window Manager 验证 Bridge 对端身份，Fusion 以存活子进程关联窗口；Control UDS 仅做只读 dry-run，窗口修改 Gate 仍关闭。
+              Window Manager 验证 Bridge 对端身份，Fusion
+              以存活子进程关联窗口；Control UDS 仅做只读 dry-run，窗口修改 Gate
+              仍关闭。
             </p>
             <span class="card-status progress" data-i18n="windowPrototypeStatus"
               >只读控制已实现 · 真实环境验证待完成</span
@@ -377,7 +382,8 @@
           <p class="overline">INTERACTIVE TERMINAL</p>
           <h2 data-i18n="demoTitle">原型验证流程回放</h2>
           <p data-i18n="demoDesc">
-            根据已验证的启动、DataBus 路由和单向玩家镜像阶段整理的示例日志，并非实时连接游戏进程。
+            根据已验证的启动、DataBus
+            路由和单向玩家镜像阶段整理的示例日志，并非实时连接游戏进程。
           </p>
         </div>
         <div class="demo-panel panel">
@@ -434,7 +440,8 @@
               <small>PHASE 01</small>
               <h3 data-i18n="r1Title">启动链路恢复</h3>
               <p data-i18n="r1Desc">
-                验证 Rust/JNI 启动基础、Fabric 与 NeoForge 启动，以及 Forge 实验性启动。
+                验证 Rust/JNI 启动基础、Fabric 与 NeoForge 启动，以及 Forge
+                实验性启动。
               </p>
             </div>
             <b data-i18n="completed">已完成</b>
@@ -454,7 +461,8 @@
               <small>PHASE 03</small>
               <h3 data-i18n="r3Title">DataBus 与玩家镜像概念验证</h3>
               <p data-i18n="r3Desc">
-                验证 Rust TCP 消息路由、Fabric 玩家状态发布和 NeoForge RemotePlayer 镜像。
+                验证 Rust TCP 消息路由、Fabric 玩家状态发布和 NeoForge
+                RemotePlayer 镜像。
               </p>
             </div>
             <b data-i18n="completed">已完成</b>
@@ -465,7 +473,8 @@
               <small>PHASE 04</small>
               <h3 data-i18n="r4Title">单向状态策略运行时验证</h3>
               <p data-i18n="r4Desc">
-                Rust 源码已有玩家/怪物状态发送方策略；重打包 Agent、约束自报注册名，并运行时验证拒绝不转发且连接不断开。
+                Rust 源码已有玩家/怪物状态发送方策略；重打包
+                Agent、约束自报注册名，并运行时验证拒绝不转发且连接不断开。
               </p>
             </div>
             <b data-i18n="r4Status">源码已实现 · 待验证</b>
@@ -476,7 +485,8 @@
               <small>PHASE 05</small>
               <h3 data-i18n="r5Title">同步稳定性与启动器重构</h3>
               <p data-i18n="r5Desc">
-                完善实体生命周期、重连和协议校验，并继续重构 Rust 启动器与依赖处理。
+                完善实体生命周期、重连和协议校验，并继续重构 Rust
+                启动器与依赖处理。
               </p>
             </div>
             <b data-i18n="planned">后续重点</b>
@@ -543,7 +553,113 @@
         </div>
       </section>
     </main>
+    <!-- Waitlist Section -->
+    <section class="section waitlist-section" id="waitlist">
+      <div class="section-heading">
+        <p class="overline">EARLY ACCESS</p>
+        <h2 data-i18n="waitlistTitle">加入内测候补名单</h2>
+        <p data-i18n="waitlistDesc">
+          订阅项目更新，或申请参与内部测试。我们会在有新的构建版本时通知你。
+        </p>
+      </div>
 
+      <div class="waitlist-card">
+        <form id="waitlistForm" class="waitlist-form" novalidate>
+          <div class="waitlist-row">
+            <label
+              class="waitlist-label"
+              for="waitlistEmail"
+              data-i18n="waitlistEmailLabel"
+              >邮箱地址</label
+            >
+            <input
+              id="waitlistEmail"
+              name="email"
+              type="email"
+              required
+              autocomplete="email"
+              placeholder="you@example.com"
+              data-i18n-placeholder="waitlistEmailPlaceholder"
+            />
+          </div>
+
+          <div class="waitlist-row">
+            <label
+              class="waitlist-label"
+              for="waitlistName"
+              data-i18n="waitlistNameLabel"
+              >称呼（可选）</label
+            >
+            <input
+              id="waitlistName"
+              name="name"
+              type="text"
+              autocomplete="name"
+              placeholder="怎么称呼你？"
+              data-i18n-placeholder="waitlistNamePlaceholder"
+            />
+          </div>
+
+          <div class="waitlist-row">
+            <label
+              class="waitlist-label"
+              for="waitlistInterest"
+              data-i18n="waitlistInterestLabel"
+              >你关注的是</label
+            >
+            <select id="waitlistInterest" name="interest">
+              <option value="news" data-i18n="waitlistInterestNews">
+                项目更新 / 新版本通知
+              </option>
+              <option value="beta" data-i18n="waitlistInterestBeta">
+                参与内测
+              </option>
+              <option value="both" data-i18n="waitlistInterestBoth">
+                两者都感兴趣
+              </option>
+            </select>
+          </div>
+
+          <div class="waitlist-actions">
+            <button
+              type="submit"
+              class="button button-primary"
+              id="waitlistSubmit"
+              data-i18n="waitlistSubmit"
+            >
+              加入候补名单
+            </button>
+            <p class="waitlist-note" data-i18n="waitlistNote">
+              仅用于项目相关通知，不会分享给第三方。
+            </p>
+          </div>
+
+          <p
+            id="waitlistStatus"
+            class="waitlist-status"
+            role="status"
+            aria-live="polite"
+          ></p>
+        </form>
+
+        <div class="waitlist-meta">
+          <div>
+            <strong>Supabase</strong>
+            <span data-i18n="waitlistBackend">后端存储</span>
+          </div>
+          <div>
+            <strong>RLS</strong>
+            <span data-i18n="waitlistSecurity">行级安全</span>
+          </div>
+          <div>
+            <strong>0 spam</strong>
+            <span data-i18n="waitlistNoSpam">仅项目更新</span>
+          </div>
+        </div>
+      </div>
+    </section>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="main.js"></script>
     <footer class="footer">
       <a class="brand" href="#top"
         ><span>JVM <b>Mod</b> Combiner</span></a

@@ -16,7 +16,14 @@ const MAX_CLIENTS: usize = 8;
 const MAX_MESSAGE: usize = 64 * 1024;
 const OUT_QUEUE: usize = 128;
 
-type Sender = mpsc::SyncSender<String>;
+enum WriterCommand {
+    Message(String),
+    BarrierAndShutdown(mpsc::Sender<Result<(), String>>),
+}
+
+type Sender = mpsc::SyncSender<WriterCommand>;
+
+const REVOCATION_TIMEOUT: Duration = Duration::from_secs(7);
 
 #[derive(Clone)]
 struct Registration {
@@ -50,11 +57,76 @@ static SERVER: OnceLock<Server> = OnceLock::new();
 static START_LOCK: Mutex<()> = Mutex::new(());
 static NEXT_AUTHORIZATION_GENERATION: AtomicU64 = AtomicU64::new(1);
 
+fn allocate_generation(counter: &AtomicU64) -> io::Result<u64> {
+    loop {
+        let current = counter.load(Ordering::Relaxed);
+
+        if current == 0 {
+            return Err(io::Error::other(
+                "DataBus authorization generation exhausted",
+            ));
+        }
+
+        let next = current.checked_add(1).unwrap_or(0);
+
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return Ok(current),
+            Err(_) => continue,
+        }
+    }
+}
+
+fn next_authorization_generation() -> io::Result<u64> {
+    allocate_generation(&NEXT_AUTHORIZATION_GENERATION)
+}
+
 pub fn socket_path() -> io::Result<PathBuf> {
     SERVER
         .get()
         .map(|s| s.path.clone())
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "DataBus is not running"))
+}
+
+struct BoundSocketGuard {
+    path: PathBuf,
+    inode: Option<u64>,
+    active: bool,
+}
+
+impl BoundSocketGuard {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            inode: None,
+            active: true,
+        }
+    }
+
+    fn set_inode(&mut self, inode: u64) {
+        self.inode = Some(inode);
+    }
+
+    fn disarm(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for BoundSocketGuard {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+
+        let Some(expected_inode) = self.inode else {
+            return;
+        };
+
+        if let Ok(metadata) = fs::symlink_metadata(&self.path) {
+            if metadata.file_type().is_socket() && metadata.ino() == expected_inode {
+                let _ = fs::remove_file(&self.path);
+            }
+        }
+    }
 }
 
 pub fn start() -> io::Result<()> {
@@ -87,9 +159,25 @@ pub fn start() -> io::Result<()> {
         }
 
         let listener = UnixListener::bind(&path)?;
+        let mut socket_guard = BoundSocketGuard::new(path.clone());
+
+        // Capture the bound inode before changing permissions. Cleanup will
+        // only ever unlink this exact socket, never a replacement at this path.
+        let bound_metadata = fs::symlink_metadata(&path)?;
+        if !bound_metadata.file_type().is_socket() {
+            return Err(io::Error::other("bound DataBus path is not a socket"));
+        }
+        socket_guard.set_inode(bound_metadata.ino());
+
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
 
         let metadata = fs::symlink_metadata(&path)?;
+        if metadata.ino() != bound_metadata.ino() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "DataBus socket path changed during startup",
+            ));
+        }
         if !metadata.file_type().is_socket()
             || metadata.uid() != unsafe { libc::getuid() }
             || metadata.mode() & 0o777 != 0o600
@@ -174,6 +262,7 @@ pub fn start() -> io::Result<()> {
             io::Error::new(io::ErrorKind::AlreadyExists, "DataBus already initialized")
         })?;
 
+        socket_guard.disarm();
         let _ = dir;
         eprintln!("[DataBus] authenticated UDS server ready");
         Ok(())
@@ -216,12 +305,7 @@ pub fn authorize(role: &str, pid: u32) -> io::Result<()> {
         ));
     }
 
-    let generation = NEXT_AUTHORIZATION_GENERATION.fetch_add(1, Ordering::Relaxed);
-    if generation == 0 {
-        return Err(io::Error::other(
-            "DataBus authorization generation exhausted",
-        ));
-    }
+    let generation = next_authorization_generation()?;
 
     state.authorizations.insert(
         role.to_string(),
@@ -240,7 +324,7 @@ pub fn authorize(role: &str, pid: u32) -> io::Result<()> {
     Ok(())
 }
 
-fn revoke_from_state(state: &mut State, role: &str, pid: u32) -> io::Result<()> {
+fn revoke_from_state(state: &mut State, role: &str, pid: u32) -> io::Result<Option<Sender>> {
     let Some(auth) = state.authorizations.get(role) else {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -256,7 +340,26 @@ fn revoke_from_state(state: &mut State, role: &str, pid: u32) -> io::Result<()> 
     }
 
     state.authorizations.remove(role);
-    state.registrations.remove(role);
+
+    Ok(state
+        .registrations
+        .remove(role)
+        .map(|registration| registration.sender))
+}
+
+fn revoke_registration(state: &Arc<Mutex<State>>, role: &str, pid: u32) -> io::Result<()> {
+    let sender = {
+        let mut locked = state
+            .lock()
+            .map_err(|_| io::Error::other("DataBus revocation lock poisoned"))?;
+
+        revoke_from_state(&mut locked, role, pid)?
+    };
+
+    if let Some(sender) = sender {
+        shutdown_writer(&sender)?;
+    }
+
     Ok(())
 }
 
@@ -272,12 +375,8 @@ pub fn revoke(role: &str, pid: u32) -> io::Result<()> {
         .get()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "DataBus is not running"))?;
 
-    let mut state = server
-        .state
-        .lock()
-        .map_err(|_| io::Error::other("DataBus revocation lock poisoned"))?;
+    revoke_registration(&server.state, role, pid)?;
 
-    revoke_from_state(&mut state, role, pid)?;
     eprintln!("[DataBus] revoked role={role} pid={pid}");
     Ok(())
 }
@@ -332,9 +431,84 @@ fn read_bounded_line(stream: &mut UnixStream) -> io::Result<BoundedLine> {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "message is not UTF-8"))
 }
 
+fn writer_loop(mut stream: UnixStream, rx: mpsc::Receiver<WriterCommand>) {
+    while let Ok(command) = rx.recv() {
+        match command {
+            WriterCommand::Message(message) => {
+                if stream.write_all(message.as_bytes()).is_err()
+                    || stream.write_all(b"\n").is_err()
+                    || stream.flush().is_err()
+                {
+                    break;
+                }
+            }
+            WriterCommand::BarrierAndShutdown(ack) => {
+                let result = stream
+                    .flush()
+                    .and_then(|_| stream.shutdown(std::net::Shutdown::Write))
+                    .map_err(|error| error.to_string());
+
+                let _ = ack.send(result);
+                break;
+            }
+        }
+    }
+}
+
+fn shutdown_writer(tx: &Sender) -> io::Result<()> {
+    shutdown_writer_with_timeout(tx, REVOCATION_TIMEOUT)
+}
+
+fn shutdown_writer_with_timeout(tx: &Sender, timeout: Duration) -> io::Result<()> {
+    let (ack_tx, ack_rx) = mpsc::channel();
+
+    let mut command = WriterCommand::BarrierAndShutdown(ack_tx);
+
+    let deadline = std::time::Instant::now() + timeout;
+
+    loop {
+        match tx.try_send(command) {
+            Ok(()) => break,
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "DataBus writer disconnected before revocation barrier",
+                ));
+            }
+            Err(mpsc::TrySendError::Full(returned)) => {
+                command = returned;
+
+                if std::time::Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "DataBus revocation queue barrier timed out",
+                    ));
+                }
+
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+
+    match ack_rx.recv_timeout(remaining) {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(io::Error::other(error)),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "DataBus writer did not acknowledge revocation barrier",
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "DataBus writer exited before acknowledging revocation",
+        )),
+    }
+}
+
 fn send_error(tx: &Sender, code: &str) {
     let payload = serde_json::json!({"error": code}).to_string();
-    let _ = tx.try_send(payload);
+    let _ = tx.try_send(WriterCommand::Message(payload));
 }
 
 fn handle_client(mut stream: UnixStream, state: Arc<Mutex<State>>) {
@@ -385,7 +559,8 @@ fn handle_client(mut stream: UnixStream, state: Arc<Mutex<State>>) {
 
     let (role, generation) = role;
 
-    let (tx, rx) = mpsc::sync_channel::<String>(OUT_QUEUE);
+    let (tx, rx) = mpsc::sync_channel::<WriterCommand>(OUT_QUEUE);
+
     let writer_stream = match stream.try_clone() {
         Ok(stream) => stream,
         Err(_) => return,
@@ -393,17 +568,7 @@ fn handle_client(mut stream: UnixStream, state: Arc<Mutex<State>>) {
 
     let writer = thread::Builder::new()
         .name("jvm-data-bus-writer".into())
-        .spawn(move || {
-            let mut writer_stream = writer_stream;
-            while let Ok(message) = rx.recv() {
-                if writer_stream.write_all(message.as_bytes()).is_err()
-                    || writer_stream.write_all(b"\n").is_err()
-                    || writer_stream.flush().is_err()
-                {
-                    break;
-                }
-            }
-        });
+        .spawn(move || writer_loop(writer_stream, rx));
 
     if writer.is_err() {
         return;
@@ -414,6 +579,17 @@ fn handle_client(mut stream: UnixStream, state: Arc<Mutex<State>>) {
             Ok(state) => state,
             Err(_) => return,
         };
+
+        let still_authorized = state.authorizations.get(&role).is_some_and(|auth| {
+            auth.pid == identity.pid
+                && auth.generation == generation
+                && auth.identity.as_ref() == Some(&identity)
+        });
+
+        if !still_authorized {
+            send_error(&tx, "authorization_revoked");
+            return;
+        }
 
         if state.registrations.contains_key(&role) {
             send_error(&tx, "role_already_connected");
@@ -546,7 +722,11 @@ fn handle_client(mut stream: UnixStream, state: Arc<Mutex<State>>) {
                         }
 
                         target_count += 1;
-                        if registration.sender.try_send(payload.clone()).is_ok() {
+                        if registration
+                            .sender
+                            .try_send(WriterCommand::Message(payload.clone()))
+                            .is_ok()
+                        {
                             delivered = true;
                         }
                     }
@@ -558,7 +738,10 @@ fn handle_client(mut stream: UnixStream, state: Arc<Mutex<State>>) {
 
                     if recipient_authorized {
                         target_count = 1;
-                        delivered = registration.sender.try_send(payload.clone()).is_ok();
+                        delivered = registration
+                            .sender
+                            .try_send(WriterCommand::Message(payload.clone()))
+                            .is_ok();
                     }
                 }
 
@@ -583,7 +766,7 @@ fn handle_client(mut stream: UnixStream, state: Arc<Mutex<State>>) {
                 "to": if broadcast { "*".to_string() } else { to.clone() }
             })
             .to_string();
-            let _ = tx.try_send(ack);
+            let _ = tx.try_send(WriterCommand::Message(ack));
         } else {
             send_error(&tx, "peer_backpressure");
         }
@@ -624,6 +807,52 @@ impl Drop for Server {
             state.authorizations.clear();
         }
         let _ = &self.clients;
+    }
+}
+
+#[cfg(test)]
+mod writer_barrier_tests {
+    use super::*;
+
+    #[test]
+    fn barrier_drains_queued_messages_before_eof() {
+        let (server, mut peer) = UnixStream::pair().unwrap();
+        let (tx, rx) = mpsc::sync_channel(8);
+
+        let writer = thread::spawn(move || writer_loop(server, rx));
+
+        tx.try_send(WriterCommand::Message("first".into())).unwrap();
+        tx.try_send(WriterCommand::Message("second".into()))
+            .unwrap();
+        tx.try_send(WriterCommand::Message("third".into())).unwrap();
+
+        shutdown_writer(&tx).unwrap();
+        writer.join().unwrap();
+
+        let mut received = Vec::new();
+        std::io::Read::read_to_end(&mut peer, &mut received).unwrap();
+
+        assert_eq!(received, b"first\nsecond\nthird\n");
+    }
+
+    #[test]
+    fn barrier_fails_when_writer_is_disconnected() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        drop(rx);
+
+        let error = shutdown_writer(&tx).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn barrier_times_out_when_queue_is_full_and_writer_is_stalled() {
+        let (tx, _rx) = mpsc::sync_channel(1);
+        tx.try_send(WriterCommand::Message("queued".into()))
+            .unwrap();
+
+        let error = shutdown_writer_with_timeout(&tx, Duration::from_millis(30)).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     }
 }
 
@@ -685,7 +914,7 @@ mod revocation_tests {
     #[test]
     fn revoke_removes_live_registration() {
         let mut state = state_with_authorization("fabric", 1234);
-        let (tx, _rx) = mpsc::sync_channel(1);
+        let (tx, _rx) = mpsc::sync_channel::<WriterCommand>(1);
         state.registrations.insert(
             "fabric".to_string(),
             Registration {
@@ -816,7 +1045,8 @@ mod integration_tests {
                 pid,
                 start_time,
                 identity: None,
-                generation: NEXT_AUTHORIZATION_GENERATION.fetch_add(1, Ordering::Relaxed),
+                generation: next_authorization_generation()
+                    .expect("test generation allocation failed"),
             },
         );
     }
@@ -915,8 +1145,12 @@ mod integration_tests {
     }
 
     fn response_json(line: &str) -> serde_json::Value {
-        let payload = line.strip_prefix("CHILD:RESP:").unwrap();
-        serde_json::from_str(payload).unwrap()
+        let payload = line.strip_prefix("CHILD:RESP:").unwrap_or_else(|| {
+            panic!("expected CHILD:RESP, received: {line:?}");
+        });
+        serde_json::from_str(payload).unwrap_or_else(|error| {
+            panic!("invalid child JSON response: {error}; payload={payload:?}");
+        })
     }
 
     #[test]
@@ -1084,10 +1318,7 @@ mod integration_tests {
         assert_eq!(routed["from"], "neoforge");
 
         // Revocation during the next idle read cycle must close the old connection.
-        {
-            let mut locked = state.lock().unwrap();
-            revoke_from_state(&mut locked, "fabric", fabric.child.id()).unwrap();
-        }
+        revoke_registration(&state, "fabric", fabric.child.id()).unwrap();
 
         fabric.command("RECV");
         assert_eq!(fabric.receive(), "CHILD:EOF");

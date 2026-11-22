@@ -17,6 +17,9 @@ node_modules/
 # --- Temporary terminal UI prototype ---
 # Keep this experimental directory out of version control until it is ready.
 
+# --- Velox code,not yet ready for public release ---
+# Keep this experimental directory out of version control until it is ready and currently not needed.
+*.vx
 
 # --- Runtime diagnostics and generated data ---
 # Keep crash reports, logs, and data files out of version control.

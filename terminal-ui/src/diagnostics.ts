@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { createConnection } from "node:net";
+import { resolveRuntimeSockets } from "./runtime.js";
 
 export type DiagnosticStatus =
   | "discovering"
@@ -45,7 +46,6 @@ export interface DiagnosticsState {
   stale: boolean;
 }
 
-const SOCKET_PATH = `/tmp/jvm-combiner-${process.getuid?.() ?? "unknown"}/diagnostics.sock`;
 const REQUEST_TIMEOUT_MS = 1500;
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const REFRESH_INTERVAL_MS = 2000;
@@ -212,23 +212,37 @@ function fetchDiagnosticSnapshot(): Promise<DiagnosticSnapshot> {
     let settled = false;
     let received = Buffer.alloc(0);
 
-    const socket = createConnection({ path: SOCKET_PATH });
+    let socketPath: string;
+    try {
+      socketPath = resolveRuntimeSockets().diagnostics;
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error("Runtime discovery failed"));
+      return;
+    }
+
+    const socket = createConnection({ path: socketPath });
 
     const finish = (error: Error | null, result?: DiagnosticSnapshot) => {
       if (settled) return;
       settled = true;
       socket.destroy();
+      clearTimeout(connectTimer);
 
       if (error) reject(error);
       else if (result) resolve(result);
       else reject(new Error("Empty diagnostic response"));
     };
 
+    const connectTimer = setTimeout(() => {
+      finish(new Error("Diagnostic socket connection timed out"));
+    }, REQUEST_TIMEOUT_MS);
+
     socket.setTimeout(REQUEST_TIMEOUT_MS, () => {
       finish(new Error("Diagnostic socket timed out"));
     });
 
     socket.on("connect", () => {
+      clearTimeout(connectTimer);
       socket.write('{"protocol":1,"type":"snapshot"}\n', (error) => {
         if (error) finish(error);
       });

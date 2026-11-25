@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createConnection } from "node:net";
+import { resolveRuntimeSockets } from "./runtime.js";
 
 export type LogSource = "fusion" | "fabric" | "neoforge";
 export type LogStream = "stdout" | "stderr";
@@ -35,9 +36,6 @@ export interface LogsState {
   lastSuccessAt: number | null;
   stale: boolean;
 }
-
-const SOCKET_PATH =
-  `/tmp/jvm-combiner-${process.getuid?.() ?? "unknown"}/logs.sock`;
 
 const REQUEST_TIMEOUT_MS = 1500;
 const REFRESH_INTERVAL_MS = 250;
@@ -186,23 +184,37 @@ function fetchLogBatch(afterId: number): Promise<LogBatch> {
     let settled = false;
     let received = Buffer.alloc(0);
 
-    const socket = createConnection({ path: SOCKET_PATH });
+    let socketPath: string;
+    try {
+      socketPath = resolveRuntimeSockets().logs;
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error("Runtime discovery failed"));
+      return;
+    }
+
+    const socket = createConnection({ path: socketPath });
 
     const finish = (error: Error | null, result?: LogBatch) => {
       if (settled) return;
       settled = true;
       socket.destroy();
+      clearTimeout(connectTimer);
 
       if (error) reject(error);
       else if (result) resolve(result);
       else reject(new Error("Empty log response"));
     };
 
+    const connectTimer = setTimeout(() => {
+      finish(new Error("Log socket connection timed out"));
+    }, REQUEST_TIMEOUT_MS);
+
     socket.setTimeout(REQUEST_TIMEOUT_MS, () => {
       finish(new Error("Log socket timed out"));
     });
 
     socket.on("connect", () => {
+      clearTimeout(connectTimer);
       const request = JSON.stringify({
         protocol: 1,
         type: "logs",

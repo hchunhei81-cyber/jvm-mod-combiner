@@ -4,6 +4,7 @@ mod display_topology;
 mod log_hub;
 mod mod_detect;
 mod overlay_ipc;
+mod runtime_manifest;
 mod window_accessibility;
 mod window_control;
 mod window_discovery;
@@ -4184,6 +4185,11 @@ fn main() {
         let log_hub = log_hub::LogHub::new();
         let _log_server = log_hub::LogServer::start(std::sync::Arc::clone(&log_hub))
             .expect("[LogHub] Fusion 无法启动只读 Log UDS");
+        let _runtime_manifest = runtime_manifest::RuntimeManifest::publish(
+            _log_server.socket_path(),
+            _diagnostics_server.socket_path(),
+        )
+        .expect("[RuntimeManifest] Fusion 无法发布实例清单");
         log_hub.push(
             "fusion",
             "stdout",

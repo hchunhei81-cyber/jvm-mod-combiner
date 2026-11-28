@@ -5,6 +5,8 @@
 
 > 请注意此项目是和ai合作完成的
 
+>目前卡在某些bug，直到修复前不会再更新
+
 [English README](README.md) · [项目进度时间线](docs/progress.html) · [技术问题清单](Problems.zh.md) · [将来的困难](solve.zh.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-combiner/discussions) · [待办路线图](TODO.zh.md)
 
 ---

@@ -6,6 +6,8 @@
 
 > Notice that this project is cooperated with ai
 
+> currently stuck on a few bugs, no updates till fixed
+
 [中文文档](README.zh.md) · [Progress timeline](docs/progress.html) · [Known Problems](problems.md) · [Future challenges](solve.md) · [GitHub Discussions](https://github.com/hchunhei81-cyber/jvm-mod-combiner/discussions) · [TODO](TODO.md)
 
 ---
